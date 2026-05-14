@@ -3,7 +3,8 @@ import json
 import os
 import asyncio
 from mcp.server.fastmcp import FastMCP
-from contextlib import asynccontextmanager
+from starlette.routing import Route
+from starlette.responses import JSONResponse
 
 JOTFORM_API_KEY = os.getenv("JOTFORM_API_KEY", "YOUR_JOTFORM_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
@@ -21,32 +22,28 @@ mcp = FastMCP("UTrucking Storage Lookup")
 
 
 async def keep_alive():
-    """Ping our own health endpoint every 14 minutes to prevent Render sleep."""
-    await asyncio.sleep(30)  # wait for server to fully start
+    await asyncio.sleep(30)
     while True:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.get(f"{RENDER_URL}/health")
         except Exception:
             pass
-        await asyncio.sleep(14 * 60)  # 14 minutes
+        await asyncio.sleep(14 * 60)
 
 
 @mcp.tool()
 async def lookup_storage_order(student_name: str) -> str:
     """
     Look up a student's summer storage order by their name.
-    Returns their service type, building, room number, order number,
+    Returns service type, building, room number, order number,
     and full list of stored items with quantities.
 
     Args:
         student_name: Full name of the student to look up
     """
     if not student_name:
-        return json.dumps({
-            "found": False,
-            "message": "Please provide a student name to look up."
-        })
+        return json.dumps({"found": False, "message": "Please provide a student name."})
 
     name_query = student_name.strip().lower()
     url = (
@@ -117,18 +114,30 @@ async def lookup_storage_order(student_name: str) -> str:
     })
 
 
-# Build app and start keep-alive on startup
-app = mcp.streamable_http_app()
-
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(keep_alive())
-
-# Health check route
-from starlette.routing import Route
-from starlette.responses import JSONResponse
-
 async def health(request):
     return JSONResponse({"status": "ok"})
 
-app.routes.append(Route("/health", health))
+
+async def lifespan(app):
+    asyncio.create_task(keep_alive())
+    yield
+
+
+# Build the MCP app
+app = mcp.streamable_http_app()
+
+# Inject lifespan and health route
+from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
+
+app = Starlette(
+    lifespan=lifespan,
+    routes=list(app.routes) + [Route("/health", health)]
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
