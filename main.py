@@ -2,6 +2,8 @@ import httpx
 import json
 import os
 import asyncio
+import csv
+import io
 from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
@@ -9,21 +11,23 @@ from starlette.requests import Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-JOTFORM_API_KEY = os.getenv("JOTFORM_API_KEY", "YOUR_JOTFORM_API_KEY")
+# ── Config ─────────────────────────────────────────────────────────────────────
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
-FORM_ID = "260590779679074"
-JOTFORM_BASE = "https://api.jotform.com"
 
-FIELD_STUDENT_NAME = "5"
-FIELD_SERVICE_TYPE = "2"
-FIELD_BUILDING     = "80"
-FIELD_ROOM         = "4"
-FIELD_ORDER_NUMBER = "83"
-FIELD_ITEMS        = "65"
+# Google Sheet ID (from the URL: docs.google.com/spreadsheets/d/SHEET_ID/edit)
+SHEET_ID = os.getenv("SHEET_ID", "1x5MQbsCFMJX5eafA6uoFF0nU4qfvCaK-2EyZNPs__kM")
+SHEET_GID = os.getenv("SHEET_GID", "602263013")
+
+# Public CSV export URL — works when sheet is shared as "Anyone with the link"
+SHEET_CSV_URL = (
+    f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
+    f"/export?format=csv&gid={SHEET_GID}"
+)
 
 mcp = FastMCP("UTrucking Storage Lookup")
 
 
+# ── Keep-alive ─────────────────────────────────────────────────────────────────
 async def keep_alive():
     await asyncio.sleep(30)
     while True:
@@ -35,79 +39,121 @@ async def keep_alive():
         await asyncio.sleep(14 * 60)
 
 
+# ── Google Sheets fetcher ──────────────────────────────────────────────────────
+async def fetch_sheet_rows() -> list[dict]:
+    """Pull the master sheet as CSV and return as list of dicts."""
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        resp = await client.get(SHEET_CSV_URL)
+
+    if resp.status_code != 200:
+        return []
+
+    text = resp.text
+    reader = csv.DictReader(io.StringIO(text))
+    return [row for row in reader]
+
+
+# ── Core lookup logic ──────────────────────────────────────────────────────────
 async def do_lookup(student_name: str) -> dict:
     if not student_name:
         return {"found": False, "message": "Please provide a student name."}
 
     name_query = student_name.strip().lower()
-    url = (
-        f"{JOTFORM_BASE}/form/{FORM_ID}/submissions"
-        f"?apiKey={JOTFORM_API_KEY}&limit=100&orderby=created_at&direction=DESC"
-    )
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(url)
+    try:
+        rows = await fetch_sheet_rows()
+    except Exception as e:
+        return {"found": False, "message": f"Error reading the master sheet: {str(e)}"}
 
-    if resp.status_code != 200:
-        return {"found": False, "message": "Error connecting to JotForm."}
+    if not rows:
+        return {"found": False, "message": "Could not load the master sheet right now."}
 
-    submissions = resp.json().get("content", [])
-
+    # Find matching row by student name
     match = None
-    for sub in submissions:
-        name_value = sub.get("answers", {}).get(FIELD_STUDENT_NAME, {}).get("answer", "")
+    for row in rows:
+        name_value = (row.get("Student") or "").strip()
         if name_value and name_query in name_value.lower():
-            match = sub
+            match = row
             break
 
     if not match:
         return {
             "found": False,
-            "message": f"No storage order found for '{student_name}'. Please check the name and try again."
+            "message": (
+                f"No order found for '{student_name}'. "
+                "Please double-check the name or contact our team at (314) 266-8878."
+            )
         }
 
-    answers = match.get("answers", {})
-    student_name_val = answers.get(FIELD_STUDENT_NAME, {}).get("answer", "N/A")
-    service_type     = answers.get(FIELD_SERVICE_TYPE, {}).get("answer", "N/A")
-    building         = answers.get(FIELD_BUILDING, {}).get("answer", "N/A")
-    room             = answers.get(FIELD_ROOM, {}).get("answer", "N/A")
-    order_number     = answers.get(FIELD_ORDER_NUMBER, {}).get("answer", "N/A")
+    # Pull fields from the row
+    order_id        = match.get("ID", "N/A")
+    date            = match.get("Date", "N/A")
+    mode            = match.get("Mode", "N/A")
+    truck           = match.get("Truck", "N/A")
+    building        = match.get("Building", "N/A")
+    room            = match.get("Room", "N/A")
+    student         = match.get("Student", "N/A")
+    phone           = match.get("Phone", "N/A")
+    time_slot       = match.get("Time Slot", "N/A")
+    kits            = match.get("Kits", "N/A")
+    status          = match.get("Status", "N/A")
+    address         = match.get("Address", "N/A")
+    service         = match.get("Service", "N/A")
+    product         = match.get("Product", "N/A")
+    kit_check       = match.get("Kit ✓", "N/A")
+    dispatch_status = match.get("Dispatch Status", "N/A")
+    completed_at    = match.get("Completed At", "")
+    mover_notes     = match.get("Mover Notes", "")
+    customer_note   = match.get("Customer Note", "")
 
-    items_raw = answers.get(FIELD_ITEMS, {}).get("answer", {})
-    items_list = []
-    total = "N/A"
+    # Build a conversational message for the agent to read
+    message_parts = [f"Found order for {student}."]
 
-    if isinstance(items_raw, dict):
-        payment_array = items_raw.get("paymentArray", {})
-        if isinstance(payment_array, str):
-            try:
-                payment_array = json.loads(payment_array)
-            except Exception:
-                payment_array = {}
-        if isinstance(payment_array, dict):
-            items_list = payment_array.get("product", [])
-            total = payment_array.get("total", "N/A")
+    if order_id and order_id != "N/A":
+        message_parts.append(f"Order ID: {order_id}.")
+    if service and service != "N/A":
+        message_parts.append(f"Service: {service}.")
+    if building and building != "N/A" and room and room != "N/A":
+        message_parts.append(f"Location: {building}, Room {room}.")
+    if date and date != "N/A":
+        message_parts.append(f"Scheduled date: {date}.")
+    if time_slot and time_slot != "N/A":
+        message_parts.append(f"Time slot: {time_slot}.")
+    if status and status != "N/A":
+        message_parts.append(f"Status: {status}.")
+    if dispatch_status and dispatch_status != "N/A":
+        message_parts.append(f"Dispatch: {dispatch_status}.")
+    if product and product != "N/A":
+        message_parts.append(f"Items: {product}.")
 
-    items_str = ", ".join(items_list) if items_list else "No items recorded"
+    message = " ".join(message_parts)
 
     return {
         "found": True,
-        "student_name": student_name_val,
-        "order_number": order_number,
-        "service_type": service_type,
+        "order_id": order_id,
+        "student": student,
+        "phone": phone,
+        "service": service,
+        "mode": mode,
         "building": building,
         "room": room,
-        "items": items_str,
-        "total": f"${total}",
-        "message": (
-            f"Found order for {student_name_val}. "
-            f"Order {order_number}, {service_type}. "
-            f"Building: {building}, Room: {room}. "
-            f"Items: {items_str}. Total: ${total}."
-        )
+        "address": address,
+        "date": date,
+        "time_slot": time_slot,
+        "status": status,
+        "dispatch_status": dispatch_status,
+        "kits": kits,
+        "kit_check": kit_check,
+        "product": product,
+        "truck": truck,
+        "completed_at": completed_at,
+        "mover_notes": mover_notes,
+        "customer_note": customer_note,
+        "message": message
     }
 
 
+# ── REST endpoint for Retell custom function ───────────────────────────────────
 @mcp.custom_route("/lookup", methods=["POST", "GET", "OPTIONS"])
 async def lookup_endpoint(request: Request):
     if request.method == "GET":
@@ -132,6 +178,7 @@ async def lookup_endpoint(request: Request):
     return JSONResponse(result)
 
 
+# ── Health + root ──────────────────────────────────────────────────────────────
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
     return JSONResponse({"status": "ok"})
@@ -140,19 +187,21 @@ async def health(request: Request):
 @mcp.custom_route("/", methods=["GET"])
 async def root(request: Request):
     return JSONResponse({
-        "service": "UTrucking MCP Server",
+        "service": "UTrucking MCP Server (Google Sheets)",
         "status": "running",
         "endpoints": ["/mcp", "/lookup", "/health"]
     })
 
 
+# ── MCP tool ───────────────────────────────────────────────────────────────────
 @mcp.tool()
 async def lookup_storage_order(student_name: str) -> str:
-    """Look up a student's summer storage order by their name."""
+    """Look up a student's UTrucking order from the master sheet by their name."""
     result = await do_lookup(student_name)
     return json.dumps(result)
 
 
+# ── App setup with keep-alive lifespan ─────────────────────────────────────────
 app = mcp.streamable_http_app()
 _original_lifespan = app.router.lifespan_context
 
@@ -169,7 +218,7 @@ async def combined_lifespan(app):
 
 app.router.lifespan_context = combined_lifespan
 
-# Fix Render 421 Invalid Host header error
+# Middleware for Render compatibility
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 app.add_middleware(
     CORSMiddleware,
