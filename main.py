@@ -1,9 +1,12 @@
 import httpx
 import json
 import os
+import asyncio
 from mcp.server.fastmcp import FastMCP
+from contextlib import asynccontextmanager
 
 JOTFORM_API_KEY = os.getenv("JOTFORM_API_KEY", "YOUR_JOTFORM_API_KEY")
+RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
 FORM_ID = "260590779679074"
 JOTFORM_BASE = "https://api.jotform.com"
 
@@ -15,6 +18,18 @@ FIELD_ORDER_NUMBER = "83"
 FIELD_ITEMS        = "65"
 
 mcp = FastMCP("UTrucking Storage Lookup")
+
+
+async def keep_alive():
+    """Ping our own health endpoint every 14 minutes to prevent Render sleep."""
+    await asyncio.sleep(30)  # wait for server to fully start
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.get(f"{RENDER_URL}/health")
+        except Exception:
+            pass
+        await asyncio.sleep(14 * 60)  # 14 minutes
 
 
 @mcp.tool()
@@ -102,5 +117,18 @@ async def lookup_storage_order(student_name: str) -> str:
     })
 
 
-# Expose both SSE and streamable HTTP apps for Render
+# Build app and start keep-alive on startup
 app = mcp.streamable_http_app()
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(keep_alive())
+
+# Health check route
+from starlette.routing import Route
+from starlette.responses import JSONResponse
+
+async def health(request):
+    return JSONResponse({"status": "ok"})
+
+app.routes.append(Route("/health", health))
