@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 from starlette.requests import Request
+from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 JOTFORM_API_KEY = os.getenv("JOTFORM_API_KEY", "YOUR_JOTFORM_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
@@ -106,8 +108,15 @@ async def do_lookup(student_name: str) -> dict:
     }
 
 
-@mcp.custom_route("/lookup", methods=["POST"])
+@mcp.custom_route("/lookup", methods=["POST", "GET", "OPTIONS"])
 async def lookup_endpoint(request: Request):
+    if request.method == "GET":
+        return JSONResponse({
+            "endpoint": "/lookup",
+            "method": "POST",
+            "expects": {"args": {"student_name": "string"}}
+        })
+
     try:
         body = await request.json()
     except Exception:
@@ -159,3 +168,12 @@ async def combined_lifespan(app):
 
 
 app.router.lifespan_context = combined_lifespan
+
+# Fix Render 421 Invalid Host header error
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
