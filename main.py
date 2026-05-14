@@ -3,8 +3,8 @@ import json
 import os
 import asyncio
 from mcp.server.fastmcp import FastMCP
-from starlette.routing import Route
 from starlette.responses import JSONResponse
+from starlette.requests import Request
 
 JOTFORM_API_KEY = os.getenv("JOTFORM_API_KEY", "YOUR_JOTFORM_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
@@ -21,6 +21,7 @@ FIELD_ITEMS        = "65"
 mcp = FastMCP("UTrucking Storage Lookup")
 
 
+# Keep-alive task — pings /health every 14 min so Render free tier doesn't sleep
 async def keep_alive():
     await asyncio.sleep(30)
     while True:
@@ -30,6 +31,21 @@ async def keep_alive():
         except Exception:
             pass
         await asyncio.sleep(14 * 60)
+
+
+# Custom routes attached directly to the MCP app (preserves MCP's lifespan)
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request):
+    return JSONResponse({"status": "ok"})
+
+
+@mcp.custom_route("/", methods=["GET"])
+async def root(request: Request):
+    return JSONResponse({
+        "service": "UTrucking MCP Server",
+        "status": "running",
+        "endpoints": ["/mcp", "/health"]
+    })
 
 
 @mcp.tool()
@@ -114,30 +130,21 @@ async def lookup_storage_order(student_name: str) -> str:
     })
 
 
-async def health(request):
-    return JSONResponse({"status": "ok"})
-
-
-async def lifespan(app):
-    asyncio.create_task(keep_alive())
-    yield
-
-
-# Build the MCP app
+# Build the app — this preserves MCP's lifespan correctly
 app = mcp.streamable_http_app()
 
-# Inject lifespan and health route
-from starlette.applications import Starlette
-from starlette.middleware.cors import CORSMiddleware
+# Start keep-alive on app startup by adding to MCP's existing lifespan
+_original_lifespan = app.router.lifespan_context
 
-app = Starlette(
-    lifespan=lifespan,
-    routes=list(app.routes) + [Route("/health", health)]
-)
+from contextlib import asynccontextmanager
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@asynccontextmanager
+async def combined_lifespan(app):
+    async with _original_lifespan(app):
+        task = asyncio.create_task(keep_alive())
+        try:
+            yield
+        finally:
+            task.cancel()
+
+app.router.lifespan_context = combined_lifespan
