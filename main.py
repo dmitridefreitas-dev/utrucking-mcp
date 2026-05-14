@@ -2,6 +2,7 @@ import httpx
 import json
 import os
 import asyncio
+from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 from starlette.requests import Request
@@ -21,7 +22,6 @@ FIELD_ITEMS        = "65"
 mcp = FastMCP("UTrucking Storage Lookup")
 
 
-# Keep-alive task — pings /health every 14 min so Render free tier doesn't sleep
 async def keep_alive():
     await asyncio.sleep(30)
     while True:
@@ -33,33 +33,9 @@ async def keep_alive():
         await asyncio.sleep(14 * 60)
 
 
-# Custom routes attached directly to the MCP app (preserves MCP's lifespan)
-@mcp.custom_route("/health", methods=["GET"])
-async def health(request: Request):
-    return JSONResponse({"status": "ok"})
-
-
-@mcp.custom_route("/", methods=["GET"])
-async def root(request: Request):
-    return JSONResponse({
-        "service": "UTrucking MCP Server",
-        "status": "running",
-        "endpoints": ["/mcp", "/health"]
-    })
-
-
-@mcp.tool()
-async def lookup_storage_order(student_name: str) -> str:
-    """
-    Look up a student's summer storage order by their name.
-    Returns service type, building, room number, order number,
-    and full list of stored items with quantities.
-
-    Args:
-        student_name: Full name of the student to look up
-    """
+async def do_lookup(student_name: str) -> dict:
     if not student_name:
-        return json.dumps({"found": False, "message": "Please provide a student name."})
+        return {"found": False, "message": "Please provide a student name."}
 
     name_query = student_name.strip().lower()
     url = (
@@ -71,7 +47,7 @@ async def lookup_storage_order(student_name: str) -> str:
         resp = await client.get(url)
 
     if resp.status_code != 200:
-        return json.dumps({"found": False, "message": "Error connecting to JotForm."})
+        return {"found": False, "message": "Error connecting to JotForm."}
 
     submissions = resp.json().get("content", [])
 
@@ -83,10 +59,10 @@ async def lookup_storage_order(student_name: str) -> str:
             break
 
     if not match:
-        return json.dumps({
+        return {
             "found": False,
             "message": f"No storage order found for '{student_name}'. Please check the name and try again."
-        })
+        }
 
     answers = match.get("answers", {})
     student_name_val = answers.get(FIELD_STUDENT_NAME, {}).get("answer", "N/A")
@@ -112,7 +88,7 @@ async def lookup_storage_order(student_name: str) -> str:
 
     items_str = ", ".join(items_list) if items_list else "No items recorded"
 
-    return json.dumps({
+    return {
         "found": True,
         "student_name": student_name_val,
         "order_number": order_number,
@@ -127,16 +103,50 @@ async def lookup_storage_order(student_name: str) -> str:
             f"Building: {building}, Room: {room}. "
             f"Items: {items_str}. Total: ${total}."
         )
+    }
+
+
+@mcp.custom_route("/lookup", methods=["POST"])
+async def lookup_endpoint(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    student_name = ""
+    if "args" in body and isinstance(body["args"], dict):
+        student_name = body["args"].get("student_name", "")
+    if not student_name:
+        student_name = body.get("student_name", "")
+
+    result = await do_lookup(student_name)
+    return JSONResponse(result)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request):
+    return JSONResponse({"status": "ok"})
+
+
+@mcp.custom_route("/", methods=["GET"])
+async def root(request: Request):
+    return JSONResponse({
+        "service": "UTrucking MCP Server",
+        "status": "running",
+        "endpoints": ["/mcp", "/lookup", "/health"]
     })
 
 
-# Build the app — this preserves MCP's lifespan correctly
-app = mcp.streamable_http_app()
+@mcp.tool()
+async def lookup_storage_order(student_name: str) -> str:
+    """Look up a student's summer storage order by their name."""
+    result = await do_lookup(student_name)
+    return json.dumps(result)
 
-# Start keep-alive on app startup by adding to MCP's existing lifespan
+
+app = mcp.streamable_http_app()
 _original_lifespan = app.router.lifespan_context
 
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def combined_lifespan(app):
@@ -146,5 +156,6 @@ async def combined_lifespan(app):
             yield
         finally:
             task.cancel()
+
 
 app.router.lifespan_context = combined_lifespan
