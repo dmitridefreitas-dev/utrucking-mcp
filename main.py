@@ -75,7 +75,7 @@ def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list
             name_tokens = name.lower().split()
             if name_tokens:
                 score = difflib.SequenceMatcher(None, first_token, name_tokens[0]).ratio()
-                if score >= 0.72:
+                if score >= 0.6:
                     first_candidates.append(name)
 
         if first_candidates:
@@ -86,7 +86,7 @@ def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list
                     name_tokens = name.lower().split()
                     if len(name_tokens) >= 2:
                         score = difflib.SequenceMatcher(None, last_token, name_tokens[-1]).ratio()
-                        if score >= 0.65:
+                        if score >= 0.5:
                             last_matches.append(name)
                 if len(last_matches) == 1:
                     return last_matches[0], []
@@ -98,7 +98,7 @@ def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list
             return None, first_candidates[:3]
 
     # 3. Full fuzzy fallback
-    close = difflib.get_close_matches(q, all_names, n=3, cutoff=0.6)
+    close = difflib.get_close_matches(q, all_names, n=3, cutoff=0.45)
     if len(close) == 1:
         return close[0], []
     if close:
