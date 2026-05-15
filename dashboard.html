@@ -207,8 +207,7 @@
 <!-- FORECAST -->
 <div id="tab-forecast" class="tab-panel hidden">
   <div id="fcKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Vault Occupancy Gauge</div><div class="chart-hg"><canvas id="c-gauge"></canvas></div><div id="gaugeLabel" class="text-center text-2xl font-bold mt-1" style="color:#f97316;"></div></div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
     <div class="card p-4"><div class="label">Revenue by Price Tier</div><div class="chart-h"><canvas id="c-priceTier"></canvas></div></div>
     <div class="card p-4"><div class="label">Pending vs Invoiced Orders</div><div class="chart-h"><canvas id="c-pendingVsInvoiced"></canvas></div></div>
   </div>
@@ -222,7 +221,7 @@
 <div id="tab-vault" class="tab-panel hidden">
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
     <div class="card p-4"><div class="label">Item Type Distribution</div><div class="chart-h"><canvas id="c-itemTypes"></canvas></div></div>
-    <div class="card p-4"><div class="label">Monthly Revenue by Item Type</div><div class="chart-hm"><canvas id="c-itemRevenue"></canvas></div></div>
+    <div class="card p-4"><div class="label">Monthly Revenue by Item Type</div><div style="position:relative;height:320px;"><canvas id="c-itemRevenue"></canvas></div></div>
   </div>
   <div class="card overflow-hidden">
     <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
@@ -245,7 +244,6 @@
 <div id="tab-audit" class="tab-panel hidden">
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
     <div class="card p-4"><div class="label">Audit Verdicts</div><div class="chart-h"><canvas id="c-auditVerdict"></canvas></div></div>
-    <div class="card p-4"><div class="label">Count Match Rate</div><div class="chart-h"><canvas id="c-countMatch"></canvas></div></div>
     <div class="card p-4"><div class="label">Issues Flagged in Events</div><div class="chart-h"><canvas id="c-issueFlag"></canvas></div></div>
   </div>
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -412,14 +410,14 @@ function renderKPIs(data) {
   const manifItems = D.manifest.reduce((s,r) => s + (parseInt(r['Qty'])||0), 0);
 
   const kpis = [
-    {l:'Total Orders', v:data.length, sub:`${D.storage.length} storage · ${D.transit.length} transit`, c:'#f97316'},
-    {l:'Total Revenue', v:'$'+totalRev.toFixed(2), sub:`${lines.length} line items`, c:'#22c55e'},
-    {l:'Completed', v:complete, sub:data.length?Math.round(complete/data.length*100)+'% of orders':'—', c:'#3b82f6'},
-    {l:'Vault Slots', v:vTotal?Math.round(vOcc/vTotal*100)+'%':'—', sub:`${vOcc}/${vTotal} occupied`, c:'#a855f7'},
-    {l:'Issues', v:issues, sub:'orders with notes', c:issues>0?'#ef4444':'#94a3b8'},
-    {l:'Audit Pass', v:auditRows.length?Math.round(auditPass/auditRows.length*100)+'%':'—', sub:`${auditPass}/${auditRows.length} audited`, c:'#eab308'},
-    {l:'MRR (Manifest)', v:'$'+mrr.toFixed(0), sub:'from stored items', c:'#14b8a6'},
-    {l:'Items Stored', v:manifItems, sub:`${D.manifest.length} manifest rows`, c:'#ec4899'},
+    {l:'Total Orders', v:fmtN(data.length), sub:`${fmtN(D.storage.length)} storage · ${fmtN(D.transit.length)} transit`, c:'#f97316'},
+    {l:'Total Revenue', v:usd(totalRev), sub:`${fmtN(lines.length)} line items`, c:'#22c55e'},
+    {l:'Completed', v:fmtN(complete), sub:data.length?Math.round(complete/data.length*100)+'% of orders':'—', c:'#3b82f6'},
+    {l:'Vault Slots', v:vTotal?Math.round(vOcc/vTotal*100)+'%':'—', sub:`${fmtN(vOcc)}/${fmtN(vTotal)} occupied`, c:'#a855f7'},
+    {l:'Issues', v:fmtN(issues), sub:'orders with notes', c:issues>0?'#ef4444':'#94a3b8'},
+    {l:'Audit Pass', v:auditRows.length?Math.round(auditPass/auditRows.length*100)+'%':'—', sub:`${fmtN(auditPass)}/${fmtN(auditRows.length)} audited`, c:'#eab308'},
+    {l:'MRR (Manifest)', v:usd(mrr,0), sub:'from stored items', c:'#14b8a6'},
+    {l:'Items Stored', v:fmtN(manifItems), sub:`${fmtN(D.manifest.length)} manifest rows`, c:'#ec4899'},
   ];
 
   document.getElementById('kpiStrip').innerHTML = kpis.map(k => `
@@ -687,11 +685,11 @@ function renderRevenue() {
   });
 
   mkBar('c-revService', Object.keys(bySvc), [{data:Object.values(bySvc).map(x=>+x.toFixed(2)), backgroundColor:P[2]+'bb', borderRadius:4}],
-    {scales:{y:{ticks:{callback:v=>'$'+v.toLocaleString()}}}});
+    {scales:{y:{ticks:{callback:v=>'$'+fmtN(v)}}}});
 
   const topItems = Object.entries(byItem).sort((a,b)=>b[1]-a[1]).slice(0,10);
   mkBar('c-revItem', topItems.map(x=>x[0]), [{data:topItems.map(x=>+x[1].toFixed(2)), backgroundColor:P.map(c=>c+'bb'), borderRadius:4}],
-    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+v}}}});
+    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+fmtN(v)}}}});
 
   const topBld = Object.entries(byBld).sort((a,b)=>b[1]-a[1]).slice(0,10);
   mkBar('c-revBuilding', topBld.map(x=>x[0]), [{data:topBld.map(x=>+x[1].toFixed(2)), backgroundColor:P[1]+'bb', borderRadius:4}], {indexAxis:'y'});
@@ -704,10 +702,10 @@ function renderRevenue() {
   const totalSur = lines.reduce((s,r)=>s+pm(r['Surcharge']||'0'),0);
   const uOrd = [...new Set(lines.map(r=>r['Order Number']))].length;
   document.getElementById('revKPIs').innerHTML = [
-    {l:'Total Revenue',    v:'$'+totalRev.toFixed(2), c:'#22c55e'},
-    {l:'Total Surcharges', v:'$'+totalSur.toFixed(2), c:'#eab308'},
-    {l:'Invoiced Orders',  v:uOrd, c:'#3b82f6'},
-    {l:'Avg Order Value',  v:'$'+(uOrd?totalRev/uOrd:0).toFixed(2), c:'#f97316'},
+    {l:'Total Revenue',    v:usd(totalRev), c:'#22c55e'},
+    {l:'Total Surcharges', v:usd(totalSur), c:'#eab308'},
+    {l:'Invoiced Orders',  v:fmtN(uOrd), c:'#3b82f6'},
+    {l:'Avg Order Value',  v:usd(uOrd?totalRev/uOrd:0), c:'#f97316'},
   ].map(k=>`<div class="kpi card p-3"><div class="text-xs uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold" style="color:${k.c};">${k.v}</div></div>`).join('');
 
   document.getElementById('invBody').innerHTML = lines.slice(0,200).map(r=>`<tr>
@@ -740,17 +738,6 @@ function renderForecast() {
   const lines = D.invoices.filter(r=>r['Item Type']&&!r['Item Type'].includes('──')&&!r['Item Type'].includes('⚠️'));
   const totalRev = lines.reduce((s,r)=>s+pm(r['Line Total']),0);
 
-  // Gauge
-  const vTotal = D.vault.length, vOcc = D.vault.filter(r=>r['Occupied']==='1').length;
-  const gPct = vTotal ? Math.round(vOcc/vTotal*100) : 0;
-  destroy('c-gauge');
-  CH['c-gauge'] = new Chart(document.getElementById('c-gauge'), {
-    type:'doughnut',
-    data:{datasets:[{data:[gPct,100-gPct], backgroundColor:[gPct>80?P[7]:gPct>50?P[4]:P[2], 'var(--bg2)'], borderWidth:0}]},
-    options:{responsive:true, maintainAspectRatio:false, rotation:-90, circumference:180, cutout:'75%', plugins:{legend:{display:false},tooltip:{enabled:false}}}
-  });
-  document.getElementById('gaugeLabel').textContent = gPct + '%';
-
   // Price tier donut
   const tiers = {'Budget (<$15/mo)':0, 'Standard ($15–25/mo)':0, 'Premium (>$25/mo)':0};
   D.manifest.forEach(r => {
@@ -769,7 +756,7 @@ function renderForecast() {
   // MRR by item type
   const mrrEntries = Object.entries(mrrByType).sort((a,b)=>b[1]-a[1]);
   mkBar('c-mrr', mrrEntries.map(x=>x[0]), [{data:mrrEntries.map(x=>+x[1].toFixed(2)), backgroundColor:P.map(c=>c+'bb'), borderRadius:4}],
-    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+v}}}});
+    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+fmtN(v)}}}});
 
   // Revenue per building from manifest
   const revBld = {};
@@ -779,13 +766,13 @@ function renderForecast() {
   });
   const topBldRev = Object.entries(revBld).sort((a,b)=>b[1]-a[1]).slice(0,12);
   mkBar('c-revPerBuilding', topBldRev.map(x=>x[0]), [{data:topBldRev.map(x=>+x[1].toFixed(2)), backgroundColor:P[0]+'bb', borderRadius:4}],
-    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+v}}}});
+    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+fmtN(v)}}}});
 
   document.getElementById('fcKPIs').innerHTML = [
-    {l:'Monthly Recurring Rev', v:'$'+totalMRR.toFixed(2), c:'#22c55e'},
-    {l:'Projected Seasonal',    v:'$'+annualRev.toFixed(2), c:'#3b82f6'},
-    {l:'Pending Orders',        v:pending+' orders', c:'#eab308'},
-    {l:'Invoiced Revenue',      v:'$'+totalRev.toFixed(2), c:'#f97316'},
+    {l:'Monthly Recurring Rev', v:usd(totalMRR), c:'#22c55e'},
+    {l:'Projected Seasonal',    v:usd(annualRev), c:'#3b82f6'},
+    {l:'Pending Orders',        v:fmtN(pending)+' orders', c:'#eab308'},
+    {l:'Invoiced Revenue',      v:usd(totalRev), c:'#f97316'},
   ].map(k=>`<div class="kpi card p-3"><div class="text-xs uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold" style="color:${k.c};">${k.v}</div></div>`).join('');
 }
 
@@ -806,11 +793,11 @@ function renderVault() {
   const revEntries=Object.entries(itemRev).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
   if(revEntries.length>0){
     mkBar('c-itemRevenue',revEntries.map(x=>x[0]),
-      [{label:'$/mo Revenue',data:revEntries.map(x=>+x[1].toFixed(2)),backgroundColor:P.map(c=>c+'bb'),borderRadius:4}],
+      [{label:'$/mo Revenue',data:revEntries.map(x=>+x[1].toFixed(2)),backgroundColor:P.map(c=>c+'bb'),borderRadius:4,maxBarThickness:28,barPercentage:0.75}],
       {indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx)=>{
         const item=ctx.label;
-        return [`$${ctx.raw}/mo total`, `${itemQty[item]} units × $${itemPrice[item]}/mo`];
-      }}}},scales:{x:{ticks:{callback:v=>'$'+v},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
+        return [`${usd(ctx.raw)}/mo total`, `${fmtN(itemQty[item])} units × ${usd(itemPrice[item],0)}/mo`];
+      }}}},scales:{x:{beginAtZero:true,ticks:{callback:v=>'$'+fmtN(v)},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
   }
 
   renderManifest();
@@ -835,9 +822,6 @@ function renderManifest() {
 // ── AUDIT ─────────────────────────────────────────────────────────
 function renderAudit() {
   donut('c-auditVerdict', cb(D.audit.filter(r=>r['Audit Verdict']),'Audit Verdict'));
-  const matchY=D.audit.filter(r=>r['Item Count Match?']==='TRUE').length;
-  const matchN=D.audit.filter(r=>r['Item Count Match?']==='FALSE').length;
-  donut('c-countMatch',{'Count Match':matchY,'Mismatch':matchN});
   const issY=D.events.filter(r=>r['Issue?']==='Y').length;
   const issN=D.events.length-issY;
   donut('c-issueFlag',{'No Issue':issN,'Has Issue':issY});
@@ -917,6 +901,8 @@ function cb(arr, key) { return arr.reduce((acc,r)=>{ const k=r[key]||'Unknown'; 
 function pm(s) { return parseFloat((s||'0').replace(/[$,]/g,''))||0; }
 function v(id) { return document.getElementById(id)?.value||''; }
 function merge(a,b) { const r={...a}; for(const k in b) r[k]=(b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k]))?merge(a[k]||{},b[k]):b[k]; return r; }
+function fmtN(n,dec=0){return (+n||0).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec});}
+function usd(n,dec=2){return '$'+fmtN(n,dec);}
 function sBadge(val) {
   const cls=val==='Complete'?'b-g':val==='Queued'?'b-y':val?.toLowerCase().includes('process')?'b-b':'b-gray';
   return `<span class="badge ${cls}">${val}</span>`;
@@ -940,10 +926,10 @@ function renderOptimization() {
 
   // KPIs
   document.getElementById('optKPIs').innerHTML=[
-    {l:'Revenue / Building Stop',v:'$'+revPerStop,sub:`${uniqueBuildings} buildings served`,c:'#22c55e'},
-    {l:'Items in Storage',v:totalItems,sub:`${D.manifest.length} manifest rows`,c:'#3b82f6'},
-    {l:'Issue Rate',v:issueRate+'%',sub:`${issueCount} flagged orders`,c:issueRate>10?'#ef4444':'#94a3b8'},
-    {l:'Monthly Storage Revenue',v:'$'+mrrTotal.toFixed(0),sub:'from manifest items',c:'#f97316'},
+    {l:'Revenue / Building Stop',v:usd(revPerStop),sub:`${fmtN(uniqueBuildings)} buildings served`,c:'#22c55e'},
+    {l:'Items in Storage',v:fmtN(totalItems),sub:`${fmtN(D.manifest.length)} manifest rows`,c:'#3b82f6'},
+    {l:'Issue Rate',v:issueRate+'%',sub:`${fmtN(issueCount)} flagged orders`,c:issueRate>10?'#ef4444':'#94a3b8'},
+    {l:'Monthly Storage Revenue',v:usd(mrrTotal,0),sub:'from manifest items',c:'#f97316'},
   ].map(k=>`<div class="kpi card p-3"><div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold mb-0.5" style="color:${k.c};">${k.v}</div><div class="text-xs" style="color:var(--t3);">${k.sub}</div></div>`).join('');
 
   // Revenue per order by building (from invoices × order lookup)
@@ -957,7 +943,7 @@ function renderOptimization() {
   const revPerOrd=Object.keys(bldRev).map(b=>({b,v:bldRev[b]/(bldOrdCount[b]||1)})).sort((a,c)=>c.v-a.v).slice(0,12);
   if(revPerOrd.length>0){
     mkBar('c-revPerOrder',revPerOrd.map(x=>x.b),[{data:revPerOrd.map(x=>+x.v.toFixed(2)),backgroundColor:P[2]+'bb',borderRadius:4}],
-      {indexAxis:'y',scales:{x:{ticks:{callback:v=>'$'+v},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
+      {indexAxis:'y',scales:{x:{ticks:{callback:v=>'$'+fmtN(v)},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
   }
 
   // Item pricing: grouped bar — qty stored (left axis) + unit $/mo (right axis), sorted by monthly revenue
@@ -1007,15 +993,15 @@ function renderOptimization() {
   if(issueRate>10) recs.push({i:'🔧',c:'#ef4444',t:'High Issue Rate',b:`${issueRate}% of orders are flagged. Review dispatch notes for common patterns.`});
   if(priceEntries.length>0){
     const underpriced=priceEntries.filter(([,s])=>s.qty>5&&s.price>0&&s.price<15).sort((a,b)=>b[1].qty-a[1].qty);
-    if(underpriced.length>0) recs.push({i:'📈',c:'#f97316',t:'Pricing Opportunity',b:`"${underpriced[0][0]}" has ${underpriced[0][1].qty} units at only $${underpriced[0][1].price}/mo — consider a price increase.`});
+    if(underpriced.length>0) recs.push({i:'📈',c:'#f97316',t:'Pricing Opportunity',b:`"${underpriced[0][0]}" has ${fmtN(underpriced[0][1].qty)} units at only ${usd(underpriced[0][1].price,0)}/mo — consider a price increase.`});
     const topItem=priceEntries[0];
-    recs.push({i:'💰',c:'#22c55e',t:'Top Revenue Item',b:`"${topItem[0]}" drives $${topItem[1].rev.toFixed(0)}/mo (${topItem[1].qty} units × $${topItem[1].price}/mo). Protect this category.`});
+    recs.push({i:'💰',c:'#22c55e',t:'Top Revenue Item',b:`"${topItem[0]}" drives ${usd(topItem[1].rev,0)}/mo (${fmtN(topItem[1].qty)} units × ${usd(topItem[1].price,0)}/mo). Protect this category.`});
   }
   if(density.length>0){
-    recs.push({i:'🏠',c:'#3b82f6',t:'Best Stop Efficiency',b:`${density[0].b} averages ${density[0].v.toFixed(1)} items/order — prioritize in routing for max efficiency.`});
-    if(density.length>1){const worst=density[density.length-1]; if(worst.v<density[0].v*0.4) recs.push({i:'📍',c:'#94a3b8',t:'Low-Density Building',b:`${worst.b} averages only ${worst.v.toFixed(1)} items/order. Batch pickups or set a minimum order.`});}
+    recs.push({i:'🏠',c:'#3b82f6',t:'Best Stop Efficiency',b:`${density[0].b} averages ${fmtN(density[0].v,1)} items/order — prioritize in routing for max efficiency.`});
+    if(density.length>1){const worst=density[density.length-1]; if(worst.v<density[0].v*0.4) recs.push({i:'📍',c:'#94a3b8',t:'Low-Density Building',b:`${worst.b} averages only ${fmtN(worst.v,1)} items/order. Batch pickups or set a minimum order.`});}
   }
-  if(revPerOrd.length>0) recs.push({i:'🏆',c:'#a855f7',t:'Highest-Value Building',b:`${revPerOrd[0].b} generates $${revPerOrd[0].v.toFixed(2)} avg revenue per order — your most profitable building.`});
+  if(revPerOrd.length>0) recs.push({i:'🏆',c:'#a855f7',t:'Highest-Value Building',b:`${revPerOrd[0].b} generates ${usd(revPerOrd[0].v)} avg revenue per order — your most profitable building.`});
   if(recs.length===0) recs.push({i:'✅',c:'#22c55e',t:'All Good',b:'No optimization gaps detected with current data.'});
 
   document.getElementById('optRecommendations').innerHTML=recs.map(r=>`
