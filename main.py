@@ -31,7 +31,6 @@ SERVICE_CSV_URL = (
 mcp = FastMCP("UTrucking Storage Lookup")
 
 
-# ── Keep-alive ─────────────────────────────────────────────────────────────────
 async def keep_alive():
     await asyncio.sleep(30)
     while True:
@@ -43,7 +42,6 @@ async def keep_alive():
         await asyncio.sleep(14 * 60)
 
 
-# ── Sheet fetchers ─────────────────────────────────────────────────────────────
 async def fetch_csv_rows(url: str) -> list[dict]:
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         resp = await client.get(url)
@@ -53,34 +51,68 @@ async def fetch_csv_rows(url: str) -> list[dict]:
     return [row for row in reader]
 
 
-def find_match(rows: list[dict], query: str, columns: list[str]) -> dict | None:
-    q = query.strip().lower()
-    matches = []
-    for row in rows:
-        for col in columns:
-            value = (row.get(col) or "").strip().lower()
-            if value and q in value:
-                matches.append(row)
-                break
-    return matches[-1] if matches else None
-
-
-def all_student_names() -> tuple[list[str], dict[str, str]]:
-    """Helper — returns no values directly, used inside the verify endpoint."""
-    return [], {}
-
-
-# ── TOOL 1: verify_name ────────────────────────────────────────────────────────
-async def do_verify_name(student_name: str) -> dict:
+def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list[str]]:
     """
-    Check if a student name (or close match) exists in either sheet.
-    Returns the exact spelling as recorded so the agent can confirm with the caller.
-    Uses fuzzy matching to catch misspellings.
+    Returns (best_match, suggestions).
+    Tries: exact substring → first-name fuzzy + last-name narrow → full fuzzy fallback.
     """
-    if not student_name:
-        return {"verified": False, "message": "Please provide a student name."}
+    q = query.strip()
+    q_lower = q.lower()
+    q_tokens = q_lower.split()
 
-    query = student_name.strip().lower()
+    # 1. Exact substring (case-insensitive)
+    exact = [n for n in all_names if q_lower in n.lower()]
+    if len(exact) == 1:
+        return exact[0], []
+    if len(exact) > 1:
+        return exact[-1], []
+
+    # 2. Token-based: match first name, then narrow by last name
+    if q_tokens:
+        first_token = q_tokens[0]
+        first_candidates = []
+        for name in all_names:
+            name_tokens = name.lower().split()
+            if name_tokens:
+                score = difflib.SequenceMatcher(None, first_token, name_tokens[0]).ratio()
+                if score >= 0.72:
+                    first_candidates.append(name)
+
+        if first_candidates:
+            if len(q_tokens) >= 2:
+                last_token = q_tokens[-1]
+                last_matches = []
+                for name in first_candidates:
+                    name_tokens = name.lower().split()
+                    if len(name_tokens) >= 2:
+                        score = difflib.SequenceMatcher(None, last_token, name_tokens[-1]).ratio()
+                        if score >= 0.65:
+                            last_matches.append(name)
+                if len(last_matches) == 1:
+                    return last_matches[0], []
+                if len(last_matches) > 1:
+                    return None, last_matches[:3]
+
+            if len(first_candidates) == 1:
+                return first_candidates[0], []
+            return None, first_candidates[:3]
+
+    # 3. Full fuzzy fallback
+    close = difflib.get_close_matches(q, all_names, n=3, cutoff=0.6)
+    if len(close) == 1:
+        return close[0], []
+    if close:
+        return None, close
+
+    return None, []
+
+
+async def do_lookup_student(name_heard: str) -> dict:
+    if not name_heard or not name_heard.strip():
+        return {
+            "status": "not_found",
+            "message": "I didn't catch a name. Could you repeat that?"
+        }
 
     try:
         dispatch_rows, service_rows = await asyncio.gather(
@@ -88,232 +120,170 @@ async def do_verify_name(student_name: str) -> dict:
             fetch_csv_rows(SERVICE_CSV_URL),
         )
     except Exception:
-        return {"verified": False, "message": "Error reading sheets."}
+        return {"status": "error", "message": "I'm having trouble reaching our records right now."}
 
-    # Collect all unique student names from both sheets
-    all_names = set()
+    # Build deduplicated name list from both sheets
+    name_to_source: dict[str, str] = {}
     for row in dispatch_rows:
-        name = (row.get("Student") or "").strip()
-        if name:
-            all_names.add(name)
+        n = (row.get("Student") or "").strip()
+        if n:
+            name_to_source[n] = "dispatch"
     for row in service_rows:
-        name = (row.get("Student Name") or "").strip()
-        if name:
-            all_names.add(name)
+        n = (row.get("Student Name") or "").strip()
+        if n:
+            name_to_source.setdefault(n, "service")
+
+    all_names = list(name_to_source.keys())
 
     if not all_names:
-        return {"verified": False, "message": "No student records found in the system."}
+        return {"status": "error", "message": "No student records found in the system."}
 
-    # 1. Exact match (case-insensitive substring)
-    exact_matches = [n for n in all_names if query in n.lower()]
-    if exact_matches:
-        # Best exact match — longest matching name wins (more specific)
-        best = sorted(exact_matches, key=len)[0]
-        return {
-            "verified": True,
-            "exact_match": True,
-            "confirmed_name": best,
-            "message": f"Found a match. Is your name {best}?"
-        }
+    best, suggestions = smart_name_match(name_heard, all_names)
 
-    # 2. Fuzzy match — use difflib to find close names
-    names_list = list(all_names)
-    close = difflib.get_close_matches(student_name, names_list, n=3, cutoff=0.65)
-    if close:
-        if len(close) == 1:
+    if best is None:
+        if suggestions:
+            names_str = ", ".join(suggestions)
             return {
-                "verified": False,
-                "exact_match": False,
-                "suggestions": close,
-                "message": f"I didn't find an exact match, but did you mean {close[0]}?"
+                "status": "confirm",
+                "suggestions": suggestions,
+                "message": f"I didn't find an exact match. Did you mean {names_str}?"
             }
         return {
-            "verified": False,
-            "exact_match": False,
-            "suggestions": close,
-            "message": f"I didn't find an exact match. Did you mean one of these: {', '.join(close)}?"
+            "status": "not_found",
+            "suggestions": [],
+            "message": "I couldn't find that name. Could you spell your last name for me?"
         }
 
-    # 3. No match at all
+    # Find the matching rows for the confirmed name
+    confirmed = best
+    confirmed_lower = confirmed.lower()
+
+    dispatch_match = None
+    for row in dispatch_rows:
+        if (row.get("Student") or "").strip().lower() == confirmed_lower:
+            dispatch_match = row
+
+    service_match = None
+    for row in service_rows:
+        if (row.get("Student Name") or "").strip().lower() == confirmed_lower:
+            service_match = row
+
+    # Pull all fields
+    def val(row, *keys):
+        if not row:
+            return ""
+        for k in keys:
+            v = (row.get(k) or "").strip()
+            if v and v != "N/A":
+                return v
+        return ""
+
+    order_id       = val(dispatch_match, "ID") or val(service_match, "Order#:")
+    service        = val(dispatch_match, "Service") or val(service_match, "Service Type")
+    building       = val(dispatch_match, "Building") or val(service_match, "Building")
+    room           = val(dispatch_match, "Room") or val(service_match, "Room")
+    address        = val(dispatch_match, "Address")
+    date           = val(dispatch_match, "Date") or val(service_match, "Date")
+    time_slot      = val(dispatch_match, "Time Slot")
+    order_status   = val(dispatch_match, "Status")
+    dispatch_status= val(dispatch_match, "Dispatch Status")
+    truck          = val(dispatch_match, "Truck")
+    kits           = val(dispatch_match, "Kits")
+    product        = val(dispatch_match, "Product")
+    phone          = val(dispatch_match, "Phone")
+    invoice_id     = val(service_match, "Invoice ID")
+    items_list     = val(service_match, "Summer Storage Item List")
+    boxes          = val(service_match, "UTrucking Boxes")
+    luggage        = val(service_match, "Luggage")
+    other          = val(service_match, "Other")
+    other_desc     = val(service_match, "Other Description")
+    notes          = val(service_match, "Notes (heavy, oversized, unboxed)")
+    date_completed = val(service_match, "Date of completion")
+    pickup_completed = service_match is not None
+
+    # Build available_fields list — only fields that actually have data
+    available_fields = []
+    if order_status or dispatch_status:
+        available_fields.append("order status")
+    if building or room or address:
+        available_fields.append("pickup location")
+    if date or time_slot:
+        available_fields.append("scheduled date and time")
+    if items_list or boxes or luggage or product:
+        available_fields.append("stored items")
+    if invoice_id:
+        available_fields.append("invoice")
+    if truck or dispatch_status:
+        available_fields.append("dispatch info")
+    if notes:
+        available_fields.append("special notes")
+
+    # Short summary message — agent reads this, then constructs the options offer itself
+    summary_parts = [f"Got it — {confirmed}"]
+    if order_id:
+        summary_parts.append(f"order {order_id}")
+    if service:
+        summary_parts.append(service)
+    message = ", ".join(summary_parts) + "."
+
     return {
-        "verified": False,
-        "exact_match": False,
-        "suggestions": [],
-        "message": "No matching name found. Please spell it out letter by letter."
+        "status": "found",
+        "confirmed_name": confirmed,
+        "message": message,
+        "available_fields": available_fields,
+        # All raw data for agent to answer follow-ups without another call
+        "order_id": order_id,
+        "service": service,
+        "building": building,
+        "room": room,
+        "address": address,
+        "date": date,
+        "time_slot": time_slot,
+        "order_status": order_status,
+        "dispatch_status": dispatch_status,
+        "truck": truck,
+        "kits": kits,
+        "product": product,
+        "phone": phone,
+        "invoice_id": invoice_id,
+        "items_list": items_list,
+        "boxes": boxes,
+        "luggage": luggage,
+        "other": other,
+        "other_description": other_desc,
+        "notes": notes,
+        "date_completed": date_completed,
+        "pickup_completed": pickup_completed,
     }
 
 
-# ── TOOL 2: find_order — minimal info ──────────────────────────────────────────
-async def do_find_order(student_name: str) -> dict:
-    if not student_name:
-        return {"found": False, "message": "Please provide a student name."}
-
-    try:
-        dispatch_rows, service_rows = await asyncio.gather(
-            fetch_csv_rows(DISPATCH_CSV_URL),
-            fetch_csv_rows(SERVICE_CSV_URL),
-        )
-    except Exception:
-        return {"found": False, "message": "Error reading sheets."}
-
-    dispatch_match = find_match(dispatch_rows, student_name, ["Student"])
-    service_match  = find_match(service_rows, student_name, ["Student Name"])
-
-    if not dispatch_match and not service_match:
-        return {"found": False, "message": "No order found under that name."}
-
-    order_id = "N/A"
-    service = "N/A"
-
-    if dispatch_match:
-        order_id = dispatch_match.get("ID", "N/A")
-        service  = dispatch_match.get("Service", "N/A")
-    elif service_match:
-        order_id = service_match.get("Order#:", "N/A")
-        service  = service_match.get("Service Type", "N/A")
-
-    return {"found": True, "order_id": order_id, "service": service}
-
-
-# ── TOOL 3: get_order_detail ───────────────────────────────────────────────────
-async def do_get_order_detail(student_name: str, category: str) -> dict:
-    if not student_name or not category:
-        return {"error": "Both student_name and category required."}
-
-    category = category.strip().lower()
-
-    try:
-        dispatch_rows, service_rows = await asyncio.gather(
-            fetch_csv_rows(DISPATCH_CSV_URL),
-            fetch_csv_rows(SERVICE_CSV_URL),
-        )
-    except Exception:
-        return {"error": "Error reading sheets."}
-
-    dispatch_match = find_match(dispatch_rows, student_name, ["Student"])
-    service_match  = find_match(service_rows, student_name, ["Student Name"])
-
-    if not dispatch_match and not service_match:
-        return {"error": "Order not found."}
-
-    cat_map = {
-        "status":   ["status", "order status"],
-        "location": ["location", "where", "pickup location", "building", "address"],
-        "schedule": ["schedule", "when", "date", "time", "pickup time"],
-        "items":    ["items", "stored items", "stuff", "belongings", "contents"],
-        "invoice":  ["invoice", "cost", "bill", "price", "how much"],
-        "dispatch": ["dispatch", "truck", "driver", "eta", "dispatch status"]
-    }
-
-    matched_cat = None
-    for cat, synonyms in cat_map.items():
-        if any(s in category for s in synonyms):
-            matched_cat = cat
-            break
-
-    if not matched_cat:
-        return {"error": f"Unknown category. Valid: status, location, schedule, items, invoice, dispatch."}
-
-    if matched_cat == "status":
-        status = (dispatch_match or {}).get("Status", "N/A") if dispatch_match else "N/A"
-        return {"category": "status", "value": status,
-                "message": f"The order status is {status}."}
-
-    if matched_cat == "location":
-        building = (dispatch_match or service_match or {}).get("Building", "N/A")
-        room = (dispatch_match or service_match or {}).get("Room", "N/A")
-        return {"category": "location", "building": building, "room": room,
-                "message": f"Pickup is at {building}, Room {room}."}
-
-    if matched_cat == "schedule":
-        date = (dispatch_match or {}).get("Date", "N/A")
-        time_slot = (dispatch_match or {}).get("Time Slot", "N/A")
-        return {"category": "schedule", "date": date, "time_slot": time_slot,
-                "message": f"Scheduled for {date} during {time_slot}."}
-
-    if matched_cat == "items":
-        if service_match:
-            items_list = service_match.get("Summer Storage Item List", "")
-            if items_list:
-                return {"category": "items", "items": items_list, "picked_up": True,
-                        "message": f"We picked up: {items_list}."}
-            return {"category": "items", "picked_up": True,
-                    "message": "Items have been picked up but the detailed list is not yet recorded."}
-        return {"category": "items", "picked_up": False,
-                "message": "Items have not been picked up yet."}
-
-    if matched_cat == "invoice":
-        invoice_id = (service_match or {}).get("Invoice ID", "N/A")
-        return {"category": "invoice", "invoice_id": invoice_id,
-                "message": f"The invoice is {invoice_id}."}
-
-    if matched_cat == "dispatch":
-        dispatch_status = (dispatch_match or {}).get("Dispatch Status", "N/A")
-        truck = (dispatch_match or {}).get("Truck", "N/A")
-        return {"category": "dispatch", "dispatch_status": dispatch_status, "truck": truck,
-                "message": f"Dispatch status is {dispatch_status}. Truck: {truck}."}
-
-
-# ── REST endpoints ─────────────────────────────────────────────────────────────
 def _extract_args(body: dict) -> dict:
     if "args" in body and isinstance(body["args"], dict):
         return body["args"]
     return body
 
 
-@mcp.custom_route("/verify_name", methods=["POST", "GET"])
-async def verify_name_endpoint(request: Request):
+@mcp.custom_route("/lookup_student", methods=["POST", "GET"])
+async def lookup_student_endpoint(request: Request):
     if request.method == "GET":
         return JSONResponse({
-            "endpoint": "/verify_name",
+            "endpoint": "/lookup_student",
             "method": "POST",
-            "expects": {"args": {"student_name": "string"}},
-            "returns": ["verified", "confirmed_name", "suggestions", "message"]
+            "expects": {"args": {"name_heard": "string"}},
+            "returns": {
+                "status": "found | confirm | not_found | error",
+                "confirmed_name": "exact name from records",
+                "message": "short summary (name, order, service)",
+                "available_fields": ["order status", "pickup location", "..."],
+                "...": "all order fields for agent follow-up answers"
+            }
         })
     try:
         body = await request.json()
     except Exception:
         body = {}
     args = _extract_args(body)
-    student_name = args.get("student_name", "")
-    return JSONResponse(await do_verify_name(student_name))
-
-
-@mcp.custom_route("/find_order", methods=["POST", "GET"])
-async def find_order_endpoint(request: Request):
-    if request.method == "GET":
-        return JSONResponse({
-            "endpoint": "/find_order",
-            "method": "POST",
-            "expects": {"args": {"student_name": "string"}},
-            "returns": ["found", "order_id", "service"]
-        })
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    args = _extract_args(body)
-    return JSONResponse(await do_find_order(args.get("student_name", "")))
-
-
-@mcp.custom_route("/get_order_detail", methods=["POST", "GET"])
-async def get_detail_endpoint(request: Request):
-    if request.method == "GET":
-        return JSONResponse({
-            "endpoint": "/get_order_detail",
-            "method": "POST",
-            "expects": {"args": {"student_name": "string", "category": "string"}},
-            "valid_categories": ["status", "location", "schedule", "items", "invoice", "dispatch"]
-        })
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-    args = _extract_args(body)
-    return JSONResponse(await do_get_order_detail(
-        args.get("student_name", ""),
-        args.get("category", "")
-    ))
+    return JSONResponse(await do_lookup_student(args.get("name_heard", "")))
 
 
 @mcp.custom_route("/health", methods=["GET"])
@@ -324,29 +294,21 @@ async def health(request: Request):
 @mcp.custom_route("/", methods=["GET"])
 async def root(request: Request):
     return JSONResponse({
-        "service": "UTrucking MCP Server (3-Tool Architecture)",
+        "service": "UTrucking MCP Server",
         "status": "running",
-        "endpoints": ["/verify_name", "/find_order", "/get_order_detail", "/health"]
+        "endpoints": ["/lookup_student", "/health"]
     })
 
 
-# MCP tool wrappers
 @mcp.tool()
-async def verify_name(student_name: str) -> str:
-    """Verify that a student name exists in our records. Returns the exact spelling or close suggestions if not found."""
-    return json.dumps(await do_verify_name(student_name))
-
-
-@mcp.tool()
-async def find_order(student_name: str) -> str:
-    """Find a UTrucking order by student name. Returns ONLY order_id and service type."""
-    return json.dumps(await do_find_order(student_name))
-
-
-@mcp.tool()
-async def get_order_detail(student_name: str, category: str) -> str:
-    """Get ONE specific detail about an order. Category must be: status, location, schedule, items, invoice, or dispatch."""
-    return json.dumps(await do_get_order_detail(student_name, category))
+async def lookup_student(name_heard: str) -> str:
+    """
+    Look up a UTrucking student order by the name heard over the phone.
+    Handles fuzzy/misspelled names. Returns a short message (name, order ID, service)
+    plus all order fields so the agent can answer any follow-up question without
+    calling another function. Also returns available_fields listing what data exists.
+    """
+    return json.dumps(await do_lookup_student(name_heard))
 
 
 app = mcp.streamable_http_app()
