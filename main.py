@@ -122,14 +122,17 @@ async def do_lookup_student(name_heard: str) -> dict:
     except Exception:
         return {"status": "error", "message": "I'm having trouble reaching our records right now."}
 
+    def clean(s: str) -> str:
+        return " ".join((s or "").split())
+
     # Build deduplicated name list from both sheets
     name_to_source: dict[str, str] = {}
     for row in dispatch_rows:
-        n = (row.get("Student") or "").strip()
+        n = clean(row.get("Student") or "")
         if n:
             name_to_source[n] = "dispatch"
     for row in service_rows:
-        n = (row.get("Student Name") or "").strip()
+        n = clean(row.get("Student Name") or "")
         if n:
             name_to_source.setdefault(n, "service")
 
@@ -167,9 +170,6 @@ async def do_lookup_student(name_heard: str) -> dict:
     for row in service_rows:
         if (row.get("Student Name") or "").strip().lower() == confirmed_lower:
             service_match = row
-
-    def clean(s: str) -> str:
-        return " ".join((s or "").split())
 
     # Pull all fields
     def val(row, *keys):
