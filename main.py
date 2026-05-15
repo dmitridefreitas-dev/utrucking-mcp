@@ -289,6 +289,22 @@ async def lookup_student_endpoint(request: Request):
     return JSONResponse(await do_lookup_student(args.get("name_heard", "")))
 
 
+@mcp.custom_route("/debug_sheets", methods=["GET"])
+async def debug_sheets(request: Request):
+    dispatch_rows, service_rows = await asyncio.gather(
+        fetch_csv_rows(DISPATCH_CSV_URL),
+        fetch_csv_rows(SERVICE_CSV_URL),
+    )
+    return JSONResponse({
+        "dispatch_row_count": len(dispatch_rows),
+        "dispatch_columns": list(dispatch_rows[0].keys()) if dispatch_rows else [],
+        "dispatch_names": [r.get("Student", "") for r in dispatch_rows[:5]],
+        "service_row_count": len(service_rows),
+        "service_columns": list(service_rows[0].keys()) if service_rows else [],
+        "service_names": [r.get("Student Name", "") for r in service_rows[:5]],
+    })
+
+
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
     return JSONResponse({"status": "ok"})
