@@ -44,6 +44,29 @@
 </head>
 <body>
 
+<!-- LOGIN GATE -->
+<div id="loginGate" style="position:fixed;inset:0;background:var(--bg0);z-index:9999;display:flex;align-items:center;justify-content:center;">
+  <div class="card p-8" style="width:100%;max-width:360px;">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-10 h-10 bg-orange-500 rounded-lg flex items-center justify-center font-bold text-white">UT</div>
+      <div>
+        <div class="font-bold" style="color:var(--t1);">UTrucking Analytics</div>
+        <div class="text-xs" style="color:var(--t3);">Sign in to continue</div>
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="text-xs font-medium mb-1 block" style="color:var(--t2);">Username</label>
+      <input id="loginUser" type="text" placeholder="Username" class="w-full" style="padding:.5rem .75rem;font-size:.875rem;" onkeydown="if(event.key==='Enter')doLogin()"/>
+    </div>
+    <div class="mb-5">
+      <label class="text-xs font-medium mb-1 block" style="color:var(--t2);">Password</label>
+      <input id="loginPass" type="password" placeholder="Password" class="w-full" style="padding:.5rem .75rem;font-size:.875rem;" onkeydown="if(event.key==='Enter')doLogin()"/>
+    </div>
+    <button onclick="doLogin()" style="width:100%;background:#f97316;color:#fff;border:none;border-radius:.5rem;padding:.6rem;font-size:.875rem;font-weight:600;cursor:pointer;">Sign In</button>
+    <div id="loginErr" class="text-xs mt-3 text-center hidden" style="color:#ef4444;">Incorrect username or password.</div>
+  </div>
+</div>
+
 <!-- HEADER -->
 <div class="no-print sticky top-0 z-50 border-b" style="background:var(--bg1);border-color:var(--bd);">
   <div class="px-5 py-2.5 flex items-center gap-3">
@@ -1013,7 +1036,25 @@ function renderOptimization() {
     </div>`).join('');
 }
 
-loadAll();
+// ── LOGIN ──────────────────────────────────────────────────────────
+function doLogin() {
+  const u = document.getElementById('loginUser').value.trim();
+  const p = document.getElementById('loginPass').value;
+  if (u === 'davidgeorge' && p === 'davidgeorge') {
+    sessionStorage.setItem('ut_auth', '1');
+    document.getElementById('loginGate').style.display = 'none';
+    loadAll();
+  } else {
+    document.getElementById('loginErr').classList.remove('hidden');
+    document.getElementById('loginPass').value = '';
+    document.getElementById('loginPass').focus();
+  }
+}
+
+if (sessionStorage.getItem('ut_auth') === '1') {
+  document.getElementById('loginGate').style.display = 'none';
+  loadAll();
+} // else: loginGate stays visible, loadAll() called after successful login
 </script>
 </body>
 </html>
