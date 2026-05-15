@@ -173,13 +173,9 @@
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
     <div class="card p-4"><div class="label">Event Types Breakdown</div><div class="chart-h"><canvas id="c-eventTypes"></canvas></div></div>
   </div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Handled By Leaderboard</div><div class="chart-h"><canvas id="c-handledBy"></canvas></div></div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
     <div class="card p-4"><div class="label">Service Completion Rate</div><div class="chart-h"><canvas id="c-completionRate"></canvas></div></div>
     <div class="card p-4"><div class="label">Audit Pass / Fail by Service</div><div class="chart-h"><canvas id="c-auditByService"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-    <div class="card p-4"><div class="label">Issues by Building</div><div class="chart-h"><canvas id="c-issuesByBuilding"></canvas></div></div>
     <div class="card p-4"><div class="label">Order Status Breakdown</div><div class="chart-h"><canvas id="c-statusBreakdown"></canvas></div></div>
   </div>
 </div>
@@ -224,20 +220,9 @@
 
 <!-- VAULT & ITEMS -->
 <div id="tab-vault" class="tab-panel hidden">
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
     <div class="card p-4"><div class="label">Item Type Distribution</div><div class="chart-h"><canvas id="c-itemTypes"></canvas></div></div>
-    <div class="card p-4"><div class="label">Item Sizes</div><div class="chart-h"><canvas id="c-itemSizes"></canvas></div></div>
-    <div class="card p-4"><div class="label">Vault Occupancy by Bay</div><div class="chart-h"><canvas id="c-vaultBays"></canvas></div></div>
-  </div>
-  <div class="card p-4 mb-3">
-    <div class="flex items-center justify-between mb-2">
-      <span class="label">Vault Floor Map</span>
-      <div class="flex gap-3 text-xs" style="color:var(--t3);">
-        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded inline-block bg-orange-500"></span>Occupied</span>
-        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded inline-block" style="background:var(--bg2);"></span>Empty</span>
-      </div>
-    </div>
-    <div id="vaultMap" class="overflow-x-auto"></div>
+    <div class="card p-4"><div class="label">Monthly Revenue by Item Type</div><div class="chart-hm"><canvas id="c-itemRevenue"></canvas></div></div>
   </div>
   <div class="card overflow-hidden">
     <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
@@ -292,34 +277,14 @@
   <div id="optKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
     <div class="card p-4"><div class="label">Revenue per Order by Building</div><div class="chart-hm"><canvas id="c-revPerOrder"></canvas></div></div>
-    <div class="card p-4"><div class="label">Pricing Opportunity — Volume vs Avg $/mo (bubble size = total revenue)</div><div class="chart-hm"><canvas id="c-priceBubble"></canvas></div></div>
+    <div class="card p-4"><div class="label">Item Type Pricing — Monthly Revenue vs Unit Price</div><div class="chart-hm"><canvas id="c-itemPricing"></canvas></div></div>
   </div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4 lg:col-span-2"><div class="label">Operator Performance — Events Handled vs Issues</div><div class="chart-hm"><canvas id="c-opPerf"></canvas></div></div>
-    <div class="card p-4"><div class="label">Time Slot Distribution</div><div class="chart-h"><canvas id="c-timeSlots"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Stop Density — Avg Items per Order by Building</div><div class="chart-hm"><canvas id="c-stopDensity"></canvas></div></div>
-    <div class="card p-4"><div class="label">Vault Bay Utilization %</div><div class="chart-h"><canvas id="c-bayEff"></canvas></div></div>
+  <div class="card p-4 mb-3">
+    <div class="label">Stop Density — Avg Items per Order by Building</div><div class="chart-hm"><canvas id="c-stopDensity"></canvas></div>
   </div>
   <div class="card p-4 mb-3">
     <div class="label">Smart Recommendations</div>
     <div id="optRecommendations" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-1"></div>
-  </div>
-  <div class="card overflow-hidden">
-    <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);">
-      <span class="label">Revenue Leakage — Items Stored, No Invoice</span>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full text-xs"><thead style="background:var(--bg2);"><tr>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Building</th>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Service</th>
-        <th class="px-3 py-2 text-right" style="color:var(--t2);">Items</th>
-        <th class="px-3 py-2 text-right" style="color:var(--t2);">Est. $/mo</th>
-      </tr></thead><tbody id="leakBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
-    </div>
   </div>
 </div>
 
@@ -675,10 +640,6 @@ function renderStudentTable() {
 function renderOperations(data) {
   donut('c-eventTypes', cb(D.events.filter(r=>r['Event Type']), 'Event Type'));
 
-  // Handled by leaderboard
-  const handled = cb(D.events.filter(r=>r['Handled By']), 'Handled By');
-  const topH = Object.entries(handled).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  mkBar('c-handledBy', topH.map(x=>x[0]), [{data:topH.map(x=>x[1]), backgroundColor:P[4]+'bb', borderRadius:4}], {indexAxis:'y'});
 
   // Completion rate by service
   const svcComplete = {}, svcTotal = {};
@@ -705,12 +666,6 @@ function renderOperations(data) {
     [{label:'Pass', data:auditSvcs.map(s=>apSvc[s]||0), backgroundColor:P[2]+'bb', borderRadius:4},
      {label:'Fail', data:auditSvcs.map(s=>afSvc[s]||0), backgroundColor:P[7]+'bb', borderRadius:4}],
     {scales:{x:{stacked:true},y:{stacked:true}}, plugins:{legend:{display:true, labels:{boxWidth:10,font:{size:10}}}}});
-
-  // Issues by building
-  const issBld = {};
-  data.filter(r=>r['Issue Notes']&&r.Building).forEach(r => { issBld[r.Building]=(issBld[r.Building]||0)+1; });
-  const topIss = Object.entries(issBld).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  mkBar('c-issuesByBuilding', topIss.map(x=>x[0]), [{data:topIss.map(x=>x[1]), backgroundColor:P[7]+'bb', borderRadius:4}], {indexAxis:'y'});
 
   // Overall status breakdown stacked
   const statuses = cb(data, 'Dispatch Status');
@@ -840,38 +795,23 @@ function renderVault() {
   D.manifest.forEach(r=>{ const k=r['Item']||'Unknown'; itemCounts[k]=(itemCounts[k]||0)+(parseInt(r['Qty'])||1); });
   donut('c-itemTypes', itemCounts);
 
-  const sizeCounts=cb(D.manifest.filter(r=>r['Size']),'Size');
-  mkBar('c-itemSizes',Object.keys(sizeCounts),[{data:Object.values(sizeCounts),backgroundColor:P[3]+'bb',borderRadius:4}]);
-
-  const bays={};
-  D.vault.forEach(r=>{
-    if(!r['Bay']) return;
-    if(!bays[r['Bay']]) bays[r['Bay']]={total:0,occ:0,slots:[]};
-    bays[r['Bay']].total++;
-    const o=r['Occupied']==='1'||r['Occupied']?.toLowerCase()==='true';
-    if(o) bays[r['Bay']].occ++;
-    bays[r['Bay']].slots.push({loc:r['Location'],slot:r['Slot'],occ:o,order:r['Order Numbers']});
+  // Monthly revenue by item type: qty × unit $/mo
+  const itemRev={}, itemQty={}, itemPrice={};
+  D.manifest.forEach(r=>{
+    const k=r['Item']||'Unknown', qty=parseInt(r['Qty'])||1, price=pm(r['Unit $/mo']);
+    itemRev[k]=(itemRev[k]||0)+qty*price;
+    itemQty[k]=(itemQty[k]||0)+qty;
+    itemPrice[k]=price; // last price seen
   });
-  const bk=Object.keys(bays).slice(0,15);
-  mkBar('c-vaultBays',bk,
-    [{label:'Occupied',data:bk.map(b=>bays[b].occ),backgroundColor:P[0]+'bb',borderRadius:4},
-     {label:'Empty',data:bk.map(b=>bays[b].total-bays[b].occ),backgroundColor:'var(--bg2)',borderRadius:4}],
-    {scales:{x:{stacked:true},y:{stacked:true}},plugins:{legend:{display:true,labels:{boxWidth:10,font:{size:10}}}}});
-
-  document.getElementById('vaultMap').innerHTML=`<div class="flex flex-wrap gap-3">
-    ${Object.entries(bays).map(([bay,info])=>{
-      const pct=info.total?Math.round(info.occ/info.total*100):0;
-      const c=pct>80?'#ef4444':pct>50?'#eab308':'#22c55e';
-      return `<div class="rounded-lg p-2.5" style="background:var(--bg2);">
-        <div class="flex justify-between text-xs font-semibold mb-1.5" style="color:var(--t2);">
-          <span>Bay ${bay}</span><span style="color:${c};">${pct}%</span>
-        </div>
-        <div class="flex flex-wrap gap-0.5">
-          ${info.slots.map(s=>`<div class="vault-slot ${s.occ?'bg-orange-500':''}${!s.occ?'' :''}" style="${s.occ?'':'background:var(--bg2);border:1px solid var(--bg2);;'}" title="${s.loc}${s.order?': '+s.order:''}">${s.slot}</div>`).join('')}
-        </div>
-      </div>`;
-    }).join('')}
-  </div>`;
+  const revEntries=Object.entries(itemRev).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  if(revEntries.length>0){
+    mkBar('c-itemRevenue',revEntries.map(x=>x[0]),
+      [{label:'$/mo Revenue',data:revEntries.map(x=>+x[1].toFixed(2)),backgroundColor:P.map(c=>c+'bb'),borderRadius:4}],
+      {indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx)=>{
+        const item=ctx.label;
+        return [`$${ctx.raw}/mo total`, `${itemQty[item]} units × $${itemPrice[item]}/mo`];
+      }}}},scales:{x:{ticks:{callback:v=>'$'+v},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
+  }
 
   renderManifest();
 }
@@ -989,35 +929,24 @@ function vBadge(v) {
 // ── OPTIMIZATION ──────────────────────────────────────────────────
 function renderOptimization() {
   const data = getGlobalData();
-
-  // Identify invoiced order numbers
-  const invoicedOrders = new Set(D.invoices.filter(r=>r['Order Number']).map(r=>r['Order Number']));
-  const storedOrders = D.all.filter(r=>(parseInt(r['Item Count'])||0)>0);
-  const uninvoiced = storedOrders.filter(r=>!invoicedOrders.has(r['Order Number']));
-
   const lines = D.invoices.filter(r=>r['Item Type']&&!r['Item Type'].includes('──')&&!r['Item Type'].includes('⚠️'));
   const totalRev = lines.reduce((s,r)=>s+pm(r['Line Total']),0);
   const uniqueBuildings = new Set(data.filter(r=>r.Building).map(r=>r.Building)).size;
   const revPerStop = uniqueBuildings?(totalRev/uniqueBuildings).toFixed(2):'0';
-
   const issueCount = data.filter(r=>(r['Issue Notes']||'').trim()).length;
   const issueRate = data.length?Math.round(issueCount/data.length*100):0;
-
-  // avg $/mo per manifest item for leakage estimate
-  const mrrItems = D.manifest.filter(r=>pm(r['Unit $/mo'])>0);
-  const avgMRR = mrrItems.length?mrrItems.reduce((s,r)=>s+pm(r['Unit $/mo']),0)/mrrItems.length:20;
-  const leakageItems = uninvoiced.reduce((s,r)=>s+(parseInt(r['Item Count'])||0),0);
-  const leakageEst = leakageItems*avgMRR;
+  const totalItems = D.manifest.reduce((s,r)=>s+(parseInt(r['Qty'])||0),0);
+  const mrrTotal = D.manifest.reduce((s,r)=>s+(parseInt(r['Qty'])||0)*pm(r['Unit $/mo']),0);
 
   // KPIs
   document.getElementById('optKPIs').innerHTML=[
     {l:'Revenue / Building Stop',v:'$'+revPerStop,sub:`${uniqueBuildings} buildings served`,c:'#22c55e'},
-    {l:'Avg Items / Order',v:data.length?(data.reduce((s,r)=>s+(parseInt(r['Item Count'])||0),0)/data.length).toFixed(1):'—',sub:'order density',c:'#3b82f6'},
+    {l:'Items in Storage',v:totalItems,sub:`${D.manifest.length} manifest rows`,c:'#3b82f6'},
     {l:'Issue Rate',v:issueRate+'%',sub:`${issueCount} flagged orders`,c:issueRate>10?'#ef4444':'#94a3b8'},
-    {l:'Est. Revenue Leakage',v:'$'+leakageEst.toFixed(0),sub:`${uninvoiced.length} uninvoiced orders`,c:uninvoiced.length>0?'#eab308':'#94a3b8'},
+    {l:'Monthly Storage Revenue',v:'$'+mrrTotal.toFixed(0),sub:'from manifest items',c:'#f97316'},
   ].map(k=>`<div class="kpi card p-3"><div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold mb-0.5" style="color:${k.c};">${k.v}</div><div class="text-xs" style="color:var(--t3);">${k.sub}</div></div>`).join('');
 
-  // Revenue per order by building
+  // Revenue per order by building (from invoices × order lookup)
   const bldRev={}, bldOrdCount={};
   lines.forEach(r=>{
     const ord=D.all.find(o=>o['Order Number']===r['Order Number']);
@@ -1026,92 +955,68 @@ function renderOptimization() {
   });
   D.all.filter(r=>r.Building).forEach(r=>{bldOrdCount[r.Building]=(bldOrdCount[r.Building]||0)+1;});
   const revPerOrd=Object.keys(bldRev).map(b=>({b,v:bldRev[b]/(bldOrdCount[b]||1)})).sort((a,c)=>c.v-a.v).slice(0,12);
-  mkBar('c-revPerOrder',revPerOrd.map(x=>x.b),[{data:revPerOrd.map(x=>+x.v.toFixed(2)),backgroundColor:P[2]+'bb',borderRadius:4}],
-    {indexAxis:'y',scales:{x:{ticks:{callback:v=>'$'+v},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
+  if(revPerOrd.length>0){
+    mkBar('c-revPerOrder',revPerOrd.map(x=>x.b),[{data:revPerOrd.map(x=>+x.v.toFixed(2)),backgroundColor:P[2]+'bb',borderRadius:4}],
+      {indexAxis:'y',scales:{x:{ticks:{callback:v=>'$'+v},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
+  }
 
-  // Pricing bubble: x=qty stored, y=avg $/mo, bubble size=total rev
+  // Item pricing: grouped bar — qty stored (left axis) + unit $/mo (right axis), sorted by monthly revenue
   const itemStats={};
   D.manifest.forEach(r=>{
     const item=r['Item']||'Unknown', qty=parseInt(r['Qty'])||1, price=pm(r['Unit $/mo']);
-    if(!itemStats[item]) itemStats[item]={qty:0,totalRev:0,prices:[]};
-    itemStats[item].qty+=qty; itemStats[item].totalRev+=qty*price; itemStats[item].prices.push(price);
+    if(!itemStats[item]) itemStats[item]={qty:0,rev:0,price:0};
+    itemStats[item].qty+=qty; itemStats[item].rev+=qty*price; itemStats[item].price=price;
   });
-  const bubbleData=Object.entries(itemStats).filter(([,s])=>s.qty>0&&s.prices.some(p=>p>0)).map(([item,s])=>({
-    label:item, x:s.qty, y:s.qty>0?+(s.totalRev/s.qty).toFixed(2):0, r:Math.max(5,Math.min(28,s.totalRev/60))
-  }));
-  destroy('c-priceBubble');
-  CH['c-priceBubble']=new Chart(document.getElementById('c-priceBubble'),{
-    type:'bubble',
-    data:{datasets:bubbleData.map((d,i)=>({label:d.label,data:[{x:d.x,y:d.y,r:d.r}],backgroundColor:P[i%P.length]+'99',borderColor:P[i%P.length]}))},
-    options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:true,labels:{boxWidth:8,font:{size:9}}}},
-      scales:{
-        x:{title:{display:true,text:'Total Qty Stored',color:'var(--t2)'},grid:{color:'var(--bd)'}},
-        y:{title:{display:true,text:'Avg $/mo per Item',color:'var(--t2)'},grid:{color:'var(--bd)'},ticks:{callback:v=>'$'+v}}
+  const priceEntries=Object.entries(itemStats).filter(([,s])=>s.rev>0).sort((a,b)=>b[1].rev-a[1].rev);
+  if(priceEntries.length>0){
+    destroy('c-itemPricing');
+    CH['c-itemPricing']=new Chart(document.getElementById('c-itemPricing'),{
+      type:'bar',
+      data:{
+        labels:priceEntries.map(x=>x[0]),
+        datasets:[
+          {label:'Qty Stored',data:priceEntries.map(x=>x[1].qty),backgroundColor:P[1]+'bb',borderRadius:4,yAxisID:'yQty'},
+          {label:'Unit $/mo',data:priceEntries.map(x=>x[1].price),backgroundColor:P[0]+'bb',borderRadius:4,yAxisID:'yPrice'},
+        ]
+      },
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:true,labels:{boxWidth:10,font:{size:10}}},
+          tooltip:{callbacks:{label:(ctx)=>ctx.dataset.label==='Unit $/mo'?`$${ctx.raw}/mo`:ctx.raw+' units'}}},
+        scales:{
+          x:{grid:{color:'var(--bd)'},ticks:{maxRotation:35,font:{size:10}}},
+          yQty:{position:'left',title:{display:true,text:'Qty',color:'var(--t2)'},grid:{color:'var(--bd)'}},
+          yPrice:{position:'right',title:{display:true,text:'$/mo',color:'var(--t2)'},ticks:{callback:v=>'$'+v},grid:{drawOnChartArea:false}}
+        }
       }
-    }
-  });
-
-  // Operator performance
-  const opEvents={},opIssues={};
-  D.events.forEach(r=>{
-    const op=r['Handled By']; if(!op) return;
-    opEvents[op]=(opEvents[op]||0)+1;
-    if(r['Issue?']==='Y') opIssues[op]=(opIssues[op]||0)+1;
-  });
-  const ops=Object.keys(opEvents).sort((a,b)=>opEvents[b]-opEvents[a]).slice(0,10);
-  mkBar('c-opPerf',ops,
-    [{label:'Events Handled',data:ops.map(o=>opEvents[o]||0),backgroundColor:P[1]+'bb',borderRadius:4},
-     {label:'Issues',data:ops.map(o=>opIssues[o]||0),backgroundColor:P[7]+'bb',borderRadius:4}],
-    {scales:{x:{stacked:false},y:{grid:{color:'var(--bd)'}}},plugins:{legend:{display:true,labels:{boxWidth:10,font:{size:10}}}}});
-
-  // Time slot distribution
-  const slots=cb(data.filter(r=>r['Time Slot']),'Time Slot');
-  if(Object.keys(slots).length>0) {
-    mkBar('c-timeSlots',Object.keys(slots),[{data:Object.values(slots),backgroundColor:P[4]+'bb',borderRadius:4}],
-      {scales:{x:{ticks:{maxRotation:45}}}});
-  } else {
-    document.getElementById('c-timeSlots').parentElement.innerHTML='<div class="text-xs text-center py-8" style="color:var(--t3);">No time slot data</div>';
+    });
   }
 
-  // Stop density: avg items per order by building
+  // Stop density: avg items per order by building (from storage sheet Item Count)
   const bldItems={},bldCnt={};
   data.forEach(r=>{ if(!r.Building) return; bldItems[r.Building]=(bldItems[r.Building]||0)+(parseInt(r['Item Count'])||0); bldCnt[r.Building]=(bldCnt[r.Building]||0)+1; });
-  const density=Object.keys(bldItems).map(b=>({b,v:bldCnt[b]>0?bldItems[b]/bldCnt[b]:0})).sort((a,c)=>c.v-a.v).slice(0,12);
-  mkBar('c-stopDensity',density.map(x=>x.b),[{data:density.map(x=>+x.v.toFixed(1)),backgroundColor:P[5]+'bb',borderRadius:4}],
-    {indexAxis:'y',scales:{x:{title:{display:true,text:'Avg Items/Order',color:'var(--t2)'}}}});
-
-  // Vault bay utilization
-  const bays={};
-  D.vault.forEach(r=>{ if(!r['Bay']) return; if(!bays[r['Bay']]) bays[r['Bay']]={total:0,occ:0}; bays[r['Bay']].total++; if(r['Occupied']==='1'||r['Occupied']?.toLowerCase()==='true') bays[r['Bay']].occ++; });
-  const bk=Object.keys(bays).slice(0,15);
-  const bPcts=bk.map(b=>+(bays[b].occ/bays[b].total*100).toFixed(1));
-  mkBar('c-bayEff',bk,[{data:bPcts,backgroundColor:bPcts.map(p=>p>80?P[7]+'bb':p>50?P[4]+'bb':P[2]+'bb'),borderRadius:4}],
-    {scales:{y:{max:100,ticks:{callback:v=>v+'%'},grid:{color:'var(--bd)'}},x:{grid:{color:'var(--bd)'}}}});
-
-  // Revenue leakage table
-  document.getElementById('leakBody').innerHTML=uninvoiced.slice(0,50).map(r=>{
-    const items=parseInt(r['Item Count'])||0, est=items*avgMRR;
-    return `<tr><td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td><td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td><td class="px-3 py-2" style="color:var(--t2);">${r['Building']||'—'}</td><td class="px-3 py-2" style="color:var(--t2);">${r['Service']||'—'}</td><td class="px-3 py-2 text-right" style="color:var(--t1);">${items}</td><td class="px-3 py-2 text-right font-medium" style="color:#eab308;">~$${est.toFixed(0)}/mo</td></tr>`;
-  }).join('')||'<tr><td colspan="6" class="px-3 py-4 text-center" style="color:var(--t3);">No revenue leakage detected</td></tr>';
+  const density=Object.keys(bldItems).map(b=>({b,v:bldCnt[b]>0?bldItems[b]/bldCnt[b]:0})).filter(x=>x.v>0).sort((a,c)=>c.v-a.v).slice(0,12);
+  if(density.length>0){
+    mkBar('c-stopDensity',density.map(x=>x.b),[{data:density.map(x=>+x.v.toFixed(1)),backgroundColor:P[5]+'bb',borderRadius:4}],
+      {indexAxis:'y',scales:{x:{title:{display:true,text:'Avg Items/Order',color:'var(--t2)'},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
+  } else {
+    const el=document.getElementById('c-stopDensity'); if(el) el.parentElement.innerHTML='<div class="text-xs text-center py-6" style="color:var(--t3);">Item count data not yet populated</div>';
+  }
 
   // Smart recommendations
   const recs=[];
-  const vTotal=D.vault.length, vOcc=D.vault.filter(r=>r['Occupied']==='1'||r['Occupied']?.toLowerCase()==='true').length;
-  const vPct=vTotal?Math.round(vOcc/vTotal*100):0;
-  if(vPct>80) recs.push({i:'⚠️',c:'#ef4444',t:'Vault Nearly Full',b:`${vPct}% occupied (${vOcc}/${vTotal} slots). Consider adding capacity or prioritizing returns.`});
-  else if(vPct<40&&vTotal>0) recs.push({i:'💡',c:'#3b82f6',t:'Vault Under-utilized',b:`Only ${vPct}% occupied. Room to grow — consider marketing storage to more students.`});
-  if(uninvoiced.length>0) recs.push({i:'💰',c:'#eab308',t:'Uninvoiced Orders',b:`${uninvoiced.length} order${uninvoiced.length>1?'s have':'has'} stored items but no invoice. ~$${leakageEst.toFixed(0)}/mo uncaptured.`});
-  if(density.length>0){
-    recs.push({i:'🏠',c:'#22c55e',t:'Best Stop Efficiency',b:`${density[0].b} averages ${density[0].v.toFixed(1)} items/order — your most efficient pickup building.`});
-    const worst=density[density.length-1];
-    if(worst.v<density[0].v*0.3) recs.push({i:'📍',c:'#94a3b8',t:'Low-Density Building',b:`${worst.b} averages only ${worst.v.toFixed(1)} items/order. Batch pickups or offer minimum-order incentives.`});
+  if(issueRate>10) recs.push({i:'🔧',c:'#ef4444',t:'High Issue Rate',b:`${issueRate}% of orders are flagged. Review dispatch notes for common patterns.`});
+  if(priceEntries.length>0){
+    const underpriced=priceEntries.filter(([,s])=>s.qty>5&&s.price>0&&s.price<15).sort((a,b)=>b[1].qty-a[1].qty);
+    if(underpriced.length>0) recs.push({i:'📈',c:'#f97316',t:'Pricing Opportunity',b:`"${underpriced[0][0]}" has ${underpriced[0][1].qty} units at only $${underpriced[0][1].price}/mo — consider a price increase.`});
+    const topItem=priceEntries[0];
+    recs.push({i:'💰',c:'#22c55e',t:'Top Revenue Item',b:`"${topItem[0]}" drives $${topItem[1].rev.toFixed(0)}/mo (${topItem[1].qty} units × $${topItem[1].price}/mo). Protect this category.`});
   }
-  if(issueRate>10) recs.push({i:'🔧',c:'#ef4444',t:'High Issue Rate',b:`${issueRate}% of orders flagged. Review top buildings and operators in the issues charts.`});
-  if(ops.length>=2&&opEvents[ops[0]]>opEvents[ops[1]]*2) recs.push({i:'👥',c:'#a855f7',t:'Workload Imbalance',b:`${ops[0]} handles ${opEvents[ops[0]]} events vs ${ops[1]}'s ${opEvents[ops[1]]}. Consider redistributing.`});
-  const underpriced=bubbleData.filter(d=>d.x>10&&d.y<15).sort((a,b)=>b.x-a.x);
-  if(underpriced.length>0) recs.push({i:'📈',c:'#f97316',t:'Pricing Opportunity',b:`"${underpriced[0].label}" has ${underpriced[0].x} units stored at $${underpriced[0].y}/mo avg — high volume, low price.`});
-  if(recs.length===0) recs.push({i:'✅',c:'#22c55e',t:'All Good',b:'No major optimization gaps detected with current data.'});
+  if(density.length>0){
+    recs.push({i:'🏠',c:'#3b82f6',t:'Best Stop Efficiency',b:`${density[0].b} averages ${density[0].v.toFixed(1)} items/order — prioritize in routing for max efficiency.`});
+    if(density.length>1){const worst=density[density.length-1]; if(worst.v<density[0].v*0.4) recs.push({i:'📍',c:'#94a3b8',t:'Low-Density Building',b:`${worst.b} averages only ${worst.v.toFixed(1)} items/order. Batch pickups or set a minimum order.`});}
+  }
+  if(revPerOrd.length>0) recs.push({i:'🏆',c:'#a855f7',t:'Highest-Value Building',b:`${revPerOrd[0].b} generates $${revPerOrd[0].v.toFixed(2)} avg revenue per order — your most profitable building.`});
+  if(recs.length===0) recs.push({i:'✅',c:'#22c55e',t:'All Good',b:'No optimization gaps detected with current data.'});
 
   document.getElementById('optRecommendations').innerHTML=recs.map(r=>`
     <div class="rounded-lg p-4" style="background:var(--bg2);">
