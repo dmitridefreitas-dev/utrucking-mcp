@@ -168,12 +168,15 @@ async def do_lookup_student(name_heard: str) -> dict:
         if (row.get("Student Name") or "").strip().lower() == confirmed_lower:
             service_match = row
 
+    def clean(s: str) -> str:
+        return " ".join((s or "").split())
+
     # Pull all fields
     def val(row, *keys):
         if not row:
             return ""
         for k in keys:
-            v = (row.get(k) or "").strip()
+            v = clean(row.get(k) or "")
             if v and v != "N/A":
                 return v
         return ""
