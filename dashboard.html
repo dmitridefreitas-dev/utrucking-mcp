@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UTrucking — Analytics Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  * { font-family: 'Inter', sans-serif; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: #0f172a; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  .tab-active { border-bottom: 2px solid #f97316 !important; color: #f97316 !important; }
+  .kpi-card { transition: transform 0.2s; }
+  .kpi-card:hover { transform: translateY(-2px); }
+  .chart-wrap { position: relative; height: 260px; }
+  .chart-wrap-lg { position: relative; height: 320px; }
+  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+  .badge-green { background: #166534; color: #86efac; }
+  .badge-yellow { background: #713f12; color: #fde68a; }
+  .badge-red { background: #7f1d1d; color: #fca5a5; }
+  .badge-blue { background: #1e3a5f; color: #93c5fd; }
+  .badge-gray { background: #1e293b; color: #94a3b8; }
+  .vault-slot { width: 26px; height: 26px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; cursor: pointer; transition: opacity 0.15s; }
+  .vault-slot:hover { opacity: 0.7; }
+  .pulse { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .sort-asc::after { content: ' ↑'; color: #f97316; }
+  .sort-desc::after { content: ' ↓'; color: #f97316; }
+  tr:hover { background: rgba(30,41,59,0.4); }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen">
+
+<!-- HEADER -->
+<div class="bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between sticky top-0 z-50">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 bg-orange-500 rounded-lg flex items-center justify-center font-bold text-white text-sm">UT</div>
+    <div>
+      <div class="font-bold text-white text-sm">UTrucking Analytics</div>
+      <div class="text-slate-500 text-xs">Master Operations Dashboard</div>
+    </div>
+  </div>
+  <div class="flex items-center gap-4">
+    <span id="lastUpdated" class="text-slate-500 text-xs"></span>
+    <button onclick="loadAll()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors">↻ Refresh</button>
+  </div>
+</div>
+<div id="loadingBar" class="h-0.5 bg-orange-500 pulse" style="display:none;"></div>
+
+<!-- KPI STRIP -->
+<div class="px-6 pt-5 pb-2">
+  <div id="kpiStrip" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+</div>
+
+<!-- TAB NAV -->
+<div class="px-6 mt-4 border-b border-slate-800">
+  <div class="flex gap-1">
+    <button class="tab-btn tab-active px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('overview',this)">Overview</button>
+    <button class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('orders',this)">Orders</button>
+    <button class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('revenue',this)">Revenue</button>
+    <button class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('vault',this)">Vault & Items</button>
+    <button class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('audit',this)">Audit & Events</button>
+  </div>
+</div>
+
+<!-- PANELS -->
+<div class="px-6 py-5">
+
+  <!-- OVERVIEW -->
+  <div id="tab-overview" class="tab-panel">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Service Mix</div>
+        <div class="chart-wrap"><canvas id="chartServiceMix"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Dispatch Status</div>
+        <div class="chart-wrap"><canvas id="chartDispatchStatus"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Shipping Status</div>
+        <div class="chart-wrap"><canvas id="chartShippingStatus"></canvas></div>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-2 bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Top Buildings by Order Volume</div>
+        <div class="chart-wrap-lg"><canvas id="chartBuildings"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Recent Events</div>
+        <div id="recentEvents" class="overflow-y-auto space-y-1" style="height:320px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ORDERS -->
+  <div id="tab-orders" class="tab-panel hidden">
+    <div class="flex flex-wrap gap-2 mb-4">
+      <select id="filterService" onchange="applyFilters()" class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2"></select>
+      <select id="filterBuilding" onchange="applyFilters()" class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2"></select>
+      <select id="filterDispatch" onchange="applyFilters()" class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2"></select>
+      <input id="filterSearch" oninput="applyFilters()" placeholder="Search name or order #..." class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2 flex-1 min-w-40">
+      <button onclick="exportCSV()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-lg transition-colors">↓ Export CSV</button>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Orders by Service</div>
+        <div class="chart-wrap"><canvas id="chartOrdersByService"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Days In System Distribution</div>
+        <div class="chart-wrap"><canvas id="chartDaysDist"></canvas></div>
+      </div>
+    </div>
+    <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+        <span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">All Orders</span>
+        <span id="ordersCount" class="text-slate-500 text-xs"></span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead class="bg-slate-800/50"><tr id="ordersHead"></tr></thead>
+          <tbody id="ordersBody" class="divide-y divide-slate-800/40"></tbody>
+        </table>
+      </div>
+      <div class="px-4 py-3 border-t border-slate-800 flex items-center justify-between">
+        <button onclick="changePage(-1)" class="text-slate-400 hover:text-white text-xs px-2 py-1 rounded hover:bg-slate-800 transition-colors">← Prev</button>
+        <span id="pageInfo" class="text-slate-500 text-xs"></span>
+        <button onclick="changePage(1)" class="text-slate-400 hover:text-white text-xs px-2 py-1 rounded hover:bg-slate-800 transition-colors">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- REVENUE -->
+  <div id="tab-revenue" class="tab-panel hidden">
+    <div id="revKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Revenue by Service</div>
+        <div class="chart-wrap"><canvas id="chartRevService"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Revenue by Item Type</div>
+        <div class="chart-wrap"><canvas id="chartRevItem"></canvas></div>
+      </div>
+    </div>
+    <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-800"><span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Invoice Line Items</span></div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead class="bg-slate-800/50">
+            <tr>
+              <th class="px-3 py-2 text-left text-slate-400">Order</th>
+              <th class="px-3 py-2 text-left text-slate-400">Student</th>
+              <th class="px-3 py-2 text-left text-slate-400">Service</th>
+              <th class="px-3 py-2 text-left text-slate-400">Item</th>
+              <th class="px-3 py-2 text-right text-slate-400">Qty</th>
+              <th class="px-3 py-2 text-right text-slate-400">Unit Price</th>
+              <th class="px-3 py-2 text-right text-slate-400">Line Total</th>
+              <th class="px-3 py-2 text-right text-slate-400">Surcharge</th>
+            </tr>
+          </thead>
+          <tbody id="invoiceBody" class="divide-y divide-slate-800/40"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- VAULT & ITEMS -->
+  <div id="tab-vault" class="tab-panel hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Item Type Distribution</div>
+        <div class="chart-wrap"><canvas id="chartItemTypes"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Item Sizes</div>
+        <div class="chart-wrap"><canvas id="chartItemSizes"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Vault Occupancy by Bay</div>
+        <div class="chart-wrap"><canvas id="chartVaultBays"></canvas></div>
+      </div>
+    </div>
+    <div class="bg-slate-900 rounded-xl p-4 border border-slate-800 mb-4">
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Vault Floor Map</span>
+        <div class="flex items-center gap-3 text-xs text-slate-500">
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-orange-500 inline-block"></span> Occupied</span>
+          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-slate-700 inline-block"></span> Empty</span>
+        </div>
+      </div>
+      <div id="vaultMap" class="overflow-x-auto"></div>
+    </div>
+    <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+        <span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Item Manifest</span>
+        <input id="manifestSearch" oninput="renderManifest()" placeholder="Search..." class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded px-2 py-1 w-36">
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-xs">
+          <thead class="bg-slate-800/50">
+            <tr>
+              <th class="px-3 py-2 text-left text-slate-400">Order</th>
+              <th class="px-3 py-2 text-left text-slate-400">Student</th>
+              <th class="px-3 py-2 text-left text-slate-400">Building</th>
+              <th class="px-3 py-2 text-left text-slate-400">Item</th>
+              <th class="px-3 py-2 text-left text-slate-400">Size</th>
+              <th class="px-3 py-2 text-right text-slate-400">Qty</th>
+              <th class="px-3 py-2 text-right text-slate-400">$/mo</th>
+              <th class="px-3 py-2 text-left text-slate-400">Vault</th>
+              <th class="px-3 py-2 text-left text-slate-400">Condition</th>
+            </tr>
+          </thead>
+          <tbody id="manifestBody" class="divide-y divide-slate-800/40"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- AUDIT & EVENTS -->
+  <div id="tab-audit" class="tab-panel hidden">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Audit Verdicts</div>
+        <div class="chart-wrap"><canvas id="chartAuditVerdict"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Event Types</div>
+        <div class="chart-wrap"><canvas id="chartEventTypes"></canvas></div>
+      </div>
+      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Issues Flagged</div>
+        <div class="chart-wrap"><canvas id="chartIssues"></canvas></div>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800"><span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Event Log</span></div>
+        <div class="overflow-auto" style="max-height:400px;">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-800/50 sticky top-0">
+              <tr>
+                <th class="px-3 py-2 text-left text-slate-400">ID</th>
+                <th class="px-3 py-2 text-left text-slate-400">Time</th>
+                <th class="px-3 py-2 text-left text-slate-400">Type</th>
+                <th class="px-3 py-2 text-left text-slate-400">Order</th>
+                <th class="px-3 py-2 text-left text-slate-400">Student</th>
+                <th class="px-3 py-2 text-left text-slate-400">Issue</th>
+              </tr>
+            </thead>
+            <tbody id="eventsBody" class="divide-y divide-slate-800/40"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-800"><span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Audit Log</span></div>
+        <div class="overflow-auto" style="max-height:400px;">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-800/50 sticky top-0">
+              <tr>
+                <th class="px-3 py-2 text-left text-slate-400">Order</th>
+                <th class="px-3 py-2 text-left text-slate-400">Student</th>
+                <th class="px-3 py-2 text-left text-slate-400">Verdict</th>
+                <th class="px-3 py-2 text-left text-slate-400">Count Match</th>
+                <th class="px-3 py-2 text-left text-slate-400">Notes</th>
+              </tr>
+            </thead>
+            <tbody id="auditBody" class="divide-y divide-slate-800/40"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SHEET_ID = '1ZoRH8OENK_wnKUeHvUc7eqytzuu2lMzaVvsPLJyvvng';
+const GIDs = {
+  storage:  '529044027',
+  transit:  '2098223117',
+  manifest: '1586199848',
+  vault:    '1784822441',
+  invoices: '201526587',
+  events:   '1549495149',
+  audit:    '2085245455',
+};
+const PALETTE = ['#f97316','#3b82f6','#22c55e','#a855f7','#eab308','#ec4899','#14b8a6','#ef4444','#64748b','#f59e0b','#06b6d4','#84cc16'];
+
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.borderColor = '#334155';
+
+let DATA = {}, CHARTS = {};
+let filtered = [], currentPage = 1, sortCol = null, sortDir = 1;
+const PAGE = 25;
+
+async function fetchSheet(gid) {
+  const r = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`);
+  const txt = await r.text();
+  if (txt.trimStart().startsWith('<')) return [];
+  return Papa.parse(txt, { header: true, skipEmptyLines: true }).data;
+}
+
+async function loadAll() {
+  document.getElementById('loadingBar').style.display = 'block';
+  try {
+    const [storage, transit, manifest, vault, invoices, events, audit] = await Promise.all(
+      Object.values(GIDs).map(g => fetchSheet(g))
+    );
+    DATA = { storage, transit, manifest, vault, invoices, events, audit };
+    DATA.all = [...storage, ...transit].filter(r => r['Order Number']);
+    renderAll();
+    document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) { console.error(e); }
+  document.getElementById('loadingBar').style.display = 'none';
+}
+
+function renderAll() {
+  renderKPIs();
+  renderOverview();
+  renderOrders();
+  renderRevenue();
+  renderVault();
+  renderAuditEvents();
+  populateFilters();
+}
+
+// ── KPIs ──────────────────────────────────────────────────────────────
+function renderKPIs() {
+  const lines = DATA.invoices.filter(r => r['Item Type'] && !r['Item Type'].includes('──') && !r['Item Type'].includes('⚠️'));
+  const totalRev = lines.reduce((s, r) => s + parseMoney(r['Line Total']), 0);
+  const vaultSlots = DATA.vault.length;
+  const vaultOcc = DATA.vault.filter(r => r['Occupied'] === '1' || (r['Occupied']||'').toLowerCase() === 'true').length;
+  const issues = DATA.all.filter(r => (r['Issue Notes']||'').trim()).length;
+  const auditRows = DATA.audit.filter(r => r['Order Number'] && r['Audit Verdict']);
+  const auditPass = auditRows.filter(r => r['Audit Verdict'] === 'PASS').length;
+  const manifItems = DATA.manifest.reduce((s,r) => s + (parseInt(r['Qty'])||0), 0);
+
+  const kpis = [
+    { label: 'Total Orders',     value: DATA.all.length.toLocaleString(), sub: `${DATA.storage.length} storage · ${DATA.transit.length} transit`, color: 'text-orange-400' },
+    { label: 'Total Revenue',    value: '$' + totalRev.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}), sub: `${lines.length} line items`, color: 'text-green-400' },
+    { label: 'Vault Occupancy',  value: vaultSlots ? Math.round(vaultOcc/vaultSlots*100)+'%' : '—', sub: `${vaultOcc} / ${vaultSlots} slots`, color: 'text-blue-400' },
+    { label: 'Issues Flagged',   value: issues.toString(), sub: 'orders with notes', color: issues > 0 ? 'text-red-400' : 'text-slate-400' },
+    { label: 'Audit Pass Rate',  value: auditRows.length ? Math.round(auditPass/auditRows.length*100)+'%' : '—', sub: `${auditPass} / ${auditRows.length} audited`, color: 'text-purple-400' },
+    { label: 'Items in Manifest',value: manifItems.toLocaleString(), sub: `${DATA.manifest.length} manifest rows`, color: 'text-teal-400' },
+  ];
+  document.getElementById('kpiStrip').innerHTML = kpis.map(k => `
+    <div class="kpi-card bg-slate-900 rounded-xl p-4 border border-slate-800 cursor-default">
+      <div class="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">${k.label}</div>
+      <div class="${k.color} text-2xl font-bold mb-0.5">${k.value}</div>
+      <div class="text-slate-500 text-xs">${k.sub}</div>
+    </div>`).join('');
+}
+
+// ── OVERVIEW ─────────────────────────────────────────────────────────
+function renderOverview() {
+  mkDonut('chartServiceMix',    countBy(DATA.all, 'Service'));
+  mkDonut('chartDispatchStatus',countBy(DATA.all, 'Dispatch Status'));
+  mkDonut('chartShippingStatus',countBy(DATA.all, 'Shipping Status'));
+
+  const bldg = countBy(DATA.all.filter(r=>r.Building), 'Building');
+  const top = Object.entries(bldg).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  mkChart('chartBuildings','bar', top.map(x=>x[0]),
+    [{data:top.map(x=>x[1]), backgroundColor:PALETTE[0]+'bb', borderColor:PALETTE[0], borderWidth:1, borderRadius:4}],
+    {indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}}, y:{grid:{color:'#1e293b'}}}});
+
+  const events = [...DATA.events].reverse().slice(0,30);
+  document.getElementById('recentEvents').innerHTML = events.map(e=>`
+    <div class="flex items-start gap-2 py-1.5 border-b border-slate-800/40">
+      <div class="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${e['Issue?']==='Y'?'bg-red-400':'bg-green-400'}"></div>
+      <div class="min-w-0">
+        <div class="text-slate-300 text-xs truncate">${e['Student']||'—'} · ${e['Order Number']||'—'}</div>
+        <div class="text-slate-500 text-xs">${e['Event Type']||'—'} · ${e['Event Time']||'—'}</div>
+      </div>
+    </div>`).join('');
+}
+
+// ── ORDERS ────────────────────────────────────────────────────────────
+function renderOrders() {
+  mkChart('chartOrdersByService','bar',
+    Object.keys(countBy(DATA.all,'Service')),
+    [{data:Object.values(countBy(DATA.all,'Service')), backgroundColor:PALETTE.map(c=>c+'bb'), borderRadius:4}],
+    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}}}});
+
+  const buckets = {'0 days':0,'1–7':0,'8–30':0,'31–60':0,'60+':0};
+  DATA.all.forEach(r=>{
+    const d = parseFloat(r['Days In Storage']||r['Days Since Pickup']||0);
+    if(d===0) buckets['0 days']++;
+    else if(d<=7) buckets['1–7']++;
+    else if(d<=30) buckets['8–30']++;
+    else if(d<=60) buckets['31–60']++;
+    else buckets['60+']++;
+  });
+  mkChart('chartDaysDist','bar', Object.keys(buckets),
+    [{data:Object.values(buckets), backgroundColor:PALETTE[1]+'bb', borderRadius:4}],
+    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}}}});
+
+  filtered = [...DATA.all];
+  renderTable();
+}
+
+function populateFilters() {
+  const sel = (id, vals, label) => {
+    const el = document.getElementById(id);
+    el.innerHTML = `<option value="">All ${label}</option>` + vals.sort().map(v=>`<option>${v}</option>`).join('');
+  };
+  sel('filterService',  [...new Set(DATA.all.map(r=>r.Service).filter(Boolean))], 'Services');
+  sel('filterBuilding', [...new Set(DATA.all.map(r=>r.Building).filter(Boolean))], 'Buildings');
+  sel('filterDispatch', [...new Set(DATA.all.map(r=>r['Dispatch Status']).filter(Boolean))], 'Statuses');
+}
+
+function applyFilters() {
+  const svc = document.getElementById('filterService').value;
+  const bld = document.getElementById('filterBuilding').value;
+  const dsp = document.getElementById('filterDispatch').value;
+  const q   = document.getElementById('filterSearch').value.toLowerCase();
+  filtered = DATA.all.filter(r =>
+    (!svc || r.Service===svc) &&
+    (!bld || r.Building===bld) &&
+    (!dsp || r['Dispatch Status']===dsp) &&
+    (!q   || (r.Student||'').toLowerCase().includes(q) || (r['Order Number']||'').toLowerCase().includes(q))
+  );
+  currentPage = 1;
+  renderTable();
+}
+
+const ORDER_COLS = ['Order Number','Student','Building','Room','Service','Dispatch Status','Shipping Status','Item Count','Total $','Days In Storage'];
+
+function renderTable() {
+  if (sortCol) filtered.sort((a,b) => (a[sortCol]||'').localeCompare(b[sortCol]||'') * sortDir);
+  const pages = Math.ceil(filtered.length / PAGE);
+  const slice = filtered.slice((currentPage-1)*PAGE, currentPage*PAGE);
+
+  document.getElementById('ordersHead').innerHTML = ORDER_COLS.map(c=>`
+    <th class="px-3 py-2 text-left text-slate-400 whitespace-nowrap cursor-pointer hover:text-orange-400 ${sortCol===c?(sortDir===1?'sort-asc':'sort-desc'):''}" onclick="doSort('${c}')">${c}</th>`).join('');
+
+  document.getElementById('ordersBody').innerHTML = slice.map(r=>`
+    <tr>
+      ${ORDER_COLS.map(c=>{
+        const v = r[c]||'—';
+        if (c==='Dispatch Status') return `<td class="px-3 py-2">${statusBadge(v)}</td>`;
+        if (c==='Total $') return `<td class="px-3 py-2 text-right text-green-400 font-medium">${v}</td>`;
+        return `<td class="px-3 py-2 text-slate-300 whitespace-nowrap">${v}</td>`;
+      }).join('')}
+    </tr>`).join('');
+
+  document.getElementById('ordersCount').textContent = filtered.length + ' orders';
+  document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${pages||1}`;
+}
+
+function doSort(col) {
+  sortDir = sortCol===col ? sortDir*-1 : 1;
+  sortCol = col;
+  renderTable();
+}
+function changePage(d) {
+  const pages = Math.ceil(filtered.length/PAGE);
+  currentPage = Math.max(1, Math.min(pages, currentPage+d));
+  renderTable();
+}
+function exportCSV() {
+  const blob = new Blob([Papa.unparse(filtered)], {type:'text/csv'});
+  Object.assign(document.createElement('a'), {href:URL.createObjectURL(blob), download:'orders.csv'}).click();
+}
+
+// ── REVENUE ───────────────────────────────────────────────────────────
+function renderRevenue() {
+  const lines = DATA.invoices.filter(r => r['Item Type'] && !r['Item Type'].includes('──') && !r['Item Type'].includes('⚠️') && r['Order Number']);
+  const byService = {}, byItem = {};
+  lines.forEach(r => {
+    const v = parseMoney(r['Line Total']);
+    byService[r.Service||'Unknown'] = (byService[r.Service||'Unknown']||0) + v;
+    byItem[r['Item Type']||'Unknown'] = (byItem[r['Item Type']||'Unknown']||0) + v;
+  });
+
+  mkChart('chartRevService','bar', Object.keys(byService),
+    [{data:Object.values(byService).map(v=>+v.toFixed(2)), backgroundColor:PALETTE[2]+'bb', borderRadius:4}],
+    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}, ticks:{callback:v=>'$'+v.toLocaleString()}}}});
+
+  const topItems = Object.entries(byItem).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  mkChart('chartRevItem','bar', topItems.map(x=>x[0]),
+    [{data:topItems.map(x=>+x[1].toFixed(2)), backgroundColor:PALETTE.map(c=>c+'bb'), borderRadius:4}],
+    {indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}, ticks:{callback:v=>'$'+v}},y:{grid:{color:'#1e293b'}}}});
+
+  const totalRev = lines.reduce((s,r)=>s+parseMoney(r['Line Total']),0);
+  const totalSur = lines.reduce((s,r)=>s+parseMoney(r['Surcharge']),0);
+  const uOrders  = [...new Set(lines.map(r=>r['Order Number']))].length;
+  document.getElementById('revKPIs').innerHTML = [
+    {label:'Total Revenue', value:'$'+totalRev.toFixed(2), color:'text-green-400'},
+    {label:'Total Surcharges', value:'$'+totalSur.toFixed(2), color:'text-yellow-400'},
+    {label:'Invoiced Orders', value:uOrders, color:'text-blue-400'},
+    {label:'Avg Order Value', value:'$'+(uOrders?totalRev/uOrders:0).toFixed(2), color:'text-orange-400'},
+  ].map(k=>`<div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
+    <div class="text-slate-500 text-xs uppercase tracking-wider mb-1">${k.label}</div>
+    <div class="${k.color} text-xl font-bold">${k.value}</div></div>`).join('');
+
+  document.getElementById('invoiceBody').innerHTML = lines.slice(0,200).map(r=>`
+    <tr>
+      <td class="px-3 py-2 text-slate-300">${r['Order Number']||'—'}</td>
+      <td class="px-3 py-2 text-white">${r['Student']||'—'}</td>
+      <td class="px-3 py-2 text-slate-400">${r['Service']||'—'}</td>
+      <td class="px-3 py-2 text-slate-300">${r['Item Type']||'—'}</td>
+      <td class="px-3 py-2 text-right text-slate-300">${r['Qty']||'—'}</td>
+      <td class="px-3 py-2 text-right text-slate-400">${r['Unit Price']||'—'}</td>
+      <td class="px-3 py-2 text-right text-green-400 font-medium">${r['Line Total']||'—'}</td>
+      <td class="px-3 py-2 text-right text-yellow-400">${r['Surcharge']||'—'}</td>
+    </tr>`).join('');
+}
+
+// ── VAULT & ITEMS ─────────────────────────────────────────────────────
+function renderVault() {
+  const itemCounts = {};
+  DATA.manifest.forEach(r => {
+    const k = r['Item']||'Unknown';
+    itemCounts[k] = (itemCounts[k]||0) + (parseInt(r['Qty'])||1);
+  });
+  mkDonut('chartItemTypes', itemCounts);
+
+  const sizeCounts = countBy(DATA.manifest.filter(r=>r['Size']), 'Size');
+  mkChart('chartItemSizes','bar', Object.keys(sizeCounts),
+    [{data:Object.values(sizeCounts), backgroundColor:PALETTE[3]+'bb', borderRadius:4}],
+    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}}}});
+
+  const bays = {};
+  DATA.vault.forEach(r => {
+    if (!r['Bay']) return;
+    if (!bays[r['Bay']]) bays[r['Bay']] = {total:0, occ:0, slots:[]};
+    bays[r['Bay']].total++;
+    const occupied = r['Occupied']==='1'||r['Occupied']?.toLowerCase()==='true';
+    if (occupied) bays[r['Bay']].occ++;
+    bays[r['Bay']].slots.push({loc:r['Location'], slot:r['Slot'], occupied, order:r['Order Numbers']});
+  });
+
+  const bayKeys = Object.keys(bays).slice(0,15);
+  mkChart('chartVaultBays','bar', bayKeys,
+    [
+      {label:'Occupied', data:bayKeys.map(b=>bays[b].occ), backgroundColor:PALETTE[0]+'bb', borderRadius:4},
+      {label:'Empty',    data:bayKeys.map(b=>bays[b].total-bays[b].occ), backgroundColor:'#334155', borderRadius:4},
+    ],
+    {plugins:{legend:{display:true, labels:{boxWidth:10,font:{size:11}}}},
+     scales:{x:{stacked:true,grid:{color:'#1e293b'}},y:{stacked:true,grid:{color:'#1e293b'}}}});
+
+  document.getElementById('vaultMap').innerHTML = `<div class="flex flex-wrap gap-4">` +
+    Object.entries(bays).map(([bay,info])=>{
+      const pct = info.total ? Math.round(info.occ/info.total*100) : 0;
+      const pctColor = pct>80?'text-red-400':pct>50?'text-yellow-400':'text-green-400';
+      return `<div class="bg-slate-800/50 rounded-lg p-3">
+        <div class="text-slate-400 text-xs font-semibold mb-2 flex justify-between gap-4">
+          <span>Bay ${bay}</span><span class="${pctColor}">${pct}%</span>
+        </div>
+        <div class="flex flex-wrap gap-1">
+          ${info.slots.map(s=>`<div class="vault-slot ${s.occupied?'bg-orange-500/80':'bg-slate-700'}" title="${s.loc}${s.order?': '+s.order:''}">${s.slot}</div>`).join('')}
+        </div>
+      </div>`;
+    }).join('') + `</div>`;
+
+  renderManifest();
+}
+
+function renderManifest() {
+  const q = (document.getElementById('manifestSearch')?.value||'').toLowerCase();
+  const rows = DATA.manifest.filter(r =>
+    !q || (r['Student']||'').toLowerCase().includes(q) ||
+    (r['Item']||'').toLowerCase().includes(q) ||
+    (r['Order Number']||'').toLowerCase().includes(q)
+  ).slice(0,200);
+  document.getElementById('manifestBody').innerHTML = rows.map(r=>`
+    <tr>
+      <td class="px-3 py-2 text-slate-300">${r['Order Number']||'—'}</td>
+      <td class="px-3 py-2 text-white">${r['Student']||'—'}</td>
+      <td class="px-3 py-2 text-slate-400">${r['Building']||'—'}</td>
+      <td class="px-3 py-2 text-white font-medium">${r['Item']||'—'}</td>
+      <td class="px-3 py-2 text-slate-400">${r['Size']||'—'}</td>
+      <td class="px-3 py-2 text-right text-slate-300">${r['Qty']||'—'}</td>
+      <td class="px-3 py-2 text-right text-green-400">${r['Unit $/mo']?'$'+r['Unit $/mo']:'—'}</td>
+      <td class="px-3 py-2 text-slate-400">${r['Vault Location']||'—'}</td>
+      <td class="px-3 py-2">${r['Condition']?`<span class="badge badge-green">${r['Condition']}</span>`:'—'}</td>
+    </tr>`).join('');
+}
+
+// ── AUDIT & EVENTS ────────────────────────────────────────────────────
+function renderAuditEvents() {
+  mkDonut('chartAuditVerdict', countBy(DATA.audit.filter(r=>r['Audit Verdict']), 'Audit Verdict'));
+  mkChart('chartEventTypes','bar',
+    Object.keys(countBy(DATA.events.filter(r=>r['Event Type']),'Event Type')),
+    [{data:Object.values(countBy(DATA.events.filter(r=>r['Event Type']),'Event Type')), backgroundColor:PALETTE[4]+'bb', borderRadius:4}],
+    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}}}});
+
+  const issueCount = DATA.events.filter(r=>r['Issue?']==='Y').length;
+  const noIssue = DATA.events.length - issueCount;
+  mkDonut('chartIssues', {'No Issue': noIssue, 'Has Issue': issueCount});
+
+  document.getElementById('eventsBody').innerHTML = DATA.events.slice(0,150).map(r=>`
+    <tr>
+      <td class="px-3 py-2 text-slate-500">${r['Event ID']||'—'}</td>
+      <td class="px-3 py-2 text-slate-400">${r['Event Time']||'—'}</td>
+      <td class="px-3 py-2 text-slate-300">${r['Event Type']||'—'}</td>
+      <td class="px-3 py-2 text-slate-300">${r['Order Number']||'—'}</td>
+      <td class="px-3 py-2 text-white">${r['Student']||'—'}</td>
+      <td class="px-3 py-2">${r['Issue?']==='Y'?'<span class="badge badge-red">Yes</span>':'<span class="badge badge-green">No</span>'}</td>
+    </tr>`).join('');
+
+  document.getElementById('auditBody').innerHTML = DATA.audit.slice(0,150).map(r=>`
+    <tr>
+      <td class="px-3 py-2 text-slate-300">${r['Order Number']||'—'}</td>
+      <td class="px-3 py-2 text-white">${r['Student']||'—'}</td>
+      <td class="px-3 py-2">${verdictBadge(r['Audit Verdict'])}</td>
+      <td class="px-3 py-2">${r['Item Count Match?']==='TRUE'?'<span class="badge badge-green">✓ Match</span>':'<span class="badge badge-red">✗ Mismatch</span>'}</td>
+      <td class="px-3 py-2 text-slate-500 max-w-xs truncate">${r['Audit Notes']||'—'}</td>
+    </tr>`).join('');
+}
+
+// ── CHART HELPERS ─────────────────────────────────────────────────────
+function mkDonut(id, obj) {
+  destroy(id);
+  CHARTS[id] = new Chart(document.getElementById(id), {
+    type: 'doughnut',
+    data: { labels: Object.keys(obj), datasets: [{data: Object.values(obj), backgroundColor: PALETTE.map(c=>c+'cc'), borderColor:'#0f172a', borderWidth:2}] },
+    options: { responsive:true, maintainAspectRatio:false, cutout:'65%',
+      plugins: { legend: { position:'right', labels:{boxWidth:10,font:{size:11}} } } }
+  });
+}
+
+function mkChart(id, type, labels, datasets, opts={}) {
+  destroy(id);
+  CHARTS[id] = new Chart(document.getElementById(id), {
+    type, data: {labels, datasets},
+    options: merge({responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}}, opts)
+  });
+}
+
+function destroy(id) { if(CHARTS[id]){CHARTS[id].destroy();delete CHARTS[id];} }
+
+// ── UTILS ─────────────────────────────────────────────────────────────
+function countBy(arr, key) {
+  return arr.reduce((acc,r) => { const v=r[key]||'Unknown'; acc[v]=(acc[v]||0)+1; return acc; }, {});
+}
+function parseMoney(s) { return parseFloat((s||'0').replace(/[$,]/g,''))||0; }
+function merge(a, b) {
+  const r = {...a};
+  for (const k in b) r[k] = (b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])) ? merge(a[k]||{},b[k]) : b[k];
+  return r;
+}
+function statusBadge(v) {
+  const cls = v==='Complete'?'badge-green':v==='Queued'?'badge-yellow':v.toLowerCase().includes('process')?'badge-blue':'badge-gray';
+  return `<span class="badge ${cls}">${v}</span>`;
+}
+function verdictBadge(v) {
+  if(!v) return '<span class="badge badge-gray">—</span>';
+  return `<span class="badge ${v==='PASS'?'badge-green':v==='FAIL'?'badge-red':'badge-yellow'}">${v}</span>`;
+}
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.add('hidden'));
+  document.getElementById('tab-'+tab).classList.remove('hidden');
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('tab-active'));
+  btn.classList.add('tab-active');
+}
+
+loadAll();
+</script>
+</body>
+</html>
