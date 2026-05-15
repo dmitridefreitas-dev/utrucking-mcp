@@ -9,656 +9,963 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-  * { font-family: 'Inter', sans-serif; }
-  ::-webkit-scrollbar { width: 5px; height: 5px; }
-  ::-webkit-scrollbar-track { background: #0f172a; }
-  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-  .tab-active { border-bottom: 2px solid #f97316 !important; color: #f97316 !important; }
-  .kpi-card { transition: transform 0.2s; }
-  .kpi-card:hover { transform: translateY(-2px); }
-  .chart-wrap { position: relative; height: 260px; }
-  .chart-wrap-lg { position: relative; height: 320px; }
-  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
-  .badge-green { background: #166534; color: #86efac; }
-  .badge-yellow { background: #713f12; color: #fde68a; }
-  .badge-red { background: #7f1d1d; color: #fca5a5; }
-  .badge-blue { background: #1e3a5f; color: #93c5fd; }
-  .badge-gray { background: #1e293b; color: #94a3b8; }
-  .vault-slot { width: 26px; height: 26px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; cursor: pointer; transition: opacity 0.15s; }
-  .vault-slot:hover { opacity: 0.7; }
-  .pulse { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-  .sort-asc::after { content: ' ↑'; color: #f97316; }
-  .sort-desc::after { content: ' ↓'; color: #f97316; }
-  tr:hover { background: rgba(30,41,59,0.4); }
+  *{font-family:'Inter',sans-serif;}
+  :root{--bg0:#0f172a;--bg1:#1e293b;--bg2:#334155;--t1:#f1f5f9;--t2:#94a3b8;--t3:#475569;--bd:#1e293b;--acc:#f97316;}
+  body.light{--bg0:#f1f5f9;--bg1:#ffffff;--bg2:#e2e8f0;--t1:#0f172a;--t2:#475569;--t3:#94a3b8;--bd:#e2e8f0;}
+  body{background:var(--bg0);color:var(--t1);}
+  .card{background:var(--bg1);border:1px solid var(--bd);border-radius:0.75rem;}
+  ::-webkit-scrollbar{width:4px;height:4px;}
+  ::-webkit-scrollbar-track{background:var(--bg0);}
+  ::-webkit-scrollbar-thumb{background:var(--bg2);border-radius:2px;}
+  .tab-active{border-bottom:2px solid var(--acc)!important;color:var(--acc)!important;}
+  .chart-h{position:relative;height:240px;}
+  .chart-hm{position:relative;height:300px;}
+  .chart-hg{position:relative;height:180px;}
+  .badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:9999px;font-size:11px;font-weight:600;}
+  .b-g{background:#166534;color:#86efac;}.b-y{background:#713f12;color:#fde68a;}
+  .b-r{background:#7f1d1d;color:#fca5a5;}.b-b{background:#1e3a5f;color:#93c5fd;}
+  .b-gray{background:#1e293b;color:#94a3b8;}
+  .kpi{transition:transform .2s;cursor:default;}.kpi:hover{transform:translateY(-2px);}
+  .vault-slot{width:24px;height:24px;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:8px;cursor:pointer;}
+  .vault-slot:hover{opacity:.7;}
+  .pulse{animation:pulse 1.8s cubic-bezier(.4,0,.6,1) infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .sa::after{content:' ↑';color:#f97316;}.sd::after{content:' ↓';color:#f97316;}
+  .cal-cell{width:14px;height:14px;border-radius:2px;cursor:pointer;}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;display:flex;align-items:center;justify-content:center;}
+  .funnel-bar{transition:width .8s ease;}
+  tr:hover{background:rgba(30,41,59,.35);}
+  input,select{background:var(--bg1);border:1px solid var(--bg2);color:var(--t1);border-radius:.5rem;padding:.375rem .75rem;font-size:.75rem;}
+  input::placeholder{color:var(--t3);}
+  .btn{background:var(--bg1);border:1px solid var(--bg2);color:var(--t2);border-radius:.5rem;padding:.375rem .75rem;font-size:.75rem;cursor:pointer;transition:background .15s;}
+  .btn:hover{background:var(--bg2);}
+  @media print{.no-print{display:none!important;}.tab-panel{display:block!important;}}
 </style>
 </head>
-<body class="bg-slate-950 text-slate-200 min-h-screen">
+<body>
 
 <!-- HEADER -->
-<div class="bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between sticky top-0 z-50">
-  <div class="flex items-center gap-3">
-    <div class="w-8 h-8 bg-orange-500 rounded-lg flex items-center justify-center font-bold text-white text-sm">UT</div>
-    <div>
-      <div class="font-bold text-white text-sm">UTrucking Analytics</div>
-      <div class="text-slate-500 text-xs">Master Operations Dashboard</div>
+<div class="no-print sticky top-0 z-50 border-b" style="background:var(--bg1);border-color:var(--bd);">
+  <div class="px-5 py-2.5 flex items-center gap-3">
+    <div class="w-8 h-8 bg-orange-500 rounded-lg flex items-center justify-center font-bold text-white text-sm flex-shrink-0">UT</div>
+    <div class="flex-1">
+      <div class="font-bold text-sm" style="color:var(--t1);">UTrucking Analytics</div>
+      <div class="text-xs" style="color:var(--t3);">Master Operations Dashboard</div>
     </div>
-  </div>
-  <div class="flex items-center gap-4">
-    <span id="lastUpdated" class="text-slate-500 text-xs"></span>
-    <button onclick="loadAll()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors">↻ Refresh</button>
+    <input id="globalSearch" oninput="handleGlobalSearch(this.value)" placeholder="🔍  Search any student or order..." class="w-64 text-xs"/>
+    <span id="countdown" class="text-xs px-2 py-1 rounded" style="color:var(--t3);background:var(--bg2);">↻ 5:00</span>
+    <button onclick="loadAll()" class="btn">↻ Refresh</button>
+    <button onclick="toggleTheme()" class="btn" id="themeBtn">☀️</button>
+    <button onclick="window.print()" class="btn no-print">⬇ Print</button>
+    <span id="lastUpdated" class="text-xs" style="color:var(--t3);"></span>
   </div>
 </div>
-<div id="loadingBar" class="h-0.5 bg-orange-500 pulse" style="display:none;"></div>
+<div id="loadBar" class="h-0.5 bg-orange-500 pulse" style="display:none;"></div>
 
 <!-- KPI STRIP -->
-<div class="px-6 pt-5 pb-2">
-  <div id="kpiStrip" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+<div class="px-5 pt-4 pb-2">
+  <div id="kpiStrip" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2.5"></div>
+</div>
+
+<!-- GLOBAL FILTER -->
+<div class="no-print px-5 pb-2 flex flex-wrap gap-2 items-center">
+  <span class="text-xs" style="color:var(--t3);">Filter all:</span>
+  <select id="gService" onchange="renderAll()" class="text-xs"><option value="">All Services</option></select>
+  <select id="gBuilding" onchange="renderAll()" class="text-xs"><option value="">All Buildings</option></select>
+  <button onclick="clearFilters()" class="btn text-xs">✕ Clear</button>
+  <span id="filterInfo" class="text-xs" style="color:var(--t3);"></span>
 </div>
 
 <!-- TAB NAV -->
-<div class="px-6 mt-4 border-b border-slate-800">
-  <div class="flex gap-1">
-    <button class="tab-btn tab-active px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('overview',this)">Overview</button>
-    <button class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('orders',this)">Orders</button>
-    <button class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('revenue',this)">Revenue</button>
-    <button class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('vault',this)">Vault & Items</button>
-    <button class="tab-btn px-4 py-2 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-white transition-colors pb-3" onclick="switchTab('audit',this)">Audit & Events</button>
+<div class="no-print px-5 border-b" style="border-color:var(--bd);">
+  <div class="flex gap-0.5 overflow-x-auto">
+    <button class="tab-btn tab-active px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('overview',this)">Overview</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('orders',this)">Orders</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('students',this)">Students</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('operations',this)">Operations</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('revenue',this)">Revenue</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('forecast',this)">Forecast</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('vault',this)">Vault & Items</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('audit',this)">Audit & Events</button>
   </div>
 </div>
 
-<!-- PANELS -->
-<div class="px-6 py-5">
+<div class="px-5 py-4">
 
-  <!-- OVERVIEW -->
-  <div id="tab-overview" class="tab-panel">
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Service Mix</div>
-        <div class="chart-wrap"><canvas id="chartServiceMix"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Dispatch Status</div>
-        <div class="chart-wrap"><canvas id="chartDispatchStatus"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Shipping Status</div>
-        <div class="chart-wrap"><canvas id="chartShippingStatus"></canvas></div>
-      </div>
+<!-- OVERVIEW -->
+<div id="tab-overview" class="tab-panel">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Service Mix</div><div class="chart-h"><canvas id="c-serviceMix"></canvas></div></div>
+    <div class="card p-4"><div class="label">Dispatch Status</div><div class="chart-h"><canvas id="c-dispatchStatus"></canvas></div></div>
+    <div class="card p-4"><div class="label">Shipping Status</div><div class="chart-h"><canvas id="c-shippingStatus"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4 lg:col-span-2"><div class="label">Top Buildings by Volume</div><div class="chart-hm"><canvas id="c-buildings"></canvas></div></div>
+    <div class="card p-4"><div class="label">Operations Funnel</div><div id="funnelChart" class="py-2"></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+    <div class="card p-4"><div class="label">Order Volume Over Time</div><div class="chart-h"><canvas id="c-volumeTime"></canvas></div></div>
+    <div class="card p-4"><div class="label">Activity Calendar (Last 60 Days)</div><div id="calendarHeatmap" class="pt-2"></div></div>
+  </div>
+</div>
+
+<!-- ORDERS -->
+<div id="tab-orders" class="tab-panel hidden">
+  <div class="flex flex-wrap gap-2 mb-3">
+    <select id="fService" onchange="applyOrderFilters()" class="text-xs"></select>
+    <select id="fBuilding" onchange="applyOrderFilters()" class="text-xs"></select>
+    <select id="fDispatch" onchange="applyOrderFilters()" class="text-xs"></select>
+    <select id="fShipping" onchange="applyOrderFilters()" class="text-xs"></select>
+    <input id="fSearch" oninput="applyOrderFilters()" placeholder="Search name or order..." class="flex-1 min-w-36"/>
+    <button onclick="exportCSV()" class="btn">↓ Export CSV</button>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4"><div class="label">By Service</div><div class="chart-h"><canvas id="c-ordByService"></canvas></div></div>
+    <div class="card p-4"><div class="label">By Building (Top 10)</div><div class="chart-h"><canvas id="c-ordByBuilding"></canvas></div></div>
+    <div class="card p-4"><div class="label">Days In System</div><div class="chart-h"><canvas id="c-daysDist"></canvas></div></div>
+  </div>
+  <div class="card overflow-hidden">
+    <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
+      <span class="label">All Orders</span>
+      <span id="ordCount" class="text-xs" style="color:var(--t3);"></span>
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <div class="lg:col-span-2 bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Top Buildings by Order Volume</div>
-        <div class="chart-wrap-lg"><canvas id="chartBuildings"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Recent Events</div>
-        <div id="recentEvents" class="overflow-y-auto space-y-1" style="height:320px;"></div>
-      </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs"><thead style="background:var(--bg2);"><tr id="ordHead"></tr></thead><tbody id="ordBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
+    </div>
+    <div class="px-4 py-2 border-t flex items-center justify-between" style="border-color:var(--bd);">
+      <button onclick="changePg(-1)" class="btn text-xs">← Prev</button>
+      <span id="pgInfo" class="text-xs" style="color:var(--t3);"></span>
+      <button onclick="changePg(1)" class="btn text-xs">Next →</button>
     </div>
   </div>
+</div>
 
-  <!-- ORDERS -->
-  <div id="tab-orders" class="tab-panel hidden">
-    <div class="flex flex-wrap gap-2 mb-4">
-      <select id="filterService" onchange="applyFilters()" class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2"></select>
-      <select id="filterBuilding" onchange="applyFilters()" class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2"></select>
-      <select id="filterDispatch" onchange="applyFilters()" class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2"></select>
-      <input id="filterSearch" oninput="applyFilters()" placeholder="Search name or order #..." class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2 flex-1 min-w-40">
-      <button onclick="exportCSV()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-lg transition-colors">↓ Export CSV</button>
+<!-- STUDENTS -->
+<div id="tab-students" class="tab-panel hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4 lg:col-span-2"><div class="label">Top 20 Students by Item Count</div><div class="chart-hm"><canvas id="c-topStudents"></canvas></div></div>
+    <div class="card p-4"><div class="label">Orders Per Student Distribution</div><div class="chart-h"><canvas id="c-studentDist"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Students by Building</div><div class="chart-h"><canvas id="c-studentBuilding"></canvas></div></div>
+    <div class="card p-4"><div class="label">Student Service Preferences</div><div class="chart-h"><canvas id="c-studentService"></canvas></div></div>
+  </div>
+  <div class="card overflow-hidden">
+    <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
+      <span class="label">Student Directory</span>
+      <input id="stuSearch" oninput="renderStudentTable()" placeholder="Search student..." class="text-xs w-40"/>
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Orders by Service</div>
-        <div class="chart-wrap"><canvas id="chartOrdersByService"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Days In System Distribution</div>
-        <div class="chart-wrap"><canvas id="chartDaysDist"></canvas></div>
-      </div>
-    </div>
-    <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-      <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-        <span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">All Orders</span>
-        <span id="ordersCount" class="text-slate-500 text-xs"></span>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-xs">
-          <thead class="bg-slate-800/50"><tr id="ordersHead"></tr></thead>
-          <tbody id="ordersBody" class="divide-y divide-slate-800/40"></tbody>
-        </table>
-      </div>
-      <div class="px-4 py-3 border-t border-slate-800 flex items-center justify-between">
-        <button onclick="changePage(-1)" class="text-slate-400 hover:text-white text-xs px-2 py-1 rounded hover:bg-slate-800 transition-colors">← Prev</button>
-        <span id="pageInfo" class="text-slate-500 text-xs"></span>
-        <button onclick="changePage(1)" class="text-slate-400 hover:text-white text-xs px-2 py-1 rounded hover:bg-slate-800 transition-colors">Next →</button>
-      </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead style="background:var(--bg2);"><tr>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Building</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Service</th>
+          <th class="px-3 py-2 text-right" style="color:var(--t2);">Orders</th>
+          <th class="px-3 py-2 text-right" style="color:var(--t2);">Items</th>
+          <th class="px-3 py-2 text-right" style="color:var(--t2);">Total $</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Status</th>
+        </tr></thead>
+        <tbody id="stuBody" class="divide-y" style="border-color:var(--bd);"></tbody>
+      </table>
     </div>
   </div>
+</div>
 
-  <!-- REVENUE -->
-  <div id="tab-revenue" class="tab-panel hidden">
-    <div id="revKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Revenue by Service</div>
-        <div class="chart-wrap"><canvas id="chartRevService"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Revenue by Item Type</div>
-        <div class="chart-wrap"><canvas id="chartRevItem"></canvas></div>
-      </div>
-    </div>
-    <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-      <div class="px-4 py-3 border-b border-slate-800"><span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Invoice Line Items</span></div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-xs">
-          <thead class="bg-slate-800/50">
-            <tr>
-              <th class="px-3 py-2 text-left text-slate-400">Order</th>
-              <th class="px-3 py-2 text-left text-slate-400">Student</th>
-              <th class="px-3 py-2 text-left text-slate-400">Service</th>
-              <th class="px-3 py-2 text-left text-slate-400">Item</th>
-              <th class="px-3 py-2 text-right text-slate-400">Qty</th>
-              <th class="px-3 py-2 text-right text-slate-400">Unit Price</th>
-              <th class="px-3 py-2 text-right text-slate-400">Line Total</th>
-              <th class="px-3 py-2 text-right text-slate-400">Surcharge</th>
-            </tr>
-          </thead>
-          <tbody id="invoiceBody" class="divide-y divide-slate-800/40"></tbody>
-        </table>
-      </div>
+<!-- OPERATIONS -->
+<div id="tab-operations" class="tab-panel hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4 lg:col-span-2"><div class="label">Order Volume Over Time (with 7-day avg)</div><div class="chart-hm"><canvas id="c-volTime2"></canvas></div></div>
+    <div class="card p-4"><div class="label">Event Types Breakdown</div><div class="chart-h"><canvas id="c-eventTypes"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Handled By Leaderboard</div><div class="chart-h"><canvas id="c-handledBy"></canvas></div></div>
+    <div class="card p-4"><div class="label">Service Completion Rate</div><div class="chart-h"><canvas id="c-completionRate"></canvas></div></div>
+    <div class="card p-4"><div class="label">Audit Pass / Fail by Service</div><div class="chart-h"><canvas id="c-auditByService"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+    <div class="card p-4"><div class="label">Issues by Building</div><div class="chart-h"><canvas id="c-issuesByBuilding"></canvas></div></div>
+    <div class="card p-4"><div class="label">Order Status Breakdown</div><div class="chart-h"><canvas id="c-statusBreakdown"></canvas></div></div>
+  </div>
+</div>
+
+<!-- REVENUE -->
+<div id="tab-revenue" class="tab-panel hidden">
+  <div id="revKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Revenue by Service</div><div class="chart-h"><canvas id="c-revService"></canvas></div></div>
+    <div class="card p-4"><div class="label">Revenue by Item Type (Top 10)</div><div class="chart-h"><canvas id="c-revItem"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Revenue by Building (Top 10)</div><div class="chart-h"><canvas id="c-revBuilding"></canvas></div></div>
+    <div class="card p-4"><div class="label">Surcharges vs Base Revenue</div><div class="chart-h"><canvas id="c-revSurcharge"></canvas></div></div>
+  </div>
+  <div class="card overflow-hidden">
+    <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Invoice Line Items</span></div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs"><thead style="background:var(--bg2);"><tr>
+        <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+        <th class="px-3 py-2 text-left" style="color:var(--t2);">Service</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Item</th>
+        <th class="px-3 py-2 text-right" style="color:var(--t2);">Qty</th><th class="px-3 py-2 text-right" style="color:var(--t2);">Unit</th>
+        <th class="px-3 py-2 text-right" style="color:var(--t2);">Line Total</th><th class="px-3 py-2 text-right" style="color:var(--t2);">Surcharge</th>
+      </tr></thead><tbody id="invBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
     </div>
   </div>
+</div>
 
-  <!-- VAULT & ITEMS -->
-  <div id="tab-vault" class="tab-panel hidden">
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Item Type Distribution</div>
-        <div class="chart-wrap"><canvas id="chartItemTypes"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Item Sizes</div>
-        <div class="chart-wrap"><canvas id="chartItemSizes"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Vault Occupancy by Bay</div>
-        <div class="chart-wrap"><canvas id="chartVaultBays"></canvas></div>
+<!-- FORECAST -->
+<div id="tab-forecast" class="tab-panel hidden">
+  <div id="fcKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Vault Occupancy Gauge</div><div class="chart-hg"><canvas id="c-gauge"></canvas></div><div id="gaugeLabel" class="text-center text-2xl font-bold mt-1" style="color:#f97316;"></div></div>
+    <div class="card p-4"><div class="label">Revenue by Price Tier</div><div class="chart-h"><canvas id="c-priceTier"></canvas></div></div>
+    <div class="card p-4"><div class="label">Pending vs Invoiced Orders</div><div class="chart-h"><canvas id="c-pendingVsInvoiced"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+    <div class="card p-4"><div class="label">Monthly Recurring Revenue by Item Type</div><div class="chart-hm"><canvas id="c-mrr"></canvas></div></div>
+    <div class="card p-4"><div class="label">Revenue per Building (from Manifest)</div><div class="chart-hm"><canvas id="c-revPerBuilding"></canvas></div></div>
+  </div>
+</div>
+
+<!-- VAULT & ITEMS -->
+<div id="tab-vault" class="tab-panel hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Item Type Distribution</div><div class="chart-h"><canvas id="c-itemTypes"></canvas></div></div>
+    <div class="card p-4"><div class="label">Item Sizes</div><div class="chart-h"><canvas id="c-itemSizes"></canvas></div></div>
+    <div class="card p-4"><div class="label">Vault Occupancy by Bay</div><div class="chart-h"><canvas id="c-vaultBays"></canvas></div></div>
+  </div>
+  <div class="card p-4 mb-3">
+    <div class="flex items-center justify-between mb-2">
+      <span class="label">Vault Floor Map</span>
+      <div class="flex gap-3 text-xs" style="color:var(--t3);">
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded inline-block bg-orange-500"></span>Occupied</span>
+        <span class="flex items-center gap-1"><span class="w-3 h-3 rounded inline-block" style="background:var(--bg2);"></span>Empty</span>
       </div>
     </div>
-    <div class="bg-slate-900 rounded-xl p-4 border border-slate-800 mb-4">
-      <div class="flex items-center justify-between mb-3">
-        <span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Vault Floor Map</span>
-        <div class="flex items-center gap-3 text-xs text-slate-500">
-          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-orange-500 inline-block"></span> Occupied</span>
-          <span class="flex items-center gap-1"><span class="w-3 h-3 rounded bg-slate-700 inline-block"></span> Empty</span>
-        </div>
-      </div>
-      <div id="vaultMap" class="overflow-x-auto"></div>
+    <div id="vaultMap" class="overflow-x-auto"></div>
+  </div>
+  <div class="card overflow-hidden">
+    <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
+      <span class="label">Item Manifest</span>
+      <input id="manifSearch" oninput="renderManifest()" placeholder="Search..." class="text-xs w-36"/>
     </div>
-    <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-      <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-        <span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Item Manifest</span>
-        <input id="manifestSearch" oninput="renderManifest()" placeholder="Search..." class="bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded px-2 py-1 w-36">
-      </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-xs">
-          <thead class="bg-slate-800/50">
-            <tr>
-              <th class="px-3 py-2 text-left text-slate-400">Order</th>
-              <th class="px-3 py-2 text-left text-slate-400">Student</th>
-              <th class="px-3 py-2 text-left text-slate-400">Building</th>
-              <th class="px-3 py-2 text-left text-slate-400">Item</th>
-              <th class="px-3 py-2 text-left text-slate-400">Size</th>
-              <th class="px-3 py-2 text-right text-slate-400">Qty</th>
-              <th class="px-3 py-2 text-right text-slate-400">$/mo</th>
-              <th class="px-3 py-2 text-left text-slate-400">Vault</th>
-              <th class="px-3 py-2 text-left text-slate-400">Condition</th>
-            </tr>
-          </thead>
-          <tbody id="manifestBody" class="divide-y divide-slate-800/40"></tbody>
-        </table>
-      </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs"><thead style="background:var(--bg2);"><tr>
+        <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+        <th class="px-3 py-2 text-left" style="color:var(--t2);">Building</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Item</th>
+        <th class="px-3 py-2 text-left" style="color:var(--t2);">Size</th><th class="px-3 py-2 text-right" style="color:var(--t2);">Qty</th>
+        <th class="px-3 py-2 text-right" style="color:var(--t2);">$/mo</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Vault</th>
+        <th class="px-3 py-2 text-left" style="color:var(--t2);">Checked</th>
+      </tr></thead><tbody id="manifBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
     </div>
   </div>
+</div>
 
-  <!-- AUDIT & EVENTS -->
-  <div id="tab-audit" class="tab-panel hidden">
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Audit Verdicts</div>
-        <div class="chart-wrap"><canvas id="chartAuditVerdict"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Event Types</div>
-        <div class="chart-wrap"><canvas id="chartEventTypes"></canvas></div>
-      </div>
-      <div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-        <div class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-3">Issues Flagged</div>
-        <div class="chart-wrap"><canvas id="chartIssues"></canvas></div>
+<!-- AUDIT & EVENTS -->
+<div id="tab-audit" class="tab-panel hidden">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Audit Verdicts</div><div class="chart-h"><canvas id="c-auditVerdict"></canvas></div></div>
+    <div class="card p-4"><div class="label">Count Match Rate</div><div class="chart-h"><canvas id="c-countMatch"></canvas></div></div>
+    <div class="card p-4"><div class="label">Issues Flagged in Events</div><div class="chart-h"><canvas id="c-issueFlag"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+    <div class="card overflow-hidden">
+      <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Event Log</span></div>
+      <div class="overflow-auto" style="max-height:380px;">
+        <table class="w-full text-xs"><thead class="sticky top-0" style="background:var(--bg2);"><tr>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">ID</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Time</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Type</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Issue</th>
+        </tr></thead><tbody id="evtBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
       </div>
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-        <div class="px-4 py-3 border-b border-slate-800"><span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Event Log</span></div>
-        <div class="overflow-auto" style="max-height:400px;">
-          <table class="w-full text-xs">
-            <thead class="bg-slate-800/50 sticky top-0">
-              <tr>
-                <th class="px-3 py-2 text-left text-slate-400">ID</th>
-                <th class="px-3 py-2 text-left text-slate-400">Time</th>
-                <th class="px-3 py-2 text-left text-slate-400">Type</th>
-                <th class="px-3 py-2 text-left text-slate-400">Order</th>
-                <th class="px-3 py-2 text-left text-slate-400">Student</th>
-                <th class="px-3 py-2 text-left text-slate-400">Issue</th>
-              </tr>
-            </thead>
-            <tbody id="eventsBody" class="divide-y divide-slate-800/40"></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden">
-        <div class="px-4 py-3 border-b border-slate-800"><span class="text-slate-400 text-xs font-semibold uppercase tracking-wider">Audit Log</span></div>
-        <div class="overflow-auto" style="max-height:400px;">
-          <table class="w-full text-xs">
-            <thead class="bg-slate-800/50 sticky top-0">
-              <tr>
-                <th class="px-3 py-2 text-left text-slate-400">Order</th>
-                <th class="px-3 py-2 text-left text-slate-400">Student</th>
-                <th class="px-3 py-2 text-left text-slate-400">Verdict</th>
-                <th class="px-3 py-2 text-left text-slate-400">Count Match</th>
-                <th class="px-3 py-2 text-left text-slate-400">Notes</th>
-              </tr>
-            </thead>
-            <tbody id="auditBody" class="divide-y divide-slate-800/40"></tbody>
-          </table>
-        </div>
+    <div class="card overflow-hidden">
+      <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Audit Log</span></div>
+      <div class="overflow-auto" style="max-height:380px;">
+        <table class="w-full text-xs"><thead class="sticky top-0" style="background:var(--bg2);"><tr>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Verdict</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Count</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Notes</th>
+        </tr></thead><tbody id="audBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
       </div>
     </div>
   </div>
 </div>
+
+</div><!-- end panels -->
+
+<!-- FULLSCREEN MODAL -->
+<div id="modal" class="modal-overlay hidden" onclick="closeModal()">
+  <div class="rounded-xl p-6" style="background:var(--bg1);width:90vw;max-width:900px;max-height:85vh;" onclick="event.stopPropagation()">
+    <div class="flex justify-between items-center mb-4">
+      <span id="modalTitle" class="font-semibold" style="color:var(--t1);"></span>
+      <button onclick="closeModal()" class="btn">✕ Close</button>
+    </div>
+    <div style="height:500px;position:relative;"><canvas id="modalCanvas"></canvas></div>
+  </div>
+</div>
+
+<style>.label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--t2);margin-bottom:.75rem;display:flex;align-items:center;justify-content:space-between;}
+.expand-btn{font-size:10px;cursor:pointer;opacity:.5;transition:opacity .15s;}.expand-btn:hover{opacity:1;}</style>
 
 <script>
-const SHEET_ID = '1ZoRH8OENK_wnKUeHvUc7eqytzuu2lMzaVvsPLJyvvng';
-const GIDs = {
-  storage:  '529044027',
-  transit:  '2098223117',
-  manifest: '1586199848',
-  vault:    '1784822441',
-  invoices: '201526587',
-  events:   '1549495149',
-  audit:    '2085245455',
-};
-const PALETTE = ['#f97316','#3b82f6','#22c55e','#a855f7','#eab308','#ec4899','#14b8a6','#ef4444','#64748b','#f59e0b','#06b6d4','#84cc16'];
+const SID = '1ZoRH8OENK_wnKUeHvUc7eqytzuu2lMzaVvsPLJyvvng';
+const GIDs = {storage:'529044027',transit:'2098223117',manifest:'1586199848',vault:'1784822441',invoices:'201526587',events:'1549495149',audit:'2085245455',submissions:'543675645',pricing:'580278291'};
+const P = ['#f97316','#3b82f6','#22c55e','#a855f7','#eab308','#ec4899','#14b8a6','#ef4444','#64748b','#f59e0b','#06b6d4','#84cc16'];
 
 Chart.defaults.color = '#94a3b8';
-Chart.defaults.borderColor = '#334155';
+Chart.defaults.borderColor = '#1e293b';
 
-let DATA = {}, CHARTS = {};
-let filtered = [], currentPage = 1, sortCol = null, sortDir = 1;
-const PAGE = 25;
+let D = {}, CH = {}, filtered = [], pg = 1, sCol = null, sDir = 1;
+const PG = 25;
+let refreshSecs = 300, refreshInterval = null;
 
+// ── FETCH ──────────────────────────────────────────────────────────
 async function fetchSheet(gid) {
-  const r = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`);
-  const txt = await r.text();
-  if (txt.trimStart().startsWith('<')) return [];
-  return Papa.parse(txt, { header: true, skipEmptyLines: true }).data;
+  const r = await fetch(`https://docs.google.com/spreadsheets/d/${SID}/export?format=csv&gid=${gid}`);
+  const t = await r.text();
+  if (t.trimStart().startsWith('<')) return [];
+  return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
 }
 
 async function loadAll() {
-  document.getElementById('loadingBar').style.display = 'block';
+  document.getElementById('loadBar').style.display = 'block';
   try {
-    const [storage, transit, manifest, vault, invoices, events, audit] = await Promise.all(
-      Object.values(GIDs).map(g => fetchSheet(g))
-    );
-    DATA = { storage, transit, manifest, vault, invoices, events, audit };
-    DATA.all = [...storage, ...transit].filter(r => r['Order Number']);
+    const results = await Promise.all(Object.values(GIDs).map(g => fetchSheet(g)));
+    const keys = Object.keys(GIDs);
+    keys.forEach((k,i) => D[k] = results[i]);
+    D.all = [...D.storage, ...D.transit].filter(r => r['Order Number']);
     renderAll();
-    document.getElementById('lastUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+    populateGlobalFilters();
+    startRefresh();
   } catch(e) { console.error(e); }
-  document.getElementById('loadingBar').style.display = 'none';
+  document.getElementById('loadBar').style.display = 'none';
 }
 
-function renderAll() {
-  renderKPIs();
-  renderOverview();
-  renderOrders();
-  renderRevenue();
-  renderVault();
-  renderAuditEvents();
-  populateFilters();
+// ── AUTO REFRESH ───────────────────────────────────────────────────
+function startRefresh() {
+  clearInterval(refreshInterval);
+  refreshSecs = 300;
+  refreshInterval = setInterval(() => {
+    refreshSecs--;
+    const m = Math.floor(refreshSecs/60), s = refreshSecs%60;
+    document.getElementById('countdown').textContent = `↻ ${m}:${s.toString().padStart(2,'0')}`;
+    if (refreshSecs <= 0) loadAll();
+  }, 1000);
 }
 
-// ── KPIs ──────────────────────────────────────────────────────────────
-function renderKPIs() {
-  const lines = DATA.invoices.filter(r => r['Item Type'] && !r['Item Type'].includes('──') && !r['Item Type'].includes('⚠️'));
-  const totalRev = lines.reduce((s, r) => s + parseMoney(r['Line Total']), 0);
-  const vaultSlots = DATA.vault.length;
-  const vaultOcc = DATA.vault.filter(r => r['Occupied'] === '1' || (r['Occupied']||'').toLowerCase() === 'true').length;
-  const issues = DATA.all.filter(r => (r['Issue Notes']||'').trim()).length;
-  const auditRows = DATA.audit.filter(r => r['Order Number'] && r['Audit Verdict']);
-  const auditPass = auditRows.filter(r => r['Audit Verdict'] === 'PASS').length;
-  const manifItems = DATA.manifest.reduce((s,r) => s + (parseInt(r['Qty'])||0), 0);
-
-  const kpis = [
-    { label: 'Total Orders',     value: DATA.all.length.toLocaleString(), sub: `${DATA.storage.length} storage · ${DATA.transit.length} transit`, color: 'text-orange-400' },
-    { label: 'Total Revenue',    value: '$' + totalRev.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}), sub: `${lines.length} line items`, color: 'text-green-400' },
-    { label: 'Vault Occupancy',  value: vaultSlots ? Math.round(vaultOcc/vaultSlots*100)+'%' : '—', sub: `${vaultOcc} / ${vaultSlots} slots`, color: 'text-blue-400' },
-    { label: 'Issues Flagged',   value: issues.toString(), sub: 'orders with notes', color: issues > 0 ? 'text-red-400' : 'text-slate-400' },
-    { label: 'Audit Pass Rate',  value: auditRows.length ? Math.round(auditPass/auditRows.length*100)+'%' : '—', sub: `${auditPass} / ${auditRows.length} audited`, color: 'text-purple-400' },
-    { label: 'Items in Manifest',value: manifItems.toLocaleString(), sub: `${DATA.manifest.length} manifest rows`, color: 'text-teal-400' },
-  ];
-  document.getElementById('kpiStrip').innerHTML = kpis.map(k => `
-    <div class="kpi-card bg-slate-900 rounded-xl p-4 border border-slate-800 cursor-default">
-      <div class="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1">${k.label}</div>
-      <div class="${k.color} text-2xl font-bold mb-0.5">${k.value}</div>
-      <div class="text-slate-500 text-xs">${k.sub}</div>
-    </div>`).join('');
-}
-
-// ── OVERVIEW ─────────────────────────────────────────────────────────
-function renderOverview() {
-  mkDonut('chartServiceMix',    countBy(DATA.all, 'Service'));
-  mkDonut('chartDispatchStatus',countBy(DATA.all, 'Dispatch Status'));
-  mkDonut('chartShippingStatus',countBy(DATA.all, 'Shipping Status'));
-
-  const bldg = countBy(DATA.all.filter(r=>r.Building), 'Building');
-  const top = Object.entries(bldg).sort((a,b)=>b[1]-a[1]).slice(0,12);
-  mkChart('chartBuildings','bar', top.map(x=>x[0]),
-    [{data:top.map(x=>x[1]), backgroundColor:PALETTE[0]+'bb', borderColor:PALETTE[0], borderWidth:1, borderRadius:4}],
-    {indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}}, y:{grid:{color:'#1e293b'}}}});
-
-  const events = [...DATA.events].reverse().slice(0,30);
-  document.getElementById('recentEvents').innerHTML = events.map(e=>`
-    <div class="flex items-start gap-2 py-1.5 border-b border-slate-800/40">
-      <div class="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${e['Issue?']==='Y'?'bg-red-400':'bg-green-400'}"></div>
-      <div class="min-w-0">
-        <div class="text-slate-300 text-xs truncate">${e['Student']||'—'} · ${e['Order Number']||'—'}</div>
-        <div class="text-slate-500 text-xs">${e['Event Type']||'—'} · ${e['Event Time']||'—'}</div>
-      </div>
-    </div>`).join('');
-}
-
-// ── ORDERS ────────────────────────────────────────────────────────────
-function renderOrders() {
-  mkChart('chartOrdersByService','bar',
-    Object.keys(countBy(DATA.all,'Service')),
-    [{data:Object.values(countBy(DATA.all,'Service')), backgroundColor:PALETTE.map(c=>c+'bb'), borderRadius:4}],
-    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}}}});
-
-  const buckets = {'0 days':0,'1–7':0,'8–30':0,'31–60':0,'60+':0};
-  DATA.all.forEach(r=>{
-    const d = parseFloat(r['Days In Storage']||r['Days Since Pickup']||0);
-    if(d===0) buckets['0 days']++;
-    else if(d<=7) buckets['1–7']++;
-    else if(d<=30) buckets['8–30']++;
-    else if(d<=60) buckets['31–60']++;
-    else buckets['60+']++;
-  });
-  mkChart('chartDaysDist','bar', Object.keys(buckets),
-    [{data:Object.values(buckets), backgroundColor:PALETTE[1]+'bb', borderRadius:4}],
-    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}}}});
-
-  filtered = [...DATA.all];
-  renderTable();
-}
-
-function populateFilters() {
-  const sel = (id, vals, label) => {
+// ── GLOBAL FILTERS ─────────────────────────────────────────────────
+function populateGlobalFilters() {
+  const setOpts = (id, vals, label) => {
     const el = document.getElementById(id);
     el.innerHTML = `<option value="">All ${label}</option>` + vals.sort().map(v=>`<option>${v}</option>`).join('');
   };
-  sel('filterService',  [...new Set(DATA.all.map(r=>r.Service).filter(Boolean))], 'Services');
-  sel('filterBuilding', [...new Set(DATA.all.map(r=>r.Building).filter(Boolean))], 'Buildings');
-  sel('filterDispatch', [...new Set(DATA.all.map(r=>r['Dispatch Status']).filter(Boolean))], 'Statuses');
+  setOpts('gService',  [...new Set(D.all.map(r=>r.Service).filter(Boolean))], 'Services');
+  setOpts('gBuilding', [...new Set(D.all.map(r=>r.Building).filter(Boolean))], 'Buildings');
+  setOpts('fService',  [...new Set(D.all.map(r=>r.Service).filter(Boolean))], 'Services');
+  setOpts('fBuilding', [...new Set(D.all.map(r=>r.Building).filter(Boolean))], 'Buildings');
+  setOpts('fDispatch', [...new Set(D.all.map(r=>r['Dispatch Status']).filter(Boolean))], 'Dispatch');
+  setOpts('fShipping', [...new Set(D.all.map(r=>r['Shipping Status']).filter(Boolean))], 'Shipping');
 }
 
-function applyFilters() {
-  const svc = document.getElementById('filterService').value;
-  const bld = document.getElementById('filterBuilding').value;
-  const dsp = document.getElementById('filterDispatch').value;
-  const q   = document.getElementById('filterSearch').value.toLowerCase();
-  filtered = DATA.all.filter(r =>
-    (!svc || r.Service===svc) &&
-    (!bld || r.Building===bld) &&
-    (!dsp || r['Dispatch Status']===dsp) &&
-    (!q   || (r.Student||'').toLowerCase().includes(q) || (r['Order Number']||'').toLowerCase().includes(q))
-  );
-  currentPage = 1;
+function getGlobalData() {
+  const svc = document.getElementById('gService')?.value;
+  const bld = document.getElementById('gBuilding')?.value;
+  let data = D.all;
+  if (svc) data = data.filter(r => r.Service === svc);
+  if (bld) data = data.filter(r => r.Building === bld);
+  const count = D.all.length - data.length;
+  document.getElementById('filterInfo').textContent = count > 0 ? `Filtered: ${data.length} of ${D.all.length} orders` : '';
+  return data;
+}
+
+function clearFilters() {
+  ['gService','gBuilding','fService','fBuilding','fDispatch','fShipping'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('fSearch').value = '';
+  document.getElementById('filterInfo').textContent = '';
+  renderAll();
+}
+
+// ── RENDER ALL ─────────────────────────────────────────────────────
+function renderAll() {
+  const data = getGlobalData();
+  renderKPIs(data);
+  renderOverview(data);
+  renderOrdersTab(data);
+  renderStudents(data);
+  renderOperations(data);
+  renderRevenue();
+  renderForecast();
+  renderVault();
+  renderAudit();
+}
+
+// ── KPIs ───────────────────────────────────────────────────────────
+function renderKPIs(data) {
+  const lines = D.invoices.filter(r => r['Item Type'] && !r['Item Type'].includes('──') && !r['Item Type'].includes('⚠️'));
+  const totalRev = lines.reduce((s,r) => s + pm(r['Line Total']), 0);
+  const vTotal = D.vault.length;
+  const vOcc = D.vault.filter(r => r['Occupied']==='1'||r['Occupied']?.toLowerCase()==='true').length;
+  const issues = data.filter(r => (r['Issue Notes']||'').trim()).length;
+  const auditRows = D.audit.filter(r => r['Order Number'] && r['Audit Verdict']);
+  const auditPass = auditRows.filter(r => r['Audit Verdict']==='PASS').length;
+  const complete = data.filter(r => r['Dispatch Status']==='Complete').length;
+  const mrr = D.manifest.reduce((s,r) => s + (parseInt(r['Qty'])||0) * pm(r['Unit $/mo']), 0);
+  const manifItems = D.manifest.reduce((s,r) => s + (parseInt(r['Qty'])||0), 0);
+
+  const kpis = [
+    {l:'Total Orders', v:data.length, sub:`${D.storage.length} storage · ${D.transit.length} transit`, c:'#f97316'},
+    {l:'Total Revenue', v:'$'+totalRev.toFixed(2), sub:`${lines.length} line items`, c:'#22c55e'},
+    {l:'Completed', v:complete, sub:data.length?Math.round(complete/data.length*100)+'% of orders':'—', c:'#3b82f6'},
+    {l:'Vault Slots', v:vTotal?Math.round(vOcc/vTotal*100)+'%':'—', sub:`${vOcc}/${vTotal} occupied`, c:'#a855f7'},
+    {l:'Issues', v:issues, sub:'orders with notes', c:issues>0?'#ef4444':'#94a3b8'},
+    {l:'Audit Pass', v:auditRows.length?Math.round(auditPass/auditRows.length*100)+'%':'—', sub:`${auditPass}/${auditRows.length} audited`, c:'#eab308'},
+    {l:'MRR (Manifest)', v:'$'+mrr.toFixed(0), sub:'from stored items', c:'#14b8a6'},
+    {l:'Items Stored', v:manifItems, sub:`${D.manifest.length} manifest rows`, c:'#ec4899'},
+  ];
+
+  document.getElementById('kpiStrip').innerHTML = kpis.map(k => `
+    <div class="kpi card p-3">
+      <div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div>
+      <div class="text-xl font-bold mb-0.5" style="color:${k.c};" data-target="${typeof k.v==='number'?k.v:''}">${k.v}</div>
+      <div class="text-xs" style="color:var(--t3);">${k.sub}</div>
+    </div>`).join('');
+
+  // animate numeric counters
+  document.querySelectorAll('[data-target]').forEach(el => {
+    const t = parseInt(el.dataset.target);
+    if (!isNaN(t) && t > 0) animateNum(el, t);
+  });
+}
+
+function animateNum(el, target) {
+  const dur = 800, start = performance.now();
+  const orig = el.textContent;
+  const update = (now) => {
+    const p = Math.min((now-start)/dur, 1);
+    const ease = 1 - Math.pow(1-p, 3);
+    el.textContent = Math.floor(ease * target).toLocaleString();
+    if (p < 1) requestAnimationFrame(update);
+    else el.textContent = orig;
+  };
+  requestAnimationFrame(update);
+}
+
+// ── OVERVIEW ───────────────────────────────────────────────────────
+function renderOverview(data) {
+  donut('c-serviceMix',    cb(data, 'Service'));
+  donut('c-dispatchStatus',cb(data, 'Dispatch Status'));
+  donut('c-shippingStatus',cb(data, 'Shipping Status'));
+
+  const bldg = cb(data.filter(r=>r.Building), 'Building');
+  const top = Object.entries(bldg).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  mkBar('c-buildings', top.map(x=>x[0]), [{data:top.map(x=>x[1]), backgroundColor:P[0]+'bb', borderRadius:4, label:'Orders'}],
+    {indexAxis:'y', onClick:(e,el,ch) => drillBuilding(top[el[0]?.index]?.[0])});
+
+  // Funnel
+  const funnelData = [
+    {l:'All Orders', v:D.all.length, c:P[0]},
+    {l:'Have Building', v:D.all.filter(r=>r.Building).length, c:P[1]},
+    {l:'Have Items', v:D.all.filter(r=>parseInt(r['Item Count'])>0).length, c:P[2]},
+    {l:'Completed', v:D.all.filter(r=>r['Dispatch Status']==='Complete').length, c:P[3]},
+  ];
+  const max = funnelData[0].v || 1;
+  document.getElementById('funnelChart').innerHTML = funnelData.map((f,i) => `
+    <div class="mb-2">
+      <div class="flex justify-between text-xs mb-1" style="color:var(--t2);">
+        <span>${f.l}</span><span style="color:${f.c};">${f.v.toLocaleString()} (${Math.round(f.v/max*100)}%)</span>
+      </div>
+      <div style="background:var(--bg2);border-radius:4px;overflow:hidden;height:20px;">
+        <div class="funnel-bar" style="height:100%;width:${Math.round(f.v/max*100)}%;background:${f.c};border-radius:4px;min-width:2px;"></div>
+      </div>
+    </div>`).join('');
+
+  // Volume over time
+  renderVolumeChart('c-volumeTime', data);
+
+  // Calendar heatmap
+  renderCalendar(data);
+}
+
+function renderVolumeChart(id, data) {
+  const byDate = {};
+  data.forEach(r => {
+    const d = r['First Seen'] || r['Pickup Date'];
+    if (d) byDate[d] = (byDate[d]||0) + 1;
+  });
+  const dates = Object.keys(byDate).sort();
+  const vals = dates.map(d => byDate[d]);
+  // 7-day rolling avg
+  const avg = vals.map((_,i) => {
+    const slice = vals.slice(Math.max(0,i-6), i+1);
+    return +(slice.reduce((a,b)=>a+b,0)/slice.length).toFixed(1);
+  });
+  mk(id,'line', dates, [
+    {label:'Orders', data:vals, borderColor:P[0], backgroundColor:P[0]+'22', fill:true, tension:.3, pointRadius:2},
+    {label:'7-day avg', data:avg, borderColor:P[1], borderDash:[4,4], pointRadius:0, tension:.3},
+  ]);
+}
+
+function renderCalendar(data) {
+  const byDate = {};
+  data.forEach(r => { const d=r['First Seen']||r['Pickup Date']; if(d) byDate[d]=(byDate[d]||0)+1; });
+  const today = new Date();
+  const days = [];
+  for (let i=59; i>=0; i--) {
+    const d = new Date(today); d.setDate(d.getDate()-i);
+    const key = `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`;
+    days.push({key, label:`${d.getMonth()+1}/${d.getDate()}`, count: byDate[key]||0});
+  }
+  const max = Math.max(...days.map(d=>d.count), 1);
+  const weeks = [];
+  for (let i=0; i<days.length; i+=7) weeks.push(days.slice(i,i+7));
+  document.getElementById('calendarHeatmap').innerHTML = `
+    <div class="flex gap-1 flex-wrap">
+      ${weeks.map(w=>`<div class="flex flex-col gap-1">
+        ${w.map(d=>{
+          const intensity = Math.round(d.count/max*4);
+          const colors = ['var(--bg2)','#7c2d12','#c2410c','#ea580c','#f97316'];
+          return `<div class="cal-cell" style="background:${colors[intensity]};" title="${d.label}: ${d.count} orders"></div>`;
+        }).join('')}
+      </div>`).join('')}
+    </div>
+    <div class="flex items-center gap-2 mt-2 text-xs" style="color:var(--t3);">
+      <span>Less</span>
+      ${['var(--bg2)','#7c2d12','#c2410c','#ea580c','#f97316'].map(c=>`<span class="w-3 h-3 rounded inline-block" style="background:${c};"></span>`).join('')}
+      <span>More</span>
+    </div>`;
+}
+
+// ── ORDERS TAB ─────────────────────────────────────────────────────
+function renderOrdersTab(data) {
+  const svc = cb(data, 'Service');
+  mkBar('c-ordByService', Object.keys(svc), [{data:Object.values(svc), backgroundColor:P.map(c=>c+'bb'), borderRadius:4}]);
+
+  const bld = cb(data.filter(r=>r.Building), 'Building');
+  const top10 = Object.entries(bld).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  mkBar('c-ordByBuilding', top10.map(x=>x[0]), [{data:top10.map(x=>x[1]), backgroundColor:P[1]+'bb', borderRadius:4}], {indexAxis:'y'});
+
+  const buckets = {'0':0,'1–7':0,'8–30':0,'31–60':0,'60+':0};
+  data.forEach(r => {
+    const d = parseFloat(r['Days In Storage']||r['Days Since Pickup']||0);
+    if(d===0) buckets['0']++; else if(d<=7) buckets['1–7']++; else if(d<=30) buckets['8–30']++; else if(d<=60) buckets['31–60']++; else buckets['60+']++;
+  });
+  mkBar('c-daysDist', Object.keys(buckets), [{data:Object.values(buckets), backgroundColor:P[2]+'bb', borderRadius:4}]);
+
+  filtered = [...data];
   renderTable();
 }
 
-const ORDER_COLS = ['Order Number','Student','Building','Room','Service','Dispatch Status','Shipping Status','Item Count','Total $','Days In Storage'];
+function applyOrderFilters() {
+  const svc = v('fService'), bld = v('fBuilding'), dsp = v('fDispatch'), shp = v('fShipping'), q = v('fSearch').toLowerCase();
+  filtered = getGlobalData().filter(r =>
+    (!svc||r.Service===svc) && (!bld||r.Building===bld) &&
+    (!dsp||r['Dispatch Status']===dsp) && (!shp||r['Shipping Status']===shp) &&
+    (!q||(r.Student||'').toLowerCase().includes(q)||(r['Order Number']||'').toLowerCase().includes(q))
+  );
+  pg = 1; renderTable();
+}
+
+const OCOLS = ['Order Number','Student','Building','Room','Service','Dispatch Status','Shipping Status','Item Count','Total $','Days In Storage','Handled By'];
 
 function renderTable() {
-  if (sortCol) filtered.sort((a,b) => (a[sortCol]||'').localeCompare(b[sortCol]||'') * sortDir);
-  const pages = Math.ceil(filtered.length / PAGE);
-  const slice = filtered.slice((currentPage-1)*PAGE, currentPage*PAGE);
-
-  document.getElementById('ordersHead').innerHTML = ORDER_COLS.map(c=>`
-    <th class="px-3 py-2 text-left text-slate-400 whitespace-nowrap cursor-pointer hover:text-orange-400 ${sortCol===c?(sortDir===1?'sort-asc':'sort-desc'):''}" onclick="doSort('${c}')">${c}</th>`).join('');
-
-  document.getElementById('ordersBody').innerHTML = slice.map(r=>`
-    <tr>
-      ${ORDER_COLS.map(c=>{
-        const v = r[c]||'—';
-        if (c==='Dispatch Status') return `<td class="px-3 py-2">${statusBadge(v)}</td>`;
-        if (c==='Total $') return `<td class="px-3 py-2 text-right text-green-400 font-medium">${v}</td>`;
-        return `<td class="px-3 py-2 text-slate-300 whitespace-nowrap">${v}</td>`;
-      }).join('')}
-    </tr>`).join('');
-
-  document.getElementById('ordersCount').textContent = filtered.length + ' orders';
-  document.getElementById('pageInfo').textContent = `Page ${currentPage} of ${pages||1}`;
+  if(sCol) filtered.sort((a,b)=>(a[sCol]||'').localeCompare(b[sCol]||'')*sDir);
+  const pages = Math.ceil(filtered.length/PG);
+  const slice = filtered.slice((pg-1)*PG, pg*PG);
+  document.getElementById('ordHead').innerHTML = OCOLS.map(c=>`<th class="px-3 py-2 text-left cursor-pointer hover:text-orange-400 whitespace-nowrap ${sCol===c?(sDir===1?'sa':'sd'):''}" style="color:var(--t2);" onclick="doSort('${c}')">${c}</th>`).join('');
+  document.getElementById('ordBody').innerHTML = slice.map(r=>`<tr>
+    ${OCOLS.map(c=>{
+      const val=r[c]||'—';
+      if(c==='Dispatch Status') return `<td class="px-3 py-2">${sBadge(val)}</td>`;
+      if(c==='Total $') return `<td class="px-3 py-2 text-right" style="color:#22c55e;font-weight:500;">${val}</td>`;
+      return `<td class="px-3 py-2 whitespace-nowrap" style="color:var(--t1);">${val}</td>`;
+    }).join('')}
+  </tr>`).join('');
+  document.getElementById('ordCount').textContent = filtered.length + ' orders';
+  document.getElementById('pgInfo').textContent = `Page ${pg} of ${pages||1}`;
 }
 
-function doSort(col) {
-  sortDir = sortCol===col ? sortDir*-1 : 1;
-  sortCol = col;
-  renderTable();
-}
-function changePage(d) {
-  const pages = Math.ceil(filtered.length/PAGE);
-  currentPage = Math.max(1, Math.min(pages, currentPage+d));
-  renderTable();
-}
+function doSort(c) { sDir=sCol===c?sDir*-1:1; sCol=c; renderTable(); }
+function changePg(d) { const p=Math.ceil(filtered.length/PG); pg=Math.max(1,Math.min(p,pg+d)); renderTable(); }
 function exportCSV() {
-  const blob = new Blob([Papa.unparse(filtered)], {type:'text/csv'});
-  Object.assign(document.createElement('a'), {href:URL.createObjectURL(blob), download:'orders.csv'}).click();
+  const b=new Blob([Papa.unparse(filtered)],{type:'text/csv'});
+  Object.assign(document.createElement('a'),{href:URL.createObjectURL(b),download:'orders.csv'}).click();
+}
+function drillBuilding(bld) {
+  if(!bld) return;
+  switchTab('orders', document.querySelector('[onclick*="orders"]'));
+  document.getElementById('fBuilding').value = bld;
+  applyOrderFilters();
 }
 
-// ── REVENUE ───────────────────────────────────────────────────────────
+// ── STUDENTS ──────────────────────────────────────────────────────
+function renderStudents(data) {
+  const stuMap = {};
+  data.forEach(r => {
+    const s = r.Student;
+    if(!s) return;
+    if(!stuMap[s]) stuMap[s] = {orders:0, items:0, revenue:0, buildings:new Set(), services:new Set(), status:r['Dispatch Status']||''};
+    stuMap[s].orders++;
+    stuMap[s].items += parseInt(r['Item Count'])||0;
+    stuMap[s].revenue += pm(r['Total $']);
+    if(r.Building) stuMap[s].buildings.add(r.Building);
+    if(r.Service) stuMap[s].services.add(r.Service);
+  });
+  D._stuMap = stuMap;
+
+  const byItems = Object.entries(stuMap).sort((a,b)=>b[1].items-a[1].items).slice(0,20);
+  mkBar('c-topStudents', byItems.map(x=>x[0]), [{data:byItems.map(x=>x[1].items), backgroundColor:P[0]+'bb', borderRadius:4}],
+    {indexAxis:'y', plugins:{legend:{display:false}}});
+
+  // Distribution: how many students have 1, 2, 3+ orders
+  const dist = {};
+  Object.values(stuMap).forEach(s => { const k=s.orders>3?'4+':s.orders.toString(); dist[k]=(dist[k]||0)+1; });
+  donut('c-studentDist', dist);
+
+  const bldCounts = {};
+  Object.values(stuMap).forEach(s => s.buildings.forEach(b => { bldCounts[b]=(bldCounts[b]||0)+1; }));
+  const topBld = Object.entries(bldCounts).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  mkBar('c-studentBuilding', topBld.map(x=>x[0]), [{data:topBld.map(x=>x[1]), backgroundColor:P[1]+'bb', borderRadius:4}], {indexAxis:'y'});
+
+  const svcCounts = {};
+  Object.values(stuMap).forEach(s => s.services.forEach(sv => { svcCounts[sv]=(svcCounts[sv]||0)+1; }));
+  donut('c-studentService', svcCounts);
+
+  renderStudentTable();
+}
+
+function renderStudentTable() {
+  const q = (v('stuSearch')||'').toLowerCase();
+  const rows = Object.entries(D._stuMap||{})
+    .filter(([n]) => !q || n.toLowerCase().includes(q))
+    .sort((a,b)=>b[1].items-a[1].items).slice(0,150);
+  document.getElementById('stuBody').innerHTML = rows.map(([name,s])=>`<tr>
+    <td class="px-3 py-2 font-medium" style="color:var(--t1);">${name}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${[...s.buildings].join(', ')||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${[...s.services].join(', ')||'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:var(--t1);">${s.orders}</td>
+    <td class="px-3 py-2 text-right" style="color:var(--t1);">${s.items}</td>
+    <td class="px-3 py-2 text-right" style="color:#22c55e;">${s.revenue>0?'$'+s.revenue.toFixed(2):'—'}</td>
+    <td class="px-3 py-2">${sBadge(s.status||'—')}</td>
+  </tr>`).join('');
+}
+
+// ── OPERATIONS ────────────────────────────────────────────────────
+function renderOperations(data) {
+  renderVolumeChart('c-volTime2', data);
+
+  donut('c-eventTypes', cb(D.events.filter(r=>r['Event Type']), 'Event Type'));
+
+  // Handled by leaderboard
+  const handled = cb(D.events.filter(r=>r['Handled By']), 'Handled By');
+  const topH = Object.entries(handled).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  mkBar('c-handledBy', topH.map(x=>x[0]), [{data:topH.map(x=>x[1]), backgroundColor:P[4]+'bb', borderRadius:4}], {indexAxis:'y'});
+
+  // Completion rate by service
+  const svcComplete = {}, svcTotal = {};
+  data.forEach(r => {
+    const s = r.Service||'Unknown';
+    svcTotal[s] = (svcTotal[s]||0)+1;
+    if(r['Dispatch Status']==='Complete') svcComplete[s]=(svcComplete[s]||0)+1;
+  });
+  const svcs = Object.keys(svcTotal);
+  mkBar('c-completionRate', svcs,
+    [{label:'Completed', data:svcs.map(s=>svcComplete[s]||0), backgroundColor:P[2]+'bb', borderRadius:4},
+     {label:'Pending',   data:svcs.map(s=>(svcTotal[s]||0)-(svcComplete[s]||0)), backgroundColor:P[7]+'bb', borderRadius:4}],
+    {scales:{x:{stacked:true},y:{stacked:true}}, plugins:{legend:{display:true, labels:{boxWidth:10,font:{size:10}}}}});
+
+  // Audit pass/fail by service
+  const apSvc = {}, afSvc = {};
+  D.audit.filter(r=>r['Audit Verdict']&&r.Service).forEach(r => {
+    const s=r.Service;
+    if(r['Audit Verdict']==='PASS') apSvc[s]=(apSvc[s]||0)+1;
+    else afSvc[s]=(afSvc[s]||0)+1;
+  });
+  const auditSvcs = [...new Set([...Object.keys(apSvc),...Object.keys(afSvc)])];
+  mkBar('c-auditByService', auditSvcs,
+    [{label:'Pass', data:auditSvcs.map(s=>apSvc[s]||0), backgroundColor:P[2]+'bb', borderRadius:4},
+     {label:'Fail', data:auditSvcs.map(s=>afSvc[s]||0), backgroundColor:P[7]+'bb', borderRadius:4}],
+    {scales:{x:{stacked:true},y:{stacked:true}}, plugins:{legend:{display:true, labels:{boxWidth:10,font:{size:10}}}}});
+
+  // Issues by building
+  const issBld = {};
+  data.filter(r=>r['Issue Notes']&&r.Building).forEach(r => { issBld[r.Building]=(issBld[r.Building]||0)+1; });
+  const topIss = Object.entries(issBld).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  mkBar('c-issuesByBuilding', topIss.map(x=>x[0]), [{data:topIss.map(x=>x[1]), backgroundColor:P[7]+'bb', borderRadius:4}], {indexAxis:'y'});
+
+  // Overall status breakdown stacked
+  const statuses = cb(data, 'Dispatch Status');
+  donut('c-statusBreakdown', statuses);
+}
+
+// ── REVENUE ───────────────────────────────────────────────────────
 function renderRevenue() {
-  const lines = DATA.invoices.filter(r => r['Item Type'] && !r['Item Type'].includes('──') && !r['Item Type'].includes('⚠️') && r['Order Number']);
-  const byService = {}, byItem = {};
+  const lines = D.invoices.filter(r => r['Item Type']&&!r['Item Type'].includes('──')&&!r['Item Type'].includes('⚠️')&&r['Order Number']);
+  const bySvc = {}, byItem = {}, byBld = {}, bySur = {base:0, surcharge:0};
   lines.forEach(r => {
-    const v = parseMoney(r['Line Total']);
-    byService[r.Service||'Unknown'] = (byService[r.Service||'Unknown']||0) + v;
-    byItem[r['Item Type']||'Unknown'] = (byItem[r['Item Type']||'Unknown']||0) + v;
+    const v = pm(r['Line Total']), sv = pm(r['Surcharge']||'0');
+    bySvc[r.Service||'Unknown'] = (bySvc[r.Service||'Unknown']||0)+v;
+    byItem[r['Item Type']||'Unknown'] = (byItem[r['Item Type']||'Unknown']||0)+v;
+    // find building from orders
+    const ord = D.all.find(o=>o['Order Number']===r['Order Number']);
+    if(ord?.Building) byBld[ord.Building] = (byBld[ord.Building]||0)+v;
+    bySur.base += v; bySur.surcharge += sv;
   });
 
-  mkChart('chartRevService','bar', Object.keys(byService),
-    [{data:Object.values(byService).map(v=>+v.toFixed(2)), backgroundColor:PALETTE[2]+'bb', borderRadius:4}],
-    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}, ticks:{callback:v=>'$'+v.toLocaleString()}}}});
+  mkBar('c-revService', Object.keys(bySvc), [{data:Object.values(bySvc).map(x=>+x.toFixed(2)), backgroundColor:P[2]+'bb', borderRadius:4}],
+    {scales:{y:{ticks:{callback:v=>'$'+v.toLocaleString()}}}});
 
   const topItems = Object.entries(byItem).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  mkChart('chartRevItem','bar', topItems.map(x=>x[0]),
-    [{data:topItems.map(x=>+x[1].toFixed(2)), backgroundColor:PALETTE.map(c=>c+'bb'), borderRadius:4}],
-    {indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}, ticks:{callback:v=>'$'+v}},y:{grid:{color:'#1e293b'}}}});
+  mkBar('c-revItem', topItems.map(x=>x[0]), [{data:topItems.map(x=>+x[1].toFixed(2)), backgroundColor:P.map(c=>c+'bb'), borderRadius:4}],
+    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+v}}}});
 
-  const totalRev = lines.reduce((s,r)=>s+parseMoney(r['Line Total']),0);
-  const totalSur = lines.reduce((s,r)=>s+parseMoney(r['Surcharge']),0);
-  const uOrders  = [...new Set(lines.map(r=>r['Order Number']))].length;
+  const topBld = Object.entries(byBld).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  mkBar('c-revBuilding', topBld.map(x=>x[0]), [{data:topBld.map(x=>+x[1].toFixed(2)), backgroundColor:P[1]+'bb', borderRadius:4}], {indexAxis:'y'});
+
+  mk('c-revSurcharge','doughnut',['Base Revenue','Surcharges'],
+    [{data:[+bySur.base.toFixed(2), +bySur.surcharge.toFixed(2)], backgroundColor:[P[2]+'cc',P[4]+'cc'], borderColor:'var(--bg0)', borderWidth:2}],
+    {plugins:{legend:{display:true, position:'bottom', labels:{boxWidth:10,font:{size:11}}}}});
+
+  const totalRev = lines.reduce((s,r)=>s+pm(r['Line Total']),0);
+  const totalSur = lines.reduce((s,r)=>s+pm(r['Surcharge']||'0'),0);
+  const uOrd = [...new Set(lines.map(r=>r['Order Number']))].length;
   document.getElementById('revKPIs').innerHTML = [
-    {label:'Total Revenue', value:'$'+totalRev.toFixed(2), color:'text-green-400'},
-    {label:'Total Surcharges', value:'$'+totalSur.toFixed(2), color:'text-yellow-400'},
-    {label:'Invoiced Orders', value:uOrders, color:'text-blue-400'},
-    {label:'Avg Order Value', value:'$'+(uOrders?totalRev/uOrders:0).toFixed(2), color:'text-orange-400'},
-  ].map(k=>`<div class="bg-slate-900 rounded-xl p-4 border border-slate-800">
-    <div class="text-slate-500 text-xs uppercase tracking-wider mb-1">${k.label}</div>
-    <div class="${k.color} text-xl font-bold">${k.value}</div></div>`).join('');
+    {l:'Total Revenue',    v:'$'+totalRev.toFixed(2), c:'#22c55e'},
+    {l:'Total Surcharges', v:'$'+totalSur.toFixed(2), c:'#eab308'},
+    {l:'Invoiced Orders',  v:uOrd, c:'#3b82f6'},
+    {l:'Avg Order Value',  v:'$'+(uOrd?totalRev/uOrd:0).toFixed(2), c:'#f97316'},
+  ].map(k=>`<div class="kpi card p-3"><div class="text-xs uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold" style="color:${k.c};">${k.v}</div></div>`).join('');
 
-  document.getElementById('invoiceBody').innerHTML = lines.slice(0,200).map(r=>`
-    <tr>
-      <td class="px-3 py-2 text-slate-300">${r['Order Number']||'—'}</td>
-      <td class="px-3 py-2 text-white">${r['Student']||'—'}</td>
-      <td class="px-3 py-2 text-slate-400">${r['Service']||'—'}</td>
-      <td class="px-3 py-2 text-slate-300">${r['Item Type']||'—'}</td>
-      <td class="px-3 py-2 text-right text-slate-300">${r['Qty']||'—'}</td>
-      <td class="px-3 py-2 text-right text-slate-400">${r['Unit Price']||'—'}</td>
-      <td class="px-3 py-2 text-right text-green-400 font-medium">${r['Line Total']||'—'}</td>
-      <td class="px-3 py-2 text-right text-yellow-400">${r['Surcharge']||'—'}</td>
-    </tr>`).join('');
+  document.getElementById('invBody').innerHTML = lines.slice(0,200).map(r=>`<tr>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Service']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t1);">${r['Item Type']||'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:var(--t2);">${r['Qty']||'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:var(--t2);">${r['Unit Price']||'—'}</td>
+    <td class="px-3 py-2 text-right font-medium" style="color:#22c55e;">${r['Line Total']||'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:#eab308;">${r['Surcharge']&&r['Surcharge']!=='$0.00'?r['Surcharge']:'—'}</td>
+  </tr>`).join('');
 }
 
-// ── VAULT & ITEMS ─────────────────────────────────────────────────────
+// ── FORECAST ─────────────────────────────────────────────────────
+function renderForecast() {
+  // MRR from manifest
+  const mrrByType = {};
+  D.manifest.forEach(r => {
+    const item = r['Item']||'Unknown';
+    const rev = (parseInt(r['Qty'])||0) * pm(r['Unit $/mo']);
+    mrrByType[item] = (mrrByType[item]||0) + rev;
+  });
+  const totalMRR = Object.values(mrrByType).reduce((a,b)=>a+b,0);
+  const annualRev = totalMRR * 4; // ~4 month storage season
+
+  // Pending orders
+  const pending = D.all.filter(r=>pm(r['Total $'])===0).length;
+  const invoiced = D.all.filter(r=>pm(r['Total $'])>0).length;
+  const lines = D.invoices.filter(r=>r['Item Type']&&!r['Item Type'].includes('──')&&!r['Item Type'].includes('⚠️'));
+  const totalRev = lines.reduce((s,r)=>s+pm(r['Line Total']),0);
+
+  // Gauge
+  const vTotal = D.vault.length, vOcc = D.vault.filter(r=>r['Occupied']==='1').length;
+  const gPct = vTotal ? Math.round(vOcc/vTotal*100) : 0;
+  destroy('c-gauge');
+  CH['c-gauge'] = new Chart(document.getElementById('c-gauge'), {
+    type:'doughnut',
+    data:{datasets:[{data:[gPct,100-gPct], backgroundColor:[gPct>80?P[7]:gPct>50?P[4]:P[2], 'var(--bg2)'], borderWidth:0}]},
+    options:{responsive:true, maintainAspectRatio:false, rotation:-90, circumference:180, cutout:'75%', plugins:{legend:{display:false},tooltip:{enabled:false}}}
+  });
+  document.getElementById('gaugeLabel').textContent = gPct + '%';
+
+  // Price tier donut
+  const tiers = {'Budget (<$15/mo)':0, 'Standard ($15–25/mo)':0, 'Premium (>$25/mo)':0};
+  D.manifest.forEach(r => {
+    const p = pm(r['Unit $/mo']), qty = parseInt(r['Qty'])||1;
+    if(p<15) tiers['Budget (<$15/mo)']+=qty;
+    else if(p<=25) tiers['Standard ($15–25/mo)']+=qty;
+    else tiers['Premium (>$25/mo)']+=qty;
+  });
+  donut('c-priceTier', tiers);
+
+  // Pending vs invoiced
+  mk('c-pendingVsInvoiced','doughnut',['Pending Revenue','Invoiced'],
+    [{data:[pending, invoiced], backgroundColor:[P[4]+'cc',P[2]+'cc'], borderColor:'var(--bg0)', borderWidth:2}],
+    {plugins:{legend:{display:true, position:'bottom', labels:{boxWidth:10,font:{size:11}}}}});
+
+  // MRR by item type
+  const mrrEntries = Object.entries(mrrByType).sort((a,b)=>b[1]-a[1]);
+  mkBar('c-mrr', mrrEntries.map(x=>x[0]), [{data:mrrEntries.map(x=>+x[1].toFixed(2)), backgroundColor:P.map(c=>c+'bb'), borderRadius:4}],
+    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+v}}}});
+
+  // Revenue per building from manifest
+  const revBld = {};
+  D.manifest.forEach(r => {
+    const b=r.Building; if(!b) return;
+    revBld[b]=(revBld[b]||0)+(parseInt(r['Qty'])||0)*pm(r['Unit $/mo']);
+  });
+  const topBldRev = Object.entries(revBld).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  mkBar('c-revPerBuilding', topBldRev.map(x=>x[0]), [{data:topBldRev.map(x=>+x[1].toFixed(2)), backgroundColor:P[0]+'bb', borderRadius:4}],
+    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+v}}}});
+
+  document.getElementById('fcKPIs').innerHTML = [
+    {l:'Monthly Recurring Rev', v:'$'+totalMRR.toFixed(2), c:'#22c55e'},
+    {l:'Projected Seasonal',    v:'$'+annualRev.toFixed(2), c:'#3b82f6'},
+    {l:'Pending Orders',        v:pending+' orders', c:'#eab308'},
+    {l:'Invoiced Revenue',      v:'$'+totalRev.toFixed(2), c:'#f97316'},
+  ].map(k=>`<div class="kpi card p-3"><div class="text-xs uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold" style="color:${k.c};">${k.v}</div></div>`).join('');
+}
+
+// ── VAULT ─────────────────────────────────────────────────────────
 function renderVault() {
-  const itemCounts = {};
-  DATA.manifest.forEach(r => {
-    const k = r['Item']||'Unknown';
-    itemCounts[k] = (itemCounts[k]||0) + (parseInt(r['Qty'])||1);
-  });
-  mkDonut('chartItemTypes', itemCounts);
+  const itemCounts={};
+  D.manifest.forEach(r=>{ const k=r['Item']||'Unknown'; itemCounts[k]=(itemCounts[k]||0)+(parseInt(r['Qty'])||1); });
+  donut('c-itemTypes', itemCounts);
 
-  const sizeCounts = countBy(DATA.manifest.filter(r=>r['Size']), 'Size');
-  mkChart('chartItemSizes','bar', Object.keys(sizeCounts),
-    [{data:Object.values(sizeCounts), backgroundColor:PALETTE[3]+'bb', borderRadius:4}],
-    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}}}});
+  const sizeCounts=cb(D.manifest.filter(r=>r['Size']),'Size');
+  mkBar('c-itemSizes',Object.keys(sizeCounts),[{data:Object.values(sizeCounts),backgroundColor:P[3]+'bb',borderRadius:4}]);
 
-  const bays = {};
-  DATA.vault.forEach(r => {
-    if (!r['Bay']) return;
-    if (!bays[r['Bay']]) bays[r['Bay']] = {total:0, occ:0, slots:[]};
+  const bays={};
+  D.vault.forEach(r=>{
+    if(!r['Bay']) return;
+    if(!bays[r['Bay']]) bays[r['Bay']]={total:0,occ:0,slots:[]};
     bays[r['Bay']].total++;
-    const occupied = r['Occupied']==='1'||r['Occupied']?.toLowerCase()==='true';
-    if (occupied) bays[r['Bay']].occ++;
-    bays[r['Bay']].slots.push({loc:r['Location'], slot:r['Slot'], occupied, order:r['Order Numbers']});
+    const o=r['Occupied']==='1'||r['Occupied']?.toLowerCase()==='true';
+    if(o) bays[r['Bay']].occ++;
+    bays[r['Bay']].slots.push({loc:r['Location'],slot:r['Slot'],occ:o,order:r['Order Numbers']});
   });
+  const bk=Object.keys(bays).slice(0,15);
+  mkBar('c-vaultBays',bk,
+    [{label:'Occupied',data:bk.map(b=>bays[b].occ),backgroundColor:P[0]+'bb',borderRadius:4},
+     {label:'Empty',data:bk.map(b=>bays[b].total-bays[b].occ),backgroundColor:'var(--bg2)',borderRadius:4}],
+    {scales:{x:{stacked:true},y:{stacked:true}},plugins:{legend:{display:true,labels:{boxWidth:10,font:{size:10}}}}});
 
-  const bayKeys = Object.keys(bays).slice(0,15);
-  mkChart('chartVaultBays','bar', bayKeys,
-    [
-      {label:'Occupied', data:bayKeys.map(b=>bays[b].occ), backgroundColor:PALETTE[0]+'bb', borderRadius:4},
-      {label:'Empty',    data:bayKeys.map(b=>bays[b].total-bays[b].occ), backgroundColor:'#334155', borderRadius:4},
-    ],
-    {plugins:{legend:{display:true, labels:{boxWidth:10,font:{size:11}}}},
-     scales:{x:{stacked:true,grid:{color:'#1e293b'}},y:{stacked:true,grid:{color:'#1e293b'}}}});
-
-  document.getElementById('vaultMap').innerHTML = `<div class="flex flex-wrap gap-4">` +
-    Object.entries(bays).map(([bay,info])=>{
-      const pct = info.total ? Math.round(info.occ/info.total*100) : 0;
-      const pctColor = pct>80?'text-red-400':pct>50?'text-yellow-400':'text-green-400';
-      return `<div class="bg-slate-800/50 rounded-lg p-3">
-        <div class="text-slate-400 text-xs font-semibold mb-2 flex justify-between gap-4">
-          <span>Bay ${bay}</span><span class="${pctColor}">${pct}%</span>
+  document.getElementById('vaultMap').innerHTML=`<div class="flex flex-wrap gap-3">
+    ${Object.entries(bays).map(([bay,info])=>{
+      const pct=info.total?Math.round(info.occ/info.total*100):0;
+      const c=pct>80?'#ef4444':pct>50?'#eab308':'#22c55e';
+      return `<div class="rounded-lg p-2.5" style="background:var(--bg2);">
+        <div class="flex justify-between text-xs font-semibold mb-1.5" style="color:var(--t2);">
+          <span>Bay ${bay}</span><span style="color:${c};">${pct}%</span>
         </div>
-        <div class="flex flex-wrap gap-1">
-          ${info.slots.map(s=>`<div class="vault-slot ${s.occupied?'bg-orange-500/80':'bg-slate-700'}" title="${s.loc}${s.order?': '+s.order:''}">${s.slot}</div>`).join('')}
+        <div class="flex flex-wrap gap-0.5">
+          ${info.slots.map(s=>`<div class="vault-slot ${s.occ?'bg-orange-500':''}${!s.occ?'' :''}" style="${s.occ?'':'background:var(--bg2);border:1px solid var(--bg2);;'}" title="${s.loc}${s.order?': '+s.order:''}">${s.slot}</div>`).join('')}
         </div>
       </div>`;
-    }).join('') + `</div>`;
+    }).join('')}
+  </div>`;
 
   renderManifest();
 }
 
 function renderManifest() {
-  const q = (document.getElementById('manifestSearch')?.value||'').toLowerCase();
-  const rows = DATA.manifest.filter(r =>
-    !q || (r['Student']||'').toLowerCase().includes(q) ||
-    (r['Item']||'').toLowerCase().includes(q) ||
-    (r['Order Number']||'').toLowerCase().includes(q)
-  ).slice(0,200);
-  document.getElementById('manifestBody').innerHTML = rows.map(r=>`
-    <tr>
-      <td class="px-3 py-2 text-slate-300">${r['Order Number']||'—'}</td>
-      <td class="px-3 py-2 text-white">${r['Student']||'—'}</td>
-      <td class="px-3 py-2 text-slate-400">${r['Building']||'—'}</td>
-      <td class="px-3 py-2 text-white font-medium">${r['Item']||'—'}</td>
-      <td class="px-3 py-2 text-slate-400">${r['Size']||'—'}</td>
-      <td class="px-3 py-2 text-right text-slate-300">${r['Qty']||'—'}</td>
-      <td class="px-3 py-2 text-right text-green-400">${r['Unit $/mo']?'$'+r['Unit $/mo']:'—'}</td>
-      <td class="px-3 py-2 text-slate-400">${r['Vault Location']||'—'}</td>
-      <td class="px-3 py-2">${r['Condition']?`<span class="badge badge-green">${r['Condition']}</span>`:'—'}</td>
-    </tr>`).join('');
+  const q=(v('manifSearch')||'').toLowerCase();
+  const rows=D.manifest.filter(r=>!q||(r['Student']||'').toLowerCase().includes(q)||(r['Item']||'').toLowerCase().includes(q)||(r['Order Number']||'').toLowerCase().includes(q)).slice(0,200);
+  document.getElementById('manifBody').innerHTML=rows.map(r=>`<tr>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Building']||'—'}</td>
+    <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r['Item']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Size']||'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:var(--t1);">${r['Qty']||'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:#22c55e;">${r['Unit $/mo']?'$'+r['Unit $/mo']:'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Vault Location']||'—'}</td>
+    <td class="px-3 py-2">${r['Checked?']==='TRUE'?'<span class="badge b-g">✓</span>':'<span class="badge b-gray">—</span>'}</td>
+  </tr>`).join('');
 }
 
-// ── AUDIT & EVENTS ────────────────────────────────────────────────────
-function renderAuditEvents() {
-  mkDonut('chartAuditVerdict', countBy(DATA.audit.filter(r=>r['Audit Verdict']), 'Audit Verdict'));
-  mkChart('chartEventTypes','bar',
-    Object.keys(countBy(DATA.events.filter(r=>r['Event Type']),'Event Type')),
-    [{data:Object.values(countBy(DATA.events.filter(r=>r['Event Type']),'Event Type')), backgroundColor:PALETTE[4]+'bb', borderRadius:4}],
-    {plugins:{legend:{display:false}}, scales:{x:{grid:{color:'#1e293b'}},y:{grid:{color:'#1e293b'}}}});
+// ── AUDIT ─────────────────────────────────────────────────────────
+function renderAudit() {
+  donut('c-auditVerdict', cb(D.audit.filter(r=>r['Audit Verdict']),'Audit Verdict'));
+  const matchY=D.audit.filter(r=>r['Item Count Match?']==='TRUE').length;
+  const matchN=D.audit.filter(r=>r['Item Count Match?']==='FALSE').length;
+  donut('c-countMatch',{'Count Match':matchY,'Mismatch':matchN});
+  const issY=D.events.filter(r=>r['Issue?']==='Y').length;
+  const issN=D.events.length-issY;
+  donut('c-issueFlag',{'No Issue':issN,'Has Issue':issY});
 
-  const issueCount = DATA.events.filter(r=>r['Issue?']==='Y').length;
-  const noIssue = DATA.events.length - issueCount;
-  mkDonut('chartIssues', {'No Issue': noIssue, 'Has Issue': issueCount});
+  document.getElementById('evtBody').innerHTML=D.events.slice(0,200).map(r=>`<tr>
+    <td class="px-3 py-2" style="color:var(--t3);">${r['Event ID']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Event Time']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t1);">${r['Event Type']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td>
+    <td class="px-3 py-2">${r['Issue?']==='Y'?'<span class="badge b-r">Yes</span>':'<span class="badge b-g">No</span>'}</td>
+  </tr>`).join('');
 
-  document.getElementById('eventsBody').innerHTML = DATA.events.slice(0,150).map(r=>`
-    <tr>
-      <td class="px-3 py-2 text-slate-500">${r['Event ID']||'—'}</td>
-      <td class="px-3 py-2 text-slate-400">${r['Event Time']||'—'}</td>
-      <td class="px-3 py-2 text-slate-300">${r['Event Type']||'—'}</td>
-      <td class="px-3 py-2 text-slate-300">${r['Order Number']||'—'}</td>
-      <td class="px-3 py-2 text-white">${r['Student']||'—'}</td>
-      <td class="px-3 py-2">${r['Issue?']==='Y'?'<span class="badge badge-red">Yes</span>':'<span class="badge badge-green">No</span>'}</td>
-    </tr>`).join('');
-
-  document.getElementById('auditBody').innerHTML = DATA.audit.slice(0,150).map(r=>`
-    <tr>
-      <td class="px-3 py-2 text-slate-300">${r['Order Number']||'—'}</td>
-      <td class="px-3 py-2 text-white">${r['Student']||'—'}</td>
-      <td class="px-3 py-2">${verdictBadge(r['Audit Verdict'])}</td>
-      <td class="px-3 py-2">${r['Item Count Match?']==='TRUE'?'<span class="badge badge-green">✓ Match</span>':'<span class="badge badge-red">✗ Mismatch</span>'}</td>
-      <td class="px-3 py-2 text-slate-500 max-w-xs truncate">${r['Audit Notes']||'—'}</td>
-    </tr>`).join('');
+  document.getElementById('audBody').innerHTML=D.audit.slice(0,200).map(r=>`<tr>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td>
+    <td class="px-3 py-2">${vBadge(r['Audit Verdict'])}</td>
+    <td class="px-3 py-2">${r['Item Count Match?']==='TRUE'?'<span class="badge b-g">✓ Match</span>':'<span class="badge b-r">✗ Mismatch</span>'}</td>
+    <td class="px-3 py-2 max-w-xs truncate" style="color:var(--t3);">${r['Audit Notes']||'—'}</td>
+  </tr>`).join('');
 }
 
-// ── CHART HELPERS ─────────────────────────────────────────────────────
-function mkDonut(id, obj) {
+// ── CHART HELPERS ─────────────────────────────────────────────────
+function donut(id, obj) {
   destroy(id);
-  CHARTS[id] = new Chart(document.getElementById(id), {
-    type: 'doughnut',
-    data: { labels: Object.keys(obj), datasets: [{data: Object.values(obj), backgroundColor: PALETTE.map(c=>c+'cc'), borderColor:'#0f172a', borderWidth:2}] },
-    options: { responsive:true, maintainAspectRatio:false, cutout:'65%',
-      plugins: { legend: { position:'right', labels:{boxWidth:10,font:{size:11}} } } }
+  CH[id]=new Chart(document.getElementById(id),{
+    type:'doughnut',
+    data:{labels:Object.keys(obj),datasets:[{data:Object.values(obj),backgroundColor:P.map(c=>c+'cc'),borderColor:'var(--bg0)',borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'62%',plugins:{legend:{position:'right',labels:{boxWidth:9,font:{size:10}}}}}
   });
 }
 
-function mkChart(id, type, labels, datasets, opts={}) {
+function mkBar(id, labels, datasets, extra={}) {
+  mk(id,'bar',labels,datasets,merge({plugins:{legend:{display:false}},scales:{x:{grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}}, extra));
+}
+
+function mk(id, type, labels, datasets, opts={}) {
   destroy(id);
-  CHARTS[id] = new Chart(document.getElementById(id), {
-    type, data: {labels, datasets},
-    options: merge({responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}}, opts)
-  });
+  CH[id]=new Chart(document.getElementById(id),{type,data:{labels,datasets},options:merge({responsive:true,maintainAspectRatio:false},opts)});
 }
 
-function destroy(id) { if(CHARTS[id]){CHARTS[id].destroy();delete CHARTS[id];} }
+function destroy(id) { if(CH[id]){CH[id].destroy();delete CH[id];} }
 
-// ── UTILS ─────────────────────────────────────────────────────────────
-function countBy(arr, key) {
-  return arr.reduce((acc,r) => { const v=r[key]||'Unknown'; acc[v]=(acc[v]||0)+1; return acc; }, {});
+// ── MODAL ─────────────────────────────────────────────────────────
+function openModal(title, type, labels, datasets, opts) {
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modal').classList.remove('hidden');
+  destroy('modalCanvas');
+  CH['modalCanvas']=new Chart(document.getElementById('modalCanvas'),{type,data:{labels,datasets},options:merge({responsive:true,maintainAspectRatio:false},opts||{})});
 }
-function parseMoney(s) { return parseFloat((s||'0').replace(/[$,]/g,''))||0; }
-function merge(a, b) {
-  const r = {...a};
-  for (const k in b) r[k] = (b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])) ? merge(a[k]||{},b[k]) : b[k];
-  return r;
-}
-function statusBadge(v) {
-  const cls = v==='Complete'?'badge-green':v==='Queued'?'badge-yellow':v.toLowerCase().includes('process')?'badge-blue':'badge-gray';
-  return `<span class="badge ${cls}">${v}</span>`;
-}
-function verdictBadge(v) {
-  if(!v) return '<span class="badge badge-gray">—</span>';
-  return `<span class="badge ${v==='PASS'?'badge-green':v==='FAIL'?'badge-red':'badge-yellow'}">${v}</span>`;
-}
+function closeModal() { document.getElementById('modal').classList.add('hidden'); destroy('modalCanvas'); }
+
+// ── UI HELPERS ────────────────────────────────────────────────────
 function switchTab(tab, btn) {
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.add('hidden'));
   document.getElementById('tab-'+tab).classList.remove('hidden');
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('tab-active'));
-  btn.classList.add('tab-active');
+  if(btn) btn.classList.add('tab-active');
+}
+
+function toggleTheme() {
+  document.body.classList.toggle('light');
+  document.getElementById('themeBtn').textContent = document.body.classList.contains('light') ? '🌙' : '☀️';
+  Chart.defaults.color = document.body.classList.contains('light') ? '#475569' : '#94a3b8';
+  Chart.defaults.borderColor = document.body.classList.contains('light') ? '#e2e8f0' : '#1e293b';
+}
+
+function handleGlobalSearch(q) {
+  if (!q) return;
+  switchTab('orders', document.querySelector('[onclick*="\'orders\'"]'));
+  document.getElementById('fSearch').value = q;
+  applyOrderFilters();
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────
+function cb(arr, key) { return arr.reduce((acc,r)=>{ const k=r[key]||'Unknown'; acc[k]=(acc[k]||0)+1; return acc; },{}); }
+function pm(s) { return parseFloat((s||'0').replace(/[$,]/g,''))||0; }
+function v(id) { return document.getElementById(id)?.value||''; }
+function merge(a,b) { const r={...a}; for(const k in b) r[k]=(b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k]))?merge(a[k]||{},b[k]):b[k]; return r; }
+function sBadge(val) {
+  const cls=val==='Complete'?'b-g':val==='Queued'?'b-y':val?.toLowerCase().includes('process')?'b-b':'b-gray';
+  return `<span class="badge ${cls}">${val}</span>`;
+}
+function vBadge(v) {
+  if(!v) return '<span class="badge b-gray">—</span>';
+  return `<span class="badge ${v==='PASS'?'b-g':v==='FAIL'?'b-r':'b-y'}">${v}</span>`;
 }
 
 loadAll();
