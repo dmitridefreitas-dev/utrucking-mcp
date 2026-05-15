@@ -163,13 +163,13 @@ async def do_lookup_student(name_heard: str) -> dict:
 
     dispatch_match = None
     for row in dispatch_rows:
-        if (row.get("Student") or "").strip().lower() == confirmed_lower:
-            dispatch_match = row
+        if clean(row.get("Student") or "").lower() == confirmed_lower:
+            dispatch_match = row  # keep iterating — last row = most recent order
 
     service_match = None
     for row in service_rows:
-        if (row.get("Student Name") or "").strip().lower() == confirmed_lower:
-            service_match = row
+        if clean(row.get("Student Name") or "").lower() == confirmed_lower:
+            service_match = row  # keep iterating — last row = most recent order
 
     # Pull all fields
     def val(row, *keys):
