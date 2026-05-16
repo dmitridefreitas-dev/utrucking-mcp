@@ -81,7 +81,7 @@
       <input id="loginPass" type="password" placeholder="Password" class="w-full" style="padding:.5rem .75rem;font-size:.875rem;" onkeydown="if(event.key==='Enter')doLogin()"/>
     </div>
     <button onclick="doLogin()" style="width:100%;background:#2563eb;color:#fff;border:none;border-radius:.5rem;padding:.6rem;font-size:.875rem;font-weight:600;cursor:pointer;">Sign In</button>
-    <div id="loginErr" class="text-xs mt-3 text-center hidden" style="color:#ef4444;">Incorrect username or password.</div>
+    <div id="loginErr" class="text-xs mt-3 text-center hidden" style="color:#dc2626;">Incorrect username or password.</div>
   </div>
 </div>
 
@@ -494,7 +494,7 @@ const SID = '1ZoRH8OENK_wnKUeHvUc7eqytzuu2lMzaVvsPLJyvvng';
 const GIDs = {storage:'529044027',transit:'2098223117',manifest:'1586199848',vault:'1784822441',invoices:'201526587',events:'1549495149',audit:'2085245455',submissions:'543675645',pricing:'580278291'};
 const DISPATCH_SID = '1x5MQbsCFMJX5eafA6uoFF0nU4qfvCaK-2EyZNPs__kM';
 const DISPATCH_GID = '602263013';
-const P = ['#f97316','#3b82f6','#22c55e','#a855f7','#eab308','#ec4899','#14b8a6','#ef4444','#64748b','#f59e0b','#06b6d4','#84cc16'];
+const P = ['#2563eb','#0891b2','#059669','#d97706','#dc2626','#475569','#1d4ed8','#0f766e','#92400e','#991b1b','#334155','#1e40af'];
 
 Chart.defaults.color = '#475569';
 Chart.defaults.borderColor = '#bfdbfe';
@@ -666,14 +666,14 @@ function renderKPIs(data) {
   const manifItems = D.manifest.reduce((s,r) => s + (parseInt(r['Qty'])||0), 0);
 
   const kpis = [
-    {l:'Total Orders', v:fmtN(data.length), sub:`${fmtN(D.storage.length)} storage · ${fmtN(D.transit.length)} transit`, c:'#f97316'},
-    {l:'Total Revenue', v:usd(totalRev), sub:`${fmtN(lines.length)} line items`, c:'#22c55e'},
+    {l:'Total Orders', v:fmtN(data.length), sub:`${fmtN(D.storage.length)} storage · ${fmtN(D.transit.length)} transit`, c:'#2563eb'},
+    {l:'Total Revenue', v:usd(totalRev), sub:`${fmtN(lines.length)} line items`, c:'#059669'},
     {l:'Completed', v:fmtN(complete), sub:data.length?Math.round(complete/data.length*100)+'% of orders':'—', c:'#3b82f6'},
-    {l:'Vault Slots', v:vTotal?Math.round(vOcc/vTotal*100)+'%':'—', sub:`${fmtN(vOcc)}/${fmtN(vTotal)} occupied`, c:'#a855f7'},
-    {l:'Issues', v:fmtN(issues), sub:'orders with notes', c:issues>0?'#ef4444':'#94a3b8'},
-    {l:'Audit Pass', v:auditRows.length?Math.round(auditPass/auditRows.length*100)+'%':'—', sub:`${fmtN(auditPass)}/${fmtN(auditRows.length)} audited`, c:'#eab308'},
-    {l:'MRR (Manifest)', v:usd(mrr,0), sub:'from stored items', c:'#14b8a6'},
-    {l:'Items Stored', v:fmtN(manifItems), sub:`${fmtN(D.manifest.length)} manifest rows`, c:'#ec4899'},
+    {l:'Vault Slots', v:vTotal?Math.round(vOcc/vTotal*100)+'%':'—', sub:`${fmtN(vOcc)}/${fmtN(vTotal)} occupied`, c:'#0891b2'},
+    {l:'Issues', v:fmtN(issues), sub:'orders with notes', c:issues>0?'#dc2626':'#94a3b8'},
+    {l:'Audit Pass', v:auditRows.length?Math.round(auditPass/auditRows.length*100)+'%':'—', sub:`${fmtN(auditPass)}/${fmtN(auditRows.length)} audited`, c:'#d97706'},
+    {l:'MRR (Manifest)', v:usd(mrr,0), sub:'from stored items', c:'#0891b2'},
+    {l:'Items Stored', v:fmtN(manifItems), sub:`${fmtN(D.manifest.length)} manifest rows`, c:'#475569'},
   ];
 
   document.getElementById('kpiStrip').innerHTML = kpis.map(k => `
@@ -771,14 +771,14 @@ function renderCalendar(data) {
       ${weeks.map(w=>`<div class="flex flex-col gap-1">
         ${w.map(d=>{
           const intensity = Math.round(d.count/max*4);
-          const colors = ['var(--bg2)','#7c2d12','#c2410c','#ea580c','#f97316'];
+          const colors = ['var(--bg2)','#bfdbfe','#60a5fa','#2563eb','#1d4ed8'];
           return `<div class="cal-cell" style="background:${colors[intensity]};" title="${d.label}: ${d.count} orders"></div>`;
         }).join('')}
       </div>`).join('')}
     </div>
     <div class="flex items-center gap-2 mt-2 text-xs" style="color:var(--t3);">
       <span>Less</span>
-      ${['var(--bg2)','#7c2d12','#c2410c','#ea580c','#f97316'].map(c=>`<span class="w-3 h-3 rounded inline-block" style="background:${c};"></span>`).join('')}
+      ${['var(--bg2)','#bfdbfe','#60a5fa','#2563eb','#1d4ed8'].map(c=>`<span class="w-3 h-3 rounded inline-block" style="background:${c};"></span>`).join('')}
       <span>More</span>
     </div>`;
 }
@@ -817,7 +817,7 @@ function renderTable() {
     ${OCOLS.map(c=>{
       const val=r[c]||'—';
       if(c==='Dispatch Status') return `<td class="px-3 py-2">${sBadge(val)}</td>`;
-      if(c==='Total $') return `<td class="px-3 py-2 text-right" style="color:#22c55e;font-weight:500;">${val}</td>`;
+      if(c==='Total $') return `<td class="px-3 py-2 text-right" style="color:#059669;font-weight:500;">${val}</td>`;
       return `<td class="px-3 py-2 whitespace-nowrap" style="color:var(--t1);">${val}</td>`;
     }).join('')}
   </tr>`).join('');
@@ -922,7 +922,7 @@ function renderStudentTable() {
     <td class="px-3 py-2" style="color:var(--t2);">${[...s.services].join(', ')||'—'}</td>
     <td class="px-3 py-2 text-right" style="color:var(--t1);">${s.orders}</td>
     <td class="px-3 py-2 text-right" style="color:var(--t1);">${s.items}</td>
-    <td class="px-3 py-2 text-right" style="color:#22c55e;">${s.revenue>0?'$'+s.revenue.toFixed(2):'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:#059669;">${s.revenue>0?'$'+s.revenue.toFixed(2):'—'}</td>
     <td class="px-3 py-2">${sBadge(s.status||'—')}</td>
   </tr>`).join('');
   initTableSort(document.getElementById('stuTable'));
@@ -967,10 +967,10 @@ function renderOperations(data) {
   const totalKits = dRows.reduce((s,r)=>s+(parseInt(r.Kits)||0),0);
   const trucks = [...new Set(dWithTruck.map(r=>r.Truck))].length;
   document.getElementById('opsKPIs').innerHTML=[
-    {l:'Total Orders',v:fmtN(dRows.length),sub:'in dispatch sheet',c:'#f97316'},
+    {l:'Total Orders',v:fmtN(dRows.length),sub:'in dispatch sheet',c:'#2563eb'},
     {l:'Assigned to Truck',v:fmtN(dWithTruck.length),sub:`${trucks} trucks active`,c:'#3b82f6'},
-    {l:'Total Kits',v:fmtN(totalKits),sub:'kits required',c:'#22c55e'},
-    {l:'Time Slots Scheduled',v:fmtN(dWithSlot.length),sub:'orders with a time',c:'#a855f7'},
+    {l:'Total Kits',v:fmtN(totalKits),sub:'kits required',c:'#059669'},
+    {l:'Time Slots Scheduled',v:fmtN(dWithSlot.length),sub:'orders with a time',c:'#0891b2'},
   ].map(k=>`<div class="kpi card p-3"><div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold mb-0.5" style="color:${k.c};">${k.v}</div><div class="text-xs" style="color:var(--t3);">${k.sub}</div></div>`).join('');
 
   // Time slot distribution
@@ -1066,10 +1066,10 @@ function renderRevenue() {
   const totalSur = lines.reduce((s,r)=>s+pm(r['Surcharge']||'0'),0);
   const uOrd = [...new Set(lines.map(r=>r['Order Number']))].length;
   document.getElementById('revKPIs').innerHTML = [
-    {l:'Total Revenue',    v:usd(totalRev), c:'#22c55e'},
-    {l:'Total Surcharges', v:usd(totalSur), c:'#eab308'},
+    {l:'Total Revenue',    v:usd(totalRev), c:'#059669'},
+    {l:'Total Surcharges', v:usd(totalSur), c:'#d97706'},
     {l:'Invoiced Orders',  v:fmtN(uOrd), c:'#3b82f6'},
-    {l:'Avg Order Value',  v:usd(uOrd?totalRev/uOrd:0), c:'#f97316'},
+    {l:'Avg Order Value',  v:usd(uOrd?totalRev/uOrd:0), c:'#2563eb'},
   ].map(k=>`<div class="kpi card p-3"><div class="text-xs uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold" style="color:${k.c};">${k.v}</div></div>`).join('');
 
   document.getElementById('invBody').innerHTML = lines.slice(0,200).map(r=>`<tr>
@@ -1079,8 +1079,8 @@ function renderRevenue() {
     <td class="px-3 py-2" style="color:var(--t1);">${r['Item Type']||'—'}</td>
     <td class="px-3 py-2 text-right" style="color:var(--t2);">${r['Qty']||'—'}</td>
     <td class="px-3 py-2 text-right" style="color:var(--t2);">${r['Unit Price']||'—'}</td>
-    <td class="px-3 py-2 text-right font-medium" style="color:#22c55e;">${r['Line Total']||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:#eab308;">${r['Surcharge']&&r['Surcharge']!=='$0.00'?r['Surcharge']:'—'}</td>
+    <td class="px-3 py-2 text-right font-medium" style="color:#059669;">${r['Line Total']||'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:#d97706;">${r['Surcharge']&&r['Surcharge']!=='$0.00'?r['Surcharge']:'—'}</td>
   </tr>`).join('');
 }
 
@@ -1133,10 +1133,10 @@ function renderForecast() {
     {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+fmtN(v)}}}});
 
   document.getElementById('fcKPIs').innerHTML = [
-    {l:'Monthly Recurring Rev', v:usd(totalMRR), c:'#22c55e'},
+    {l:'Monthly Recurring Rev', v:usd(totalMRR), c:'#059669'},
     {l:'Projected Seasonal',    v:usd(annualRev), c:'#3b82f6'},
-    {l:'Pending Orders',        v:fmtN(pending)+' orders', c:'#eab308'},
-    {l:'Invoiced Revenue',      v:usd(totalRev), c:'#f97316'},
+    {l:'Pending Orders',        v:fmtN(pending)+' orders', c:'#d97706'},
+    {l:'Invoiced Revenue',      v:usd(totalRev), c:'#2563eb'},
   ].map(k=>`<div class="kpi card p-3"><div class="text-xs uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold" style="color:${k.c};">${k.v}</div></div>`).join('');
 }
 
@@ -1177,7 +1177,7 @@ function renderManifest() {
     <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r['Item']||'—'}</td>
     <td class="px-3 py-2" style="color:var(--t2);">${r['Size']||'—'}</td>
     <td class="px-3 py-2 text-right" style="color:var(--t1);">${r['Qty']||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:#22c55e;">${r['Unit $/mo']?'$'+r['Unit $/mo']:'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:#059669;">${r['Unit $/mo']?'$'+r['Unit $/mo']:'—'}</td>
     <td class="px-3 py-2" style="color:var(--t2);">${r['Vault Location']||'—'}</td>
     <td class="px-3 py-2">${r['Checked?']==='TRUE'?'<span class="badge b-g">✓</span>':'<span class="badge b-gray">—</span>'}</td>
   </tr>`).join('');
@@ -1335,10 +1335,10 @@ function renderOptimization() {
 
   // KPIs
   document.getElementById('optKPIs').innerHTML=[
-    {l:'Revenue / Building Stop',v:usd(revPerStop),sub:`${fmtN(uniqueBuildings)} buildings served`,c:'#22c55e'},
+    {l:'Revenue / Building Stop',v:usd(revPerStop),sub:`${fmtN(uniqueBuildings)} buildings served`,c:'#059669'},
     {l:'Items in Storage',v:fmtN(totalItems),sub:`${fmtN(D.manifest.length)} manifest rows`,c:'#3b82f6'},
-    {l:'Issue Rate',v:issueRate+'%',sub:`${fmtN(issueCount)} flagged orders`,c:issueRate>10?'#ef4444':'#94a3b8'},
-    {l:'Monthly Storage Revenue',v:usd(mrrTotal,0),sub:'from manifest items',c:'#f97316'},
+    {l:'Issue Rate',v:issueRate+'%',sub:`${fmtN(issueCount)} flagged orders`,c:issueRate>10?'#dc2626':'#94a3b8'},
+    {l:'Monthly Storage Revenue',v:usd(mrrTotal,0),sub:'from manifest items',c:'#2563eb'},
   ].map(k=>`<div class="kpi card p-3"><div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold mb-0.5" style="color:${k.c};">${k.v}</div><div class="text-xs" style="color:var(--t3);">${k.sub}</div></div>`).join('');
 
   // Revenue per order by building (from invoices × order lookup)
@@ -1399,19 +1399,19 @@ function renderOptimization() {
 
   // Smart recommendations
   const recs=[];
-  if(issueRate>10) recs.push({i:'🔧',c:'#ef4444',t:'High Issue Rate',b:`${issueRate}% of orders are flagged. Review dispatch notes for common patterns.`});
+  if(issueRate>10) recs.push({i:'🔧',c:'#dc2626',t:'High Issue Rate',b:`${issueRate}% of orders are flagged. Review dispatch notes for common patterns.`});
   if(priceEntries.length>0){
     const underpriced=priceEntries.filter(([,s])=>s.qty>5&&s.price>0&&s.price<15).sort((a,b)=>b[1].qty-a[1].qty);
-    if(underpriced.length>0) recs.push({i:'📈',c:'#f97316',t:'Pricing Opportunity',b:`"${underpriced[0][0]}" has ${fmtN(underpriced[0][1].qty)} units at only ${usd(underpriced[0][1].price,0)}/mo — consider a price increase.`});
+    if(underpriced.length>0) recs.push({i:'📈',c:'#d97706',t:'Pricing Opportunity',b:`"${underpriced[0][0]}" has ${fmtN(underpriced[0][1].qty)} units at only ${usd(underpriced[0][1].price,0)}/mo — consider a price increase.`});
     const topItem=priceEntries[0];
-    recs.push({i:'💰',c:'#22c55e',t:'Top Revenue Item',b:`"${topItem[0]}" drives ${usd(topItem[1].rev,0)}/mo (${fmtN(topItem[1].qty)} units × ${usd(topItem[1].price,0)}/mo). Protect this category.`});
+    recs.push({i:'💰',c:'#059669',t:'Top Revenue Item',b:`"${topItem[0]}" drives ${usd(topItem[1].rev,0)}/mo (${fmtN(topItem[1].qty)} units × ${usd(topItem[1].price,0)}/mo). Protect this category.`});
   }
   if(density.length>0){
     recs.push({i:'🏠',c:'#3b82f6',t:'Best Stop Efficiency',b:`${density[0].b} averages ${fmtN(density[0].v,1)} items/order — prioritize in routing for max efficiency.`});
     if(density.length>1){const worst=density[density.length-1]; if(worst.v<density[0].v*0.4) recs.push({i:'📍',c:'#94a3b8',t:'Low-Density Building',b:`${worst.b} averages only ${fmtN(worst.v,1)} items/order. Batch pickups or set a minimum order.`});}
   }
-  if(revPerOrd.length>0) recs.push({i:'🏆',c:'#a855f7',t:'Highest-Value Building',b:`${revPerOrd[0].b} generates ${usd(revPerOrd[0].v)} avg revenue per order — your most profitable building.`});
-  if(recs.length===0) recs.push({i:'✅',c:'#22c55e',t:'All Good',b:'No optimization gaps detected with current data.'});
+  if(revPerOrd.length>0) recs.push({i:'🏆',c:'#0891b2',t:'Highest-Value Building',b:`${revPerOrd[0].b} generates ${usd(revPerOrd[0].v)} avg revenue per order — your most profitable building.`});
+  if(recs.length===0) recs.push({i:'✅',c:'#059669',t:'All Good',b:'No optimization gaps detected with current data.'});
 
   document.getElementById('optRecommendations').innerHTML=recs.map(r=>`
     <div class="rounded-lg p-4" style="background:var(--bg2);">
@@ -1445,9 +1445,9 @@ function renderAlertBanner(data) {
 function renderSeasonProgress(data) {
   const m = new Date().getMonth()+1;
   const phases = [
-    {n:'Spring Pickup', active:m>=3&&m<=5, c:'#22c55e', pct:m===3?20:m===4?60:m===5?90:100},
+    {n:'Spring Pickup', active:m>=3&&m<=5, c:'#059669', pct:m===3?20:m===4?60:m===5?90:100},
     {n:'Summer Storage', active:m>=6&&m<=7, c:'#3b82f6', pct:m===6?40:m===7?80:m>7?100:0},
-    {n:'Fall Delivery', active:m>=8&&m<=9, c:'#f97316', pct:m===8?40:m===9?85:m>9?100:0},
+    {n:'Fall Delivery', active:m>=8&&m<=9, c:'#d97706', pct:m===8?40:m===9?85:m>9?100:0},
   ];
   const cur = phases.find(p=>p.active) || {n:'Off Season', c:'#64748b', pct:0};
   const complete = data.filter(r=>r['Dispatch Status']==='Complete').length;
@@ -1497,7 +1497,7 @@ function quickLookup(q) {
         <div style="color:var(--t3);">Building <span style="color:var(--t1);font-weight:500;">${r.Building||dRow.Building||'—'}</span></div>
         <div style="color:var(--t3);">Room <span style="color:var(--t1);font-weight:500;">${r.Room||dRow.Room||'—'}</span></div>
         <div style="color:var(--t3);">Items <span style="color:var(--acc);font-weight:500;">${fmtN(r['Item Count']||0)}</span></div>
-        <div style="color:var(--t3);">Total <span style="color:#22c55e;font-weight:500;">${total>0?usd(total):'Pending'}</span></div>
+        <div style="color:var(--t3);">Total <span style="color:#059669;font-weight:500;">${total>0?usd(total):'Pending'}</span></div>
         ${phone?`<div style="color:var(--t3);">Phone <span style="color:var(--t1);font-weight:500;">${phone}</span></div>`:''}
         ${slot?`<div style="color:var(--t3);">Time <span style="color:var(--t1);font-weight:500;">${slot}</span></div>`:''}
         ${truck?`<div style="color:var(--t3);">Truck <span style="color:var(--acc);font-weight:500;">${truck}</span></div>`:''}
@@ -1517,7 +1517,7 @@ function renderDispatch(data) {
   const STATUS_ORDER = ['Not Dispatched','Queued','In Progress','Dispatched','Complete','Completed'];
   const allStatuses = [...new Set(src.map(r=>getStatus(r)))];
   const cols = [...STATUS_ORDER.filter(s=>allStatuses.includes(s)), ...allStatuses.filter(s=>!STATUS_ORDER.includes(s))];
-  const colors = {'Not Dispatched':'#64748b',Queued:'#eab308','In Progress':'#3b82f6',Dispatched:'#3b82f6',Complete:'#22c55e',Completed:'#22c55e'};
+  const colors = {'Not Dispatched':'#64748b',Queued:'#d97706','In Progress':'#3b82f6',Dispatched:'#3b82f6',Complete:'#059669',Completed:'#059669'};
   const groups = {};
   cols.forEach(s=>groups[s]=[]);
   src.forEach(r=>{const s=getStatus(r);if(!groups[s])groups[s]=[];groups[s].push(r);});
@@ -1547,7 +1547,7 @@ function renderDispatch(data) {
           const slot=r['Time Slot']||'';
           const truck=r.Truck||'';
           const kits=r.Kits||r['Item Count']||'';
-          return `<div class="order-card card p-3" style="border-color:${hasIssue?'#ef4444':'var(--bd)'};">
+          return `<div class="order-card card p-3" style="border-color:${hasIssue?'#dc2626':'var(--bd)'};">
             <div class="flex items-start justify-between gap-1 mb-1">
               <span class="text-xs font-semibold leading-tight" style="color:var(--t1);">${r.Student||'—'}</span>
               ${hasIssue?'<span class="badge b-r flex-shrink-0" style="font-size:9px;">!</span>':''}
@@ -1729,7 +1729,7 @@ function renderRentals() {
   const bMap = {};
   base.forEach(r=>{const b=(r.Building||'').trim();if(b) bMap[b]=(bMap[b]||0)+1;});
   const topB = Object.entries(bMap).sort((a,b)=>b[1]-a[1]).slice(0,15);
-  mk('c-rentalBuildings','bar',topB.map(e=>e[0].trim()),[{data:topB.map(e=>e[1]),backgroundColor:'#f97316',borderRadius:3,maxBarThickness:18}],{
+  mk('c-rentalBuildings','bar',topB.map(e=>e[0].trim()),[{data:topB.map(e=>e[1]),backgroundColor:'#2563eb',borderRadius:3,maxBarThickness:18}],{
     indexAxis:'y',
     plugins:{legend:{display:false}},
     scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
@@ -1863,7 +1863,7 @@ function renderHistory(resetFilters) {
 
   // Top buildings
   const topB=Object.entries(bldgCts).sort((a,b)=>b[1]-a[1]).slice(0,15);
-  mk('c-histBuildings','bar',topB.map(e=>e[0].trim()),[{data:topB.map(e=>e[1]),backgroundColor:'#f97316',borderRadius:3,maxBarThickness:16}],{
+  mk('c-histBuildings','bar',topB.map(e=>e[0].trim()),[{data:topB.map(e=>e[1]),backgroundColor:'#2563eb',borderRadius:3,maxBarThickness:16}],{
     indexAxis:'y',plugins:{legend:{display:false}},
     scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
   });
