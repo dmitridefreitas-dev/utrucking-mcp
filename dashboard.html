@@ -132,6 +132,7 @@
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('vault',this)">Vault & Items</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('audit',this)">Audit & Events</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('optimization',this)">⚡ Optimization</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('rentals',this)">📦 Rentals</button>
   </div>
 </div>
 
@@ -394,6 +395,37 @@
   </div>
 </div>
 
+<!-- RENTALS -->
+<div id="tab-rentals" class="tab-panel hidden">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <div>
+      <div class="font-semibold text-base" style="color:var(--t1);">📦 Appliance Rental Returns</div>
+      <div class="text-xs" style="color:var(--t3);">Mini fridges, microwaves &amp; appliance return orders</div>
+    </div>
+    <div class="flex gap-2 items-center no-print">
+      <span class="text-xs" style="color:var(--t3);">Year:</span>
+      <select id="rentalYear" onchange="renderRentals()" class="text-xs">
+        <option value="all">All Years</option>
+      </select>
+    </div>
+  </div>
+  <div id="rentalKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Product Mix</div><div class="chart-hm"><canvas id="c-rentalProducts"></canvas></div></div>
+    <div class="card p-4 lg:col-span-2"><div class="label">Returns by Month</div><div class="chart-hm"><canvas id="c-rentalByMonth"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Top Buildings</div><div style="position:relative;height:320px;"><canvas id="c-rentalBuildings"></canvas></div></div>
+    <div class="card overflow-hidden">
+      <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
+        <span class="label" style="margin-bottom:0;">Returns Schedule</span>
+        <input id="rentalSearch" oninput="renderRentals()" placeholder="Search student or building…" class="text-xs w-44"/>
+      </div>
+      <div id="rentalUpcoming" style="max-height:320px;overflow-y:auto;"></div>
+    </div>
+  </div>
+</div>
+
 </div><!-- end panels -->
 
 <!-- FULLSCREEN MODAL -->
@@ -432,6 +464,15 @@ async function fetchSheet(gid) {
   return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
 }
 
+async function fetchRentalCSV() {
+  try {
+    const r = await fetch('./ORDERS%20-%20Rental%20Returns.csv');
+    if (!r.ok) return [];
+    const t = await r.text();
+    return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
+  } catch(e) { return []; }
+}
+
 async function fetchDispatchSheet() {
   const r = await fetch(`https://docs.google.com/spreadsheets/d/${DISPATCH_SID}/export?format=csv&gid=${DISPATCH_GID}`);
   const t = await r.text();
@@ -442,14 +483,16 @@ async function fetchDispatchSheet() {
 async function loadAll() {
   document.getElementById('loadBar').style.display = 'block';
   try {
-    const [analyticsResults, dispatchRows] = await Promise.all([
+    const [analyticsResults, dispatchRows, rentalRows] = await Promise.all([
       Promise.all(Object.values(GIDs).map(g => fetchSheet(g))),
-      fetchDispatchSheet()
+      fetchDispatchSheet(),
+      fetchRentalCSV()
     ]);
     const keys = Object.keys(GIDs);
     keys.forEach((k,i) => D[k] = analyticsResults[i]);
     D.all = [...D.storage, ...D.transit].filter(r => r['Order Number']);
     D.dispatch = dispatchRows;
+    D.rentals = rentalRows;
     // Build lookup map: order ID (no #) → dispatch row
     D.dispatchMap = {};
     dispatchRows.forEach(r => {
@@ -525,6 +568,7 @@ function renderAll() {
   renderVault();
   renderAudit();
   renderOptimization();
+  renderRentals();
 }
 
 // ── KPIs ───────────────────────────────────────────────────────────
@@ -1425,6 +1469,117 @@ function renderTodaysRun(data) {
         </div>
       </div>`;
     }).join('');
+}
+
+// ── RENTALS ────────────────────────────────────────────────────────
+function renderRentals() {
+  const rows = D.rentals || [];
+
+  function parseRD(s) {
+    if (!s) return null;
+    const p = s.split('/');
+    if (p.length < 3) return null;
+    const [m,d,y] = p.map(Number);
+    if (!m||!d||!y) return null;
+    return new Date(y, m-1, d);
+  }
+
+  function prodType(name) {
+    return (name||'').replace(/^Appliance Rental Return,\s*/i,'').replace(/(\s*-\s*)+\s*$/,'').trim() || 'Unknown';
+  }
+
+  // Populate year selector once
+  const ys = document.getElementById('rentalYear');
+  if (ys && ys.options.length <= 1) {
+    const years = [...new Set(rows.map(r=>{const d=parseRD(r['Event Date']);return d?d.getFullYear():null;}).filter(Boolean))].sort((a,b)=>b-a);
+    years.forEach(y=>{const o=document.createElement('option');o.value=y;o.textContent=y+(y===new Date().getFullYear()?' (current)':'');ys.appendChild(o);});
+    // Default to current year if available
+    const cy = String(new Date().getFullYear());
+    if ([...ys.options].some(o=>o.value===cy)) ys.value = cy;
+  }
+
+  const selYear = ys?.value || 'all';
+  const q = (document.getElementById('rentalSearch')?.value||'').toLowerCase();
+
+  let filtered = selYear === 'all' ? rows : rows.filter(r=>{const d=parseRD(r['Event Date']);return d&&d.getFullYear()===+selYear;});
+  if (q) filtered = filtered.filter(r=>(r['Student Name']||r['Client Name']||'').toLowerCase().includes(q)||(r.Building||'').toLowerCase().includes(q)||(r['Order Number']||'').toLowerCase().includes(q));
+
+  // KPIs
+  const total = filtered.length;
+  const uniq = new Set(filtered.map(r=>(r['Student Name']||r['Client Name']||'').trim().toLowerCase())).size;
+  const bldgs = new Set(filtered.map(r=>(r.Building||'').trim()).filter(Boolean)).size;
+  const prodCts = {};
+  filtered.forEach(r=>{const p=prodType(r['Product Name']);prodCts[p]=(prodCts[p]||0)+1;});
+  const topProd = Object.entries(prodCts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
+
+  document.getElementById('rentalKPIs').innerHTML = [
+    {label:'Total Returns', val:fmtN(total), icon:'📦'},
+    {label:'Unique Students', val:fmtN(uniq), icon:'👤'},
+    {label:'Buildings', val:fmtN(bldgs), icon:'🏢'},
+    {label:'Top Product', val:topProd.length>22?topProd.slice(0,22)+'…':topProd, icon:'🏆'},
+  ].map(k=>`<div class="kpi card p-3"><div class="text-xs mb-1" style="color:var(--t3);">${k.icon} ${k.label}</div><div class="text-xl font-bold truncate" style="color:var(--t1);">${k.val}</div></div>`).join('');
+
+  // Product donut
+  const pLabels = Object.keys(prodCts).sort((a,b)=>prodCts[b]-prodCts[a]);
+  mk('c-rentalProducts','doughnut',pLabels,[{data:pLabels.map(p=>prodCts[p]),backgroundColor:P,borderWidth:0}],{plugins:{legend:{position:'right',labels:{boxWidth:10,font:{size:10}}}}});
+
+  // Returns by month (use full filtered set for month aggregation, not search-filtered)
+  let base = selYear === 'all' ? rows : rows.filter(r=>{const d=parseRD(r['Event Date']);return d&&d.getFullYear()===+selYear;});
+  const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mMap = {};
+  base.forEach(r=>{
+    const d=parseRD(r['Event Date']);
+    if(!d) return;
+    const k=`${MN[d.getMonth()]} ${d.getFullYear()}`;
+    mMap[k]=(mMap[k]||0)+1;
+  });
+  // Sort chronologically
+  const mEntries = Object.entries(mMap).sort((a,b)=>{
+    const [am,ay]=a[0].split(' '); const [bm,by]=b[0].split(' ');
+    return (+ay-+by)||(MN.indexOf(am)-MN.indexOf(bm));
+  });
+  mk('c-rentalByMonth','bar',mEntries.map(e=>e[0]),[{data:mEntries.map(e=>e[1]),backgroundColor:'#3b82f6',borderRadius:4,maxBarThickness:28}],{
+    plugins:{legend:{display:false}},
+    scales:{x:{grid:{color:'var(--bd)'}},y:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}}}
+  });
+
+  // Top buildings horizontal bar
+  const bMap = {};
+  base.forEach(r=>{const b=(r.Building||'').trim();if(b) bMap[b]=(bMap[b]||0)+1;});
+  const topB = Object.entries(bMap).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  mk('c-rentalBuildings','bar',topB.map(e=>e[0].trim()),[{data:topB.map(e=>e[1]),backgroundColor:'#f97316',borderRadius:3,maxBarThickness:18}],{
+    indexAxis:'y',
+    plugins:{legend:{display:false}},
+    scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
+  });
+
+  // Returns schedule table (search-filtered, sorted by date)
+  const tableRows = filtered
+    .map(r=>({...r,_d:parseRD(r['Event Date'])}))
+    .filter(r=>r._d)
+    .sort((a,b)=>a._d-b._d)
+    .slice(0,100);
+
+  document.getElementById('rentalUpcoming').innerHTML = tableRows.length === 0
+    ? `<div class="p-6 text-center text-xs" style="color:var(--t3);">No returns match the current filter.</div>`
+    : `<table class="w-full text-xs">
+        <thead style="background:var(--bg2);position:sticky;top:0;"><tr>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Date</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+          <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Building</th>
+          <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Room</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Product</th>
+        </tr></thead>
+        <tbody class="divide-y" style="border-color:var(--bd);">
+          ${tableRows.map(r=>`<tr>
+            <td class="px-3 py-2 font-medium" style="color:var(--acc);">${r['Event Date']||'—'}</td>
+            <td class="px-3 py-2" style="color:var(--t1);">${(r['Student Name']||r['Client Name']||'').trim()||'—'}</td>
+            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${(r.Building||'').trim()||'—'}</td>
+            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r['Room Number']||'—'}</td>
+            <td class="px-3 py-2" style="color:var(--t2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${prodType(r['Product Name'])}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
 }
 
 // ── LOGIN ──────────────────────────────────────────────────────────
