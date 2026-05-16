@@ -39,6 +39,18 @@
   input::placeholder{color:var(--t3);}
   .btn{background:var(--bg1);border:1px solid var(--bg2);color:var(--t2);border-radius:.5rem;padding:.375rem .75rem;font-size:.75rem;cursor:pointer;transition:background .15s;}
   .btn:hover{background:var(--bg2);}
+  .kanban-col{min-width:260px;flex:1;max-width:380px;}
+  .order-card{transition:border-color .15s,transform .1s;cursor:default;}.order-card:hover{transform:translateY(-1px);}
+  .season-bar{height:8px;border-radius:4px;background:var(--bg2);overflow:hidden;}
+  .season-fill{height:100%;border-radius:4px;transition:width .9s ease;}
+  .ql-result{animation:fadeIn .2s ease;}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+  @media(max-width:768px){
+    .hide-sm{display:none!important;}
+    .mobile-stack{flex-direction:column!important;}
+    .mobile-full{width:100%!important;}
+    table{font-size:11px;}
+  }
   @media print{.no-print{display:none!important;}.tab-panel{display:block!important;}}
 </style>
 </head>
@@ -75,15 +87,22 @@
       <div class="font-bold text-sm" style="color:var(--t1);">UTrucking Analytics</div>
       <div class="text-xs" style="color:var(--t3);">Master Operations Dashboard</div>
     </div>
-    <input id="globalSearch" oninput="handleGlobalSearch(this.value)" placeholder="🔍  Search any student or order..." class="w-64 text-xs"/>
-    <span id="countdown" class="text-xs px-2 py-1 rounded" style="color:var(--t3);background:var(--bg2);">↻ 5:00</span>
-    <button onclick="loadAll()" class="btn">↻ Refresh</button>
+    <input id="globalSearch" oninput="handleGlobalSearch(this.value)" placeholder="🔍  Search student or order…" class="text-xs" style="width:220px;" />
+    <span id="countdown" class="hide-sm text-xs px-2 py-1 rounded" style="color:var(--t3);background:var(--bg2);">↻ 5:00</span>
+    <button onclick="loadAll()" class="btn hide-sm">↻</button>
     <button onclick="toggleTheme()" class="btn" id="themeBtn">☀️</button>
-    <button onclick="window.print()" class="btn no-print">⬇ Print</button>
-    <span id="lastUpdated" class="text-xs" style="color:var(--t3);"></span>
+    <button onclick="window.print()" class="btn no-print hide-sm">⬇</button>
+    <span id="lastUpdated" class="hide-sm text-xs" style="color:var(--t3);"></span>
   </div>
 </div>
 <div id="loadBar" class="h-0.5 bg-orange-500 pulse" style="display:none;"></div>
+
+<!-- ALERT BANNER -->
+<div id="alertBanner" class="hidden no-print px-5 py-2 flex flex-wrap gap-2 items-center border-b" style="background:#7f1d1d;border-color:#991b1b;">
+  <span class="text-xs font-semibold" style="color:#fca5a5;">⚠ Needs attention:</span>
+  <div id="alertItems" class="flex flex-wrap gap-1.5 flex-1"></div>
+  <button onclick="document.getElementById('alertBanner').classList.add('hidden')" class="text-xs ml-2" style="color:#fca5a5;background:none;border:none;cursor:pointer;">✕</button>
+</div>
 
 <!-- KPI STRIP -->
 <div class="px-5 pt-4 pb-2">
@@ -102,7 +121,9 @@
 <!-- TAB NAV -->
 <div class="no-print px-5 border-b" style="border-color:var(--bd);">
   <div class="flex gap-0.5 overflow-x-auto">
-    <button class="tab-btn tab-active px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('overview',this)">Overview</button>
+    <button class="tab-btn tab-active px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('dispatch',this)">🚛 Dispatch</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('todaysrun',this)">📋 Today's Run</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('overview',this)">Overview</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('orders',this)">Orders</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('students',this)">Students</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('operations',this)">Operations</button>
@@ -116,8 +137,40 @@
 
 <div class="px-5 py-4">
 
+<!-- DISPATCH BOARD -->
+<div id="tab-dispatch" class="tab-panel">
+  <div class="mb-3 flex flex-wrap gap-3 items-start">
+    <div class="flex-1" style="min-width:260px;">
+      <div class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:var(--t3);">Quick Student Lookup</div>
+      <div class="flex gap-2">
+        <input id="qlInput" oninput="quickLookup(this.value)" placeholder="Type student name or order #…" class="flex-1" style="font-size:.8rem;"/>
+        <button onclick="document.getElementById('qlInput').value='';document.getElementById('qlResult').innerHTML=''" class="btn text-xs">✕</button>
+      </div>
+      <div id="qlResult" class="mt-2"></div>
+    </div>
+    <div id="dispatchSummary" class="flex gap-2 flex-wrap"></div>
+  </div>
+  <div id="kanban" class="flex gap-3 overflow-x-auto pb-3"></div>
+</div>
+
+<!-- TODAY'S RUN -->
+<div id="tab-todaysrun" class="tab-panel hidden">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <div>
+      <div class="font-bold text-base" id="todayDate" style="color:var(--t1);"></div>
+      <div class="text-xs" style="color:var(--t3);">Grouped by building — driver dispatch manifest</div>
+    </div>
+    <button onclick="window.print()" class="btn no-print">⬇ Print Manifest</button>
+  </div>
+  <div id="todaysRunContent"></div>
+</div>
+
 <!-- OVERVIEW -->
-<div id="tab-overview" class="tab-panel">
+<div id="tab-overview" class="tab-panel hidden">
+  <div class="card p-4 mb-3">
+    <div class="label">Season Progress</div>
+    <div id="seasonProgress"></div>
+  </div>
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
     <div class="card p-4"><div class="label">Service Mix</div><div class="chart-h"><canvas id="c-serviceMix"></canvas></div></div>
     <div class="card p-4"><div class="label">Dispatch Status</div><div class="chart-h"><canvas id="c-dispatchStatus"></canvas></div></div>
@@ -408,6 +461,10 @@ function clearFilters() {
 function renderAll() {
   const data = getGlobalData();
   renderKPIs(data);
+  renderAlertBanner(data);
+  renderDispatch(data);
+  renderTodaysRun(data);
+  renderSeasonProgress(data);
   renderOverview(data);
   renderOrdersTab(data);
   renderStudents(data);
@@ -1034,6 +1091,187 @@ function renderOptimization() {
         <div><div class="font-semibold text-sm mb-1" style="color:${r.c};">${r.t}</div><div class="text-xs leading-relaxed" style="color:var(--t2);">${r.b}</div></div>
       </div>
     </div>`).join('');
+}
+
+// ── ALERT BANNER ──────────────────────────────────────────────────
+function renderAlertBanner(data) {
+  const issues = data.filter(r=>(r['Issue Notes']||'').trim());
+  const failAudits = D.audit.filter(r=>r['Audit Verdict']==='FAIL');
+  const all = [
+    ...issues.map(r=>`${r.Student||r['Order Number']}: ${r['Issue Notes']}`),
+    ...failAudits.map(r=>`Audit FAIL — ${r['Order Number']}`)
+  ];
+  const banner = document.getElementById('alertBanner');
+  if(all.length>0){
+    document.getElementById('alertItems').innerHTML = all.slice(0,6).map(a=>
+      `<span class="badge" style="background:#991b1b;color:#fca5a5;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${a}</span>`
+    ).join('') + (all.length>6?`<span class="text-xs" style="color:#fca5a5;">+${all.length-6} more</span>`:'');
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+}
+
+// ── SEASON PROGRESS ────────────────────────────────────────────────
+function renderSeasonProgress(data) {
+  const m = new Date().getMonth()+1;
+  const phases = [
+    {n:'Spring Pickup', active:m>=3&&m<=5, c:'#22c55e', pct:m===3?20:m===4?60:m===5?90:100},
+    {n:'Summer Storage', active:m>=6&&m<=7, c:'#3b82f6', pct:m===6?40:m===7?80:m>7?100:0},
+    {n:'Fall Delivery', active:m>=8&&m<=9, c:'#f97316', pct:m===8?40:m===9?85:m>9?100:0},
+  ];
+  const cur = phases.find(p=>p.active) || {n:'Off Season', c:'#64748b', pct:0};
+  const complete = data.filter(r=>r['Dispatch Status']==='Complete').length;
+  const orderPct = data.length?Math.round(complete/data.length*100):0;
+
+  document.getElementById('seasonProgress').innerHTML = `
+    <div class="flex items-center gap-4 mb-3 flex-wrap">
+      <span class="badge" style="background:${cur.c}22;color:${cur.c};padding:3px 10px;font-size:12px;">${cur.n}</span>
+      <span class="text-sm font-bold" style="color:var(--t1);">${orderPct}% orders complete</span>
+      <span class="text-xs" style="color:var(--t3);">${fmtN(complete)} of ${fmtN(data.length)} dispatched</span>
+    </div>
+    <div class="flex gap-2 items-center mb-1">
+      ${phases.map(p=>`
+        <div class="flex-1">
+          <div class="text-xs mb-1 font-medium" style="color:${p.active?p.c:'var(--t3)'};">${p.n}</div>
+          <div class="season-bar"><div class="season-fill" style="width:${p.active?cur.pct:p.pct===100?100:0}%;background:${p.c};"></div></div>
+        </div>`).join('<div style="color:var(--t3);font-size:18px;margin-top:12px;">›</div>')}
+    </div>`;
+}
+
+// ── QUICK LOOKUP ───────────────────────────────────────────────────
+function quickLookup(q) {
+  q = (q||'').trim();
+  const el = document.getElementById('qlResult');
+  if(!q){el.innerHTML='';return;}
+  const matches=(D.all||[]).filter(r=>(r.Student||'').toLowerCase().includes(q.toLowerCase())||(r['Order Number']||'').toLowerCase().includes(q.toLowerCase()));
+  if(!matches.length){el.innerHTML=`<div class="text-xs py-2" style="color:var(--t3);">No results for "${q}"</div>`;return;}
+  el.innerHTML=`<div class="ql-result flex flex-col gap-2">`+matches.slice(0,4).map(r=>{
+    const inv=D.invoices.filter(i=>i['Order Number']===r['Order Number']&&i['Item Type']&&!i['Item Type'].includes('──')&&!i['Item Type'].includes('⚠️'));
+    const total=inv.reduce((s,i)=>s+pm(i['Line Total']),0);
+    const mRows=D.manifest.filter(m=>m['Order Number']===r['Order Number']);
+    const hasIssue=(r['Issue Notes']||'').trim();
+    return `<div class="order-card card p-3">
+      <div class="flex items-start justify-between gap-2 mb-2">
+        <div>
+          <div class="font-semibold text-sm" style="color:var(--t1);">${r.Student||'—'}</div>
+          <div class="text-xs" style="color:var(--t3);">${r['Order Number']} · ${r.Service||'—'}</div>
+        </div>
+        ${sBadge(r['Dispatch Status']||'—')}
+      </div>
+      <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-2">
+        <div style="color:var(--t3);">Building <span style="color:var(--t1);font-weight:500;">${r.Building||'—'}</span></div>
+        <div style="color:var(--t3);">Room <span style="color:var(--t1);font-weight:500;">${r.Room||'—'}</span></div>
+        <div style="color:var(--t3);">Items <span style="color:var(--acc);font-weight:500;">${fmtN(r['Item Count']||0)}</span></div>
+        <div style="color:var(--t3);">Total <span style="color:#22c55e;font-weight:500;">${total>0?usd(total):'Pending'}</span></div>
+      </div>
+      ${mRows.length?`<div class="text-xs mb-1" style="color:var(--t3);">Stored: ${mRows.map(m=>`${m.Qty||1}× ${m.Item}`).join(', ')}</div>`:''}
+      ${hasIssue?`<div class="text-xs p-2 rounded mt-1" style="background:#7f1d1d33;color:#fca5a5;">⚠ ${hasIssue}</div>`:''}
+    </div>`;
+  }).join('')+(matches.length>4?`<div class="text-xs" style="color:var(--t3);">+${matches.length-4} more — use Orders tab</div>`:'')+`</div>`;
+}
+
+// ── DISPATCH KANBAN ────────────────────────────────────────────────
+function renderDispatch(data) {
+  const STATUS_ORDER = ['Queued','In Progress','Complete'];
+  const allStatuses = [...new Set(data.map(r=>r['Dispatch Status']||'Unknown'))];
+  const cols = [...STATUS_ORDER.filter(s=>allStatuses.includes(s)), ...allStatuses.filter(s=>!STATUS_ORDER.includes(s))];
+  const colors = {Queued:'#eab308','In Progress':'#3b82f6',Complete:'#22c55e'};
+  const groups = {};
+  cols.forEach(s=>groups[s]=[]);
+  data.forEach(r=>{const s=r['Dispatch Status']||'Unknown';if(!groups[s])groups[s]=[];groups[s].push(r);});
+
+  // Summary chips
+  document.getElementById('dispatchSummary').innerHTML = cols.map(s=>{
+    const c=colors[s]||'#64748b';
+    return `<div class="card px-3 py-2 text-center" style="min-width:90px;">
+      <div class="text-xl font-bold" style="color:${c};">${fmtN(groups[s].length)}</div>
+      <div class="text-xs" style="color:var(--t3);">${s}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('kanban').innerHTML = cols.map(status=>{
+    const orders=groups[status]||[];
+    const c=colors[status]||'#64748b';
+    return `<div class="kanban-col">
+      <div class="flex items-center gap-2 mb-2 px-1">
+        <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${c};"></span>
+        <span class="text-xs font-semibold uppercase tracking-wide" style="color:${c};">${status}</span>
+        <span class="text-xs px-1.5 py-0.5 rounded-full font-bold" style="background:${c}22;color:${c};">${orders.length}</span>
+      </div>
+      <div class="flex flex-col gap-2">
+        ${orders.length===0?`<div class="card p-4 text-center text-xs" style="color:var(--t3);border-style:dashed;">No orders</div>`:''}
+        ${orders.slice(0,40).map(r=>{
+          const hasIssue=(r['Issue Notes']||'').trim();
+          return `<div class="order-card card p-3" style="border-color:${hasIssue?'#ef4444':'var(--bd)'};">
+            <div class="flex items-start justify-between gap-1 mb-1">
+              <span class="text-xs font-semibold leading-tight" style="color:var(--t1);">${r.Student||'—'}</span>
+              ${hasIssue?'<span class="badge b-r flex-shrink-0" style="font-size:9px;">!</span>':''}
+            </div>
+            <div class="text-xs mb-1" style="color:var(--t2);">${r.Building||'—'}${r.Room?' · '+r.Room:''}</div>
+            <div class="flex justify-between items-center">
+              <span class="text-xs" style="color:var(--t3);">${r.Service||'—'}</span>
+              <span class="text-xs font-medium" style="color:var(--acc);">${fmtN(r['Item Count']||0)} items</span>
+            </div>
+            ${hasIssue?`<div class="text-xs mt-1.5 p-1.5 rounded leading-tight" style="background:#7f1d1d33;color:#fca5a5;">${hasIssue}</div>`:''}
+          </div>`;
+        }).join('')}
+        ${orders.length>40?`<div class="text-xs text-center py-2 card p-2" style="color:var(--t3);">+${orders.length-40} more</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── TODAY'S RUN ────────────────────────────────────────────────────
+function renderTodaysRun(data) {
+  const today = new Date();
+  const todayStr = `${today.getMonth()+1}/${today.getDate()}/${today.getFullYear()}`;
+  document.getElementById('todayDate').textContent = today.toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  let orders = data.filter(r=>r['Pickup Date']===todayStr);
+  const isDateMatch = orders.length>0;
+  if(!isDateMatch) orders = data.filter(r=>r['Dispatch Status']==='Queued');
+  const byBuilding = {};
+  orders.forEach(r=>{const b=r.Building||'No Building';if(!byBuilding[b])byBuilding[b]=[];byBuilding[b].push(r);});
+  const buildings = Object.entries(byBuilding).sort((a,b)=>b[1].length-a[1].length);
+  document.getElementById('todaysRunContent').innerHTML =
+    (!isDateMatch&&orders.length>0?`<div class="text-xs px-3 py-2 rounded mb-3" style="background:var(--bg2);color:var(--t3);">No Pickup Date set for today — showing all Queued orders (${fmtN(orders.length)}).</div>`:'')+
+    (buildings.length===0?'<div class="card p-8 text-center text-xs" style="color:var(--t3);">No orders to show.</div>':'')+
+    buildings.map(([building,ords])=>{
+      const totalItems=ords.reduce((s,r)=>s+(parseInt(r['Item Count'])||0),0);
+      const issues=ords.filter(r=>(r['Issue Notes']||'').trim()).length;
+      return `<div class="card overflow-hidden mb-3">
+        <div class="px-4 py-3 flex items-center justify-between flex-wrap gap-2" style="background:var(--bg2);">
+          <div class="flex items-center gap-3 flex-wrap">
+            <span class="font-semibold" style="color:var(--t1);">${building}</span>
+            <span class="badge b-b">${fmtN(ords.length)} orders</span>
+            <span class="badge b-gray">${fmtN(totalItems)} items</span>
+            ${issues?`<span class="badge b-r">${issues} issue${issues>1?'s':''}</span>`:''}
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead style="background:var(--bg2);"><tr>
+              <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+              <th class="px-3 py-2 text-left" style="color:var(--t2);">Room</th>
+              <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Service</th>
+              <th class="px-3 py-2 text-right" style="color:var(--t2);">Items</th>
+              <th class="px-3 py-2 text-left" style="color:var(--t2);">Status</th>
+              <th class="px-3 py-2 text-left" style="color:var(--t2);">Notes</th>
+            </tr></thead>
+            <tbody class="divide-y" style="border-color:var(--bd);">
+              ${ords.map(r=>{const issue=(r['Issue Notes']||'').trim();return`<tr>
+                <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r.Student||'—'}</td>
+                <td class="px-3 py-2" style="color:var(--t2);">${r.Room||'—'}</td>
+                <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r.Service||'—'}</td>
+                <td class="px-3 py-2 text-right font-medium" style="color:var(--acc);">${fmtN(r['Item Count']||0)}</td>
+                <td class="px-3 py-2">${sBadge(r['Dispatch Status']||'—')}</td>
+                <td class="px-3 py-2 max-w-xs" style="color:${issue?'#fca5a5':'var(--t3)'};">${issue||'—'}</td>
+              </tr>`;}).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+    }).join('');
 }
 
 // ── LOGIN ──────────────────────────────────────────────────────────
