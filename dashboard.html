@@ -442,6 +442,8 @@
       <div class="text-xs" style="color:var(--t3);">All service types from ORDERS.xlsx</div>
     </div>
     <div class="flex gap-2 items-center no-print flex-wrap">
+      <span class="text-xs" style="color:var(--t3);">Sheet:</span>
+      <select id="histSheet" onchange="renderHistory(true)" class="text-xs"><option value="MAIN">All (MAIN)</option></select>
       <span class="text-xs" style="color:var(--t3);">Year:</span>
       <select id="histYear" onchange="renderHistory()" class="text-xs"><option value="all">All Years</option></select>
       <span class="text-xs" style="color:var(--t3);">Service:</span>
@@ -506,22 +508,31 @@ async function fetchSheet(gid) {
 async function fetchExcel() {
   try {
     const r = await fetch('./ORDERS.xlsx');
-    if (!r.ok) return [];
+    if (!r.ok) return {};
     const ab = await r.arrayBuffer();
     const wb = XLSX.read(ab, {type: 'array', cellDates: true});
-    const ws = wb.Sheets['MAIN'];
-    if (!ws) return [];
-    const rows = XLSX.utils.sheet_to_json(ws, {defval: ''});
-    return rows.map(row => {
-      const out = {};
-      for (const [k, v] of Object.entries(row)) {
-        out[k] = (v instanceof Date)
-          ? `${v.getMonth()+1}/${v.getDate()}/${v.getFullYear()}`
-          : v;
-      }
-      return out;
-    });
-  } catch(e) { console.error('Excel load error:', e); return []; }
+    const LOAD_SHEETS = [
+      'MAIN', 'Summer Storage', 'Home Shipping', 'NSTS', 'TSA', 'SIR',
+      'Study Abroad Storage', 'Leave of Absence Storage', 'General Moving Service',
+      'Spec Ops', 'Rentals', 'Rental Returns'
+    ];
+    const result = {};
+    for (const name of LOAD_SHEETS) {
+      const ws = wb.Sheets[name];
+      if (!ws) continue;
+      const rows = XLSX.utils.sheet_to_json(ws, {defval: ''});
+      result[name] = rows.map(row => {
+        const out = {};
+        for (const [k, v] of Object.entries(row)) {
+          out[k] = (v instanceof Date)
+            ? `${v.getMonth()+1}/${v.getDate()}/${v.getFullYear()}`
+            : v;
+        }
+        return out;
+      });
+    }
+    return result;
+  } catch(e) { console.error('Excel load error:', e); return {}; }
 }
 
 async function fetchRentalCSV() {
@@ -543,7 +554,7 @@ async function fetchDispatchSheet() {
 async function loadAll() {
   document.getElementById('loadBar').style.display = 'block';
   try {
-    const [analyticsResults, dispatchRows, rentalRows, mainRows] = await Promise.all([
+    const [analyticsResults, dispatchRows, rentalRows, xlData] = await Promise.all([
       Promise.all(Object.values(GIDs).map(g => fetchSheet(g))),
       fetchDispatchSheet(),
       fetchRentalCSV(),
@@ -554,7 +565,8 @@ async function loadAll() {
     D.all = [...D.storage, ...D.transit].filter(r => r['Order Number']);
     D.dispatch = dispatchRows;
     D.rentals = rentalRows;
-    D.main = mainRows;
+    D.xl = xlData;
+    D.main = xlData['MAIN'] || [];
     // Build lookup map: order ID (no #) → dispatch row
     D.dispatchMap = {};
     dispatchRows.forEach(r => {
@@ -1606,9 +1618,11 @@ function renderTodaysRun(data) {
 
 // ── RENTALS ────────────────────────────────────────────────────────
 function renderRentals() {
-  // Use MAIN data (Excel) if loaded, otherwise fall back to CSV
+  // Prefer dedicated Rental Returns / Rentals sheet, then fall back to MAIN filter, then CSV
   let rows;
-  if (D.main && D.main.length) {
+  if (D.xl && (D.xl['Rental Returns'] || D.xl['Rentals'])) {
+    rows = D.xl['Rental Returns'] || D.xl['Rentals'];
+  } else if (D.main && D.main.length) {
     rows = D.main.filter(r => {
       const p = (r['Product Name']||'').trim();
       return p === 'Appliance Rental Return' || p === 'Appliance Rental';
@@ -1735,14 +1749,32 @@ function histYear(r) {
 }
 function histSvc(r) { return (r['Product Name']||'').split('[')[0].trim()||'—'; }
 
-function renderHistory() {
-  const rows = D.main || [];
+function renderHistory(resetFilters) {
+  // Populate Sheet selector once
+  const sheetSel = document.getElementById('histSheet');
+  if (sheetSel && sheetSel.options.length <= 1 && D.xl) {
+    const sheetNames = Object.keys(D.xl).filter(n => n !== 'MAIN');
+    sheetNames.forEach(n => {
+      const o = document.createElement('option');
+      o.value = n; o.textContent = n;
+      sheetSel.appendChild(o);
+    });
+  }
+  const selSheet = sheetSel?.value || 'MAIN';
+  const rows = (D.xl && D.xl[selSheet]) ? D.xl[selSheet] : (D.main || []);
+
   if(!rows.length) {
     document.getElementById('histKPIs').innerHTML = '<div class="col-span-4 text-center py-8 text-xs" style="color:var(--t3);">ORDERS.xlsx loading… refresh in a moment.</div>';
     return;
   }
 
   const ys = document.getElementById('histYear');
+  // Reset year/service dropdowns when sheet changes
+  if(resetFilters) {
+    ys.innerHTML = '<option value="all">All Years</option>';
+    const ss2 = document.getElementById('histService');
+    if(ss2) ss2.innerHTML = '<option value="">All Services</option>';
+  }
   if(ys && ys.options.length <= 1) {
     const years=[...new Set(rows.map(histYear).filter(Boolean))].sort((a,b)=>b-a);
     years.forEach(y=>{const o=document.createElement('option');o.value=y;o.textContent=y;ys.appendChild(o);});
@@ -1814,7 +1846,8 @@ function renderHistory() {
 }
 
 function renderHistTable() {
-  const rows = D.main||[];
+  const selSheet = document.getElementById('histSheet')?.value || 'MAIN';
+  const rows = (D.xl && D.xl[selSheet]) ? D.xl[selSheet] : (D.main || []);
   const q=(document.getElementById('histSearch')?.value||'').toLowerCase();
   const selYear=document.getElementById('histYear')?.value||'all';
   const selSvc=document.getElementById('histService')?.value||'';
