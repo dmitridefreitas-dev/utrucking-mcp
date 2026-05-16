@@ -1570,17 +1570,37 @@ function renderDispatch(data) {
 
 // ── SHARE RUN CARD ─────────────────────────────────────────────────
 async function shareRunCard(cardEl) {
-  const btn = cardEl.querySelector('.no-capture');
-  if (btn) btn.style.visibility = 'hidden';
   try {
     const isDark = document.body.classList.contains('dark');
-    const canvas = await html2canvas(cardEl, {
+
+    // Clone off-screen with no overflow clipping so the full table renders
+    const clone = cardEl.cloneNode(true);
+    clone.style.cssText = 'position:absolute;left:-9999px;top:0;max-width:none;width:max-content;box-shadow:none;';
+    clone.querySelectorAll('.overflow-x-auto').forEach(d => {
+      d.style.overflow = 'visible';
+      d.style.width = 'auto';
+    });
+    clone.querySelector('.no-capture')?.remove();
+    document.body.appendChild(clone);
+
+    // Wait one frame for layout to settle
+    await new Promise(r => requestAnimationFrame(r));
+
+    const w = clone.scrollWidth;
+    const h = clone.scrollHeight;
+
+    const canvas = await html2canvas(clone, {
       backgroundColor: isDark ? '#1e293b' : '#ffffff',
       scale: 2,
       useCORS: true,
-      logging: false
+      logging: false,
+      width: w,
+      height: h,
+      windowWidth: w + 200
     });
-    if (btn) btn.style.visibility = '';
+
+    document.body.removeChild(clone);
+
     canvas.toBlob(async blob => {
       const ts = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'}).replace(' ','-');
       const file = new File([blob], `run-${ts}.png`, {type:'image/png'});
@@ -1593,8 +1613,8 @@ async function shareRunCard(cardEl) {
       }
     }, 'image/png');
   } catch(e) {
-    if (btn) btn.style.visibility = '';
     console.error('Share failed:', e);
+    alert('Could not share. Try screenshot instead.');
   }
 }
 
