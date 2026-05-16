@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>UTrucking — Reel</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{
+  width:100%;height:100%;overflow:hidden;background:#000;
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Helvetica Neue',sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* 9:16 container — full screen on phone, centred on desktop */
+.reel{
+  position:relative;
+  width:100%;height:100%;
+  max-width:calc(100vh * .5625);
+  margin:0 auto;
+  overflow:hidden;background:#000;
+}
+
+video{
+  position:absolute;inset:0;
+  width:100%;height:100%;
+  object-fit:cover;
+}
+
+/* Layered dark gradients for text legibility */
+.vignette{
+  position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:
+    linear-gradient(to bottom, rgba(0,0,0,.5) 0%, transparent 22%),
+    linear-gradient(to top,    rgba(0,0,0,.85) 0%, rgba(0,0,0,.25) 42%, transparent 68%);
+}
+
+/* Logo pill — top centre */
+.logo-wrap{
+  position:absolute;top:52px;left:0;right:0;
+  display:flex;justify-content:center;
+  z-index:3;pointer-events:none;
+}
+.logo-pill{
+  background:rgba(255,255,255,.95);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  padding:9px 24px;border-radius:100px;
+  display:inline-flex;align-items:center;
+  box-shadow:0 2px 16px rgba(0,0,0,.18);
+}
+.logo-pill img{height:28px;width:auto;display:block;}
+
+/* ── Slides ─────────────────────────────────────────────────────── */
+.slides{position:absolute;inset:0;z-index:2;}
+.slide{
+  position:absolute;inset:0;
+  display:flex;flex-direction:column;
+  opacity:0;pointer-events:none;
+  will-change:opacity;
+}
+.slide.active{opacity:1;}
+
+/* Staggered slide-up + fade per child */
+.w{
+  opacity:0;transform:translateY(24px);
+  transition:opacity .5s cubic-bezier(.22,1,.36,1),
+             transform .5s cubic-bezier(.22,1,.36,1);
+}
+.slide.active .w{opacity:1;transform:translateY(0);}
+.slide.active .w:nth-child(1){transition-delay:.04s;}
+.slide.active .w:nth-child(2){transition-delay:.18s;}
+.slide.active .w:nth-child(3){transition-delay:.32s;}
+.slide.active .w:nth-child(4){transition-delay:.46s;}
+
+/* ── Slide types ─────────────────────────────────────────────────── */
+
+/* HERO — centered, giant */
+.s-hero{
+  justify-content:center;align-items:center;text-align:center;
+  padding:0 24px;
+}
+.s-hero .big{
+  font-size:clamp(56px,18vw,100px);
+  font-weight:900;line-height:.92;
+  letter-spacing:-.035em;color:#fff;
+  text-transform:uppercase;
+}
+.s-hero .big .hl{color:#2563eb;}
+
+/* TAGLINE — bottom */
+.s-tag{
+  justify-content:flex-end;align-items:center;text-align:center;
+  padding:0 36px 88px;
+}
+.s-tag .main{
+  font-size:clamp(23px,6.5vw,40px);
+  font-weight:700;color:#fff;line-height:1.2;margin-bottom:14px;
+}
+.s-tag .sub{
+  font-size:clamp(12px,3.5vw,19px);
+  font-weight:500;color:rgba(255,255,255,.6);
+  letter-spacing:.14em;text-transform:uppercase;
+}
+
+/* FEATURE — bottom-left */
+.s-feat{
+  justify-content:flex-end;
+  padding:0 28px 76px;
+}
+.s-feat .tag{
+  font-size:clamp(11px,3vw,15px);
+  font-weight:700;color:#2563eb;
+  text-transform:uppercase;letter-spacing:.14em;
+  margin-bottom:10px;
+}
+.s-feat .head{
+  font-size:clamp(32px,11vw,62px);
+  font-weight:900;color:#fff;
+  line-height:.97;letter-spacing:-.03em;
+  margin-bottom:12px;
+}
+.s-feat .body{
+  font-size:clamp(14px,4vw,21px);
+  font-weight:400;color:rgba(255,255,255,.78);
+  line-height:1.45;max-width:300px;
+}
+
+/* CTA — centred */
+.s-cta{
+  justify-content:center;align-items:center;text-align:center;
+  padding:0 32px;
+}
+.s-cta .pre{
+  font-size:clamp(13px,3.5vw,19px);
+  font-weight:600;color:rgba(255,255,255,.65);
+  letter-spacing:.12em;text-transform:uppercase;
+  margin-bottom:22px;
+}
+.s-cta .btn{
+  display:inline-block;
+  background:#2563eb;color:#fff;
+  font-size:clamp(24px,7.5vw,44px);
+  font-weight:800;letter-spacing:-.02em;
+  padding:20px 56px;border-radius:100px;
+  margin-bottom:24px;
+  box-shadow:0 10px 40px rgba(37,99,235,.6);
+}
+.s-cta .url{
+  font-size:clamp(16px,4.5vw,26px);
+  font-weight:600;color:rgba(255,255,255,.88);
+  letter-spacing:.03em;
+}
+
+/* Progress bar */
+.prog{
+  position:absolute;bottom:0;left:0;right:0;
+  height:3px;background:rgba(255,255,255,.18);z-index:4;
+}
+.prog-fill{
+  height:100%;background:#2563eb;width:0;
+  transition:width .1s linear;
+}
+
+/* ── Tap-to-start overlay ────────────────────────────────────────── */
+#tap{
+  position:fixed;inset:0;
+  background:rgba(0,0,0,.9);
+  display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  z-index:100;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+.play-ring{
+  width:96px;height:96px;
+  border:2px solid rgba(255,255,255,.25);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.08);margin-bottom:22px;
+}
+#tap .pt{
+  color:#fff;font-size:20px;font-weight:700;margin-bottom:6px;
+}
+#tap .ps{
+  color:rgba(255,255,255,.4);font-size:14px;font-weight:400;
+  text-align:center;max-width:220px;line-height:1.4;
+}
+</style>
+</head>
+<body>
+
+<!-- ── Tap-to-start ─────────────────────────────────────────────── -->
+<div id="tap" onclick="go()">
+  <div class="play-ring">
+    <svg width="34" height="34" viewBox="0 0 24 24" fill="#fff">
+      <polygon points="7,3 21,12 7,21"/>
+    </svg>
+  </div>
+  <div class="pt">Tap to play</div>
+  <div class="ps">Start screen recording first, then tap</div>
+</div>
+
+<!-- ── Reel ─────────────────────────────────────────────────────── -->
+<div class="reel">
+
+  <video id="vid"
+    src="./ab58a81d23934b19b870b03b9317172d.mp4"
+    playsinline muted preload="auto">
+  </video>
+
+  <div class="vignette"></div>
+
+  <!-- Logo pill -->
+  <div class="logo-wrap">
+    <div class="logo-pill">
+      <img src="./Final_logos-01.webp" alt="UTrucking">
+    </div>
+  </div>
+
+  <!-- ── Text slides ───────────────────────────────────────────── -->
+  <div class="slides">
+
+    <!-- 0–6s  Hero -->
+    <div class="slide s-hero" id="s0">
+      <div class="w big">WE <span class="hl">HuSTLe.</span></div>
+      <div class="w big" style="margin-top:6px;">YOU RELAX.</div>
+    </div>
+
+    <!-- 6–12s  Tagline -->
+    <div class="slide s-tag" id="s1">
+      <div class="w main">Trusted Moving &amp; Storage<br>for WashU &amp; St. Louis</div>
+      <div class="w sub">Since&nbsp;1977</div>
+    </div>
+
+    <!-- 12–18s  Feature 1 -->
+    <div class="slide s-feat" id="s2">
+      <div class="w tag">01 — Boxes &amp; Supplies</div>
+      <div class="w head">Boxes &amp;<br>packing supplies,<br>delivered</div>
+      <div class="w body">We drop off boxes, tape, and bubble wrap right at your door.</div>
+    </div>
+
+    <!-- 18–24s  Feature 2 -->
+    <div class="slide s-feat" id="s3">
+      <div class="w tag">02 — Pickup</div>
+      <div class="w head">Pickup<br>from your<br>door</div>
+      <div class="w body">We pick up from WashU dorms and off-campus housing.</div>
+    </div>
+
+    <!-- 24–30s  Feature 3 -->
+    <div class="slide s-feat" id="s4">
+      <div class="w tag">03 — Storage</div>
+      <div class="w head">Secure<br>storage</div>
+      <div class="w body">Your items stay safe with us for as long as you need.</div>
+    </div>
+
+    <!-- 30–36s  Feature 4 -->
+    <div class="slide s-feat" id="s5">
+      <div class="w tag">04 — Delivery</div>
+      <div class="w head">Delivery<br>when you<br>need it</div>
+      <div class="w body">We bring everything back to your door when you return.</div>
+    </div>
+
+    <!-- 36–42s  CTA -->
+    <div class="slide s-cta" id="s6">
+      <div class="w pre">Ready to move?</div>
+      <div class="w btn">Book Now</div>
+      <div class="w url">utrucking.com</div>
+    </div>
+
+  </div>
+
+  <div class="prog"><div class="prog-fill" id="pf"></div></div>
+</div>
+
+<script>
+const vid    = document.getElementById('vid');
+const pf     = document.getElementById('pf');
+const slides = [...document.querySelectorAll('.slide')];
+let cur = -1;
+
+// [start, end] in seconds for each slide
+const T = [[0,6],[6,12],[12,18],[18,24],[24,30],[30,36],[36,42]];
+
+function show(i) {
+  if (cur === i) return;
+  slides.forEach((s, j) => s.classList.toggle('active', j === i));
+  cur = i;
+}
+
+vid.addEventListener('timeupdate', () => {
+  const t = vid.currentTime;
+  pf.style.width = (t / 42 * 100) + '%';
+  for (let i = 0; i < T.length; i++) {
+    if (t >= T[i][0] && t < T[i][1]) { show(i); break; }
+  }
+});
+
+vid.addEventListener('ended', () => { pf.style.width = '100%'; });
+
+function go() {
+  document.getElementById('tap').style.display = 'none';
+  show(0);
+  vid.play();
+}
+</script>
+</body>
+</html>
