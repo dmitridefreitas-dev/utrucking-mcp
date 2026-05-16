@@ -8,6 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
   *{font-family:'Inter',sans-serif;}
@@ -1567,6 +1568,36 @@ function renderDispatch(data) {
   }).join('');
 }
 
+// ── SHARE RUN CARD ─────────────────────────────────────────────────
+async function shareRunCard(cardEl) {
+  const btn = cardEl.querySelector('.no-capture');
+  if (btn) btn.style.visibility = 'hidden';
+  try {
+    const isDark = document.body.classList.contains('dark');
+    const canvas = await html2canvas(cardEl, {
+      backgroundColor: isDark ? '#1e293b' : '#ffffff',
+      scale: 2,
+      useCORS: true,
+      logging: false
+    });
+    if (btn) btn.style.visibility = '';
+    canvas.toBlob(async blob => {
+      const ts = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'}).replace(' ','-');
+      const file = new File([blob], `run-${ts}.png`, {type:'image/png'});
+      if (navigator.canShare && navigator.canShare({files:[file]})) {
+        await navigator.share({files:[file], title:"Today's Run"});
+      } else {
+        const url = URL.createObjectURL(blob);
+        Object.assign(document.createElement('a'),{href:url,download:`run-${ts}.png`}).click();
+        setTimeout(()=>URL.revokeObjectURL(url), 1000);
+      }
+    }, 'image/png');
+  } catch(e) {
+    if (btn) btn.style.visibility = '';
+    console.error('Share failed:', e);
+  }
+}
+
 // ── TODAY'S RUN ────────────────────────────────────────────────────
 function renderTodaysRun(data) {
   const today = new Date();
@@ -1600,21 +1631,22 @@ function renderTodaysRun(data) {
             <span class="font-semibold text-sm" style="color:var(--t1);">${building}</span>
             <span class="badge b-b">${fmtN(ords.length)} orders</span>
             <span class="badge b-gray">${fmtN(totalKits)} kits</span>
-            ${trucks.length?`<span class="badge b-b hide-sm">🚛 ${trucks.join(', ')}</span>`:''}
+            ${trucks.length?`<span class="badge b-b">🚛 ${trucks.join(', ')}</span>`:''}
             ${hasNotes?`<span class="badge b-y">${hasNotes} notes</span>`:''}
           </div>
+          <button class="no-capture no-print btn text-xs" style="flex-shrink:0;" onclick="shareRunCard(this.closest('.card'))">📤 Share</button>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full" style="font-size:12px;">
             <thead style="background:var(--bg2);"><tr>
-              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Student</th>
-              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Service</th>
-              ${hasRooms?`<th class="px-2 py-1.5 text-left hide-sm" style="color:var(--t2);">Room</th>`:''}
-              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Address</th>
-              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Time</th>
-              <th class="px-2 py-1.5 text-right" style="color:var(--t2);">Kits</th>
-              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Status</th>
-              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Notes</th>
+              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Student</th>
+              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Service</th>
+              ${hasRooms?`<th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Room</th>`:''}
+              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Address</th>
+              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Time</th>
+              <th class="px-2 py-1.5 text-right whitespace-nowrap" style="color:var(--t2);">Kits</th>
+              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Status</th>
+              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Notes</th>
             </tr></thead>
             <tbody class="divide-y" style="border-color:var(--bd);">
               ${ords.map(r=>{
@@ -1622,14 +1654,14 @@ function renderTodaysRun(data) {
                 const svc=(r.Service||r.Product||'').trim();
                 const addr=(r.Address||'').trim();
                 return`<tr>
-                  <td class="px-2 py-1.5 font-semibold" style="color:var(--t1);white-space:nowrap;">${r.Student||'—'}</td>
-                  <td class="px-2 py-1.5 font-medium" style="color:var(--acc);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${svc||'—'}</td>
-                  ${hasRooms?`<td class="px-2 py-1.5 hide-sm" style="color:var(--t2);">${r.Room||'—'}</td>`:''}
-                  <td class="px-2 py-1.5" style="color:var(--t2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${addr}">${addr||'—'}</td>
+                  <td class="px-2 py-1.5 font-semibold whitespace-nowrap" style="color:var(--t1);">${r.Student||'—'}</td>
+                  <td class="px-2 py-1.5 font-medium whitespace-nowrap" style="color:var(--acc);">${svc||'—'}</td>
+                  ${hasRooms?`<td class="px-2 py-1.5 whitespace-nowrap" style="color:var(--t2);">${r.Room||'—'}</td>`:''}
+                  <td class="px-2 py-1.5" style="color:var(--t2);min-width:140px;" title="${addr}">${addr||'—'}</td>
                   <td class="px-2 py-1.5 whitespace-nowrap" style="color:var(--t2);">${r['Time Slot']||'—'}</td>
-                  <td class="px-2 py-1.5 text-right font-medium" style="color:var(--t1);">${r.Kits||'0'}</td>
-                  <td class="px-2 py-1.5">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
-                  <td class="px-2 py-1.5" style="color:${note?'#d97706':'var(--t3)'};max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${note}">${note||'—'}</td>
+                  <td class="px-2 py-1.5 text-right font-medium whitespace-nowrap" style="color:var(--t1);">${r.Kits||'0'}</td>
+                  <td class="px-2 py-1.5 whitespace-nowrap">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
+                  <td class="px-2 py-1.5" style="color:${note?'#d97706':'var(--t3)'};min-width:140px;" title="${note}">${note||'—'}</td>
                 </tr>`;
               }).join('')}
             </tbody>
