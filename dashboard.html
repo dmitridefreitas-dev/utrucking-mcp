@@ -134,7 +134,7 @@
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('audit',this)">Audit & Events</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('optimization',this)">⚡ Optimization</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('rentals',this)">📦 Rentals</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('history',this)">📊 History</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('history',this)">2025</button>
   </div>
 </div>
 
@@ -432,8 +432,8 @@
 <div id="tab-history" class="tab-panel hidden">
   <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
     <div>
-      <div class="font-semibold text-base" style="color:var(--t1);">📊 All Orders — History</div>
-      <div class="text-xs" style="color:var(--t3);">Every service type across all years from ORDERS.xlsx</div>
+      <div class="font-semibold text-base" style="color:var(--t1);">2025 Orders</div>
+      <div class="text-xs" style="color:var(--t3);">All service types from ORDERS.xlsx</div>
     </div>
     <div class="flex gap-2 items-center no-print flex-wrap">
       <span class="text-xs" style="color:var(--t3);">Year:</span>
@@ -1669,8 +1669,7 @@ function renderHistory() {
   if(ys && ys.options.length <= 1) {
     const years=[...new Set(rows.map(histYear).filter(Boolean))].sort((a,b)=>b-a);
     years.forEach(y=>{const o=document.createElement('option');o.value=y;o.textContent=y;ys.appendChild(o);});
-    const cy=String(new Date().getFullYear());
-    if([...ys.options].some(o=>o.value===cy)) ys.value=cy;
+    if([...ys.options].some(o=>o.value==='2025')) ys.value='2025';
   }
   const ss = document.getElementById('histService');
   if(ss && ss.options.length <= 1) {
