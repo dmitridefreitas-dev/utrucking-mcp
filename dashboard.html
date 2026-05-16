@@ -10,8 +10,8 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-  *{font-family:'Inter',sans-serif;}
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  *{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter','Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;}
   :root{--bg0:#f0f6ff;--bg1:#ffffff;--bg2:#dbeafe;--t1:#0f172a;--t2:#1e293b;--t3:#475569;--bd:#bfdbfe;--acc:#2563eb;}
   body.dark{--bg0:#0f172a;--bg1:#1e293b;--bg2:#334155;--t1:#f1f5f9;--t2:#94a3b8;--t3:#475569;--bd:#1e293b;--acc:#3b82f6;}
   body{background:var(--bg0);color:var(--t1);font-weight:500;}
@@ -56,7 +56,18 @@
     .hide-sm{display:none!important;}
     .mobile-stack{flex-direction:column!important;}
     .mobile-full{width:100%!important;}
-    table{font-size:11px;}
+    /* Today's Run — large readable text while driving */
+    #todaysRunContent table{font-size:14px!important;}
+    #todaysRunContent th{font-size:12px!important;font-weight:600;letter-spacing:.03em;}
+    #todaysRunContent td{padding-top:10px!important;padding-bottom:10px!important;}
+    /* Kanban cards */
+    .order-card{padding:14px!important;}
+    .order-card .student-name{font-size:15px!important;font-weight:700!important;letter-spacing:-.01em;}
+    .order-card .detail-line{font-size:13px!important;}
+    /* Badges bigger on mobile */
+    .badge{font-size:12px!important;padding:3px 10px!important;}
+    /* KPI numbers */
+    .kpi .text-xl{font-size:22px!important;}
   }
   @media print{.no-print{display:none!important;}.tab-panel{display:block!important;}}
 </style>
@@ -500,7 +511,7 @@ const P = ['#2563eb','#0891b2','#059669','#d97706','#dc2626','#475569','#1d4ed8'
 Chart.defaults.color = '#475569';
 Chart.defaults.borderColor = '#bfdbfe';
 
-let D = {}, CH = {}, filtered = [], pg = 1, sCol = null, sDir = 1;
+let D = {}, CH = {}, filtered = [], pg = 1, sCol = null, sDir = 1, expandedKanbanCols = new Set();
 const PG = 25;
 let refreshSecs = 300, refreshInterval = null;
 
@@ -1543,26 +1554,26 @@ function renderDispatch(data) {
       </div>
       <div class="flex flex-col gap-2">
         ${orders.length===0?`<div class="card p-4 text-center text-xs" style="color:var(--t3);border-style:dashed;">No orders</div>`:''}
-        ${orders.slice(0,40).map(r=>{
+        ${orders.slice(0, expandedKanbanCols.has(status) ? orders.length : 40).map(r=>{
           const hasIssue=(r['Issue Notes']||r['Mover Notes']||'').trim();
           const slot=r['Time Slot']||'';
           const truck=r.Truck||'';
           const kits=r.Kits||r['Item Count']||'';
           return `<div class="order-card card p-3" style="border-color:${hasIssue?'#dc2626':'var(--bd)'};">
-            <div class="flex items-start justify-between gap-1 mb-1">
-              <span class="text-xs font-semibold leading-tight" style="color:var(--t1);">${r.Student||'—'}</span>
-              ${hasIssue?'<span class="badge b-r flex-shrink-0" style="font-size:9px;">!</span>':''}
+            <div class="flex items-start justify-between gap-1 mb-1.5">
+              <span class="student-name font-bold leading-tight" style="font-size:13px;color:var(--t1);">${r.Student||'—'}</span>
+              ${hasIssue?'<span class="badge b-r flex-shrink-0">!</span>':''}
             </div>
-            <div class="text-xs mb-1" style="color:var(--t2);">${r.Building||'—'}${r.Room?' · '+r.Room:''}</div>
+            <div class="detail-line mb-1" style="font-size:12px;font-weight:600;color:var(--t2);">${r.Building||'—'}${r.Room?' · '+r.Room:''}</div>
             <div class="flex justify-between items-center mb-1">
-              <span class="text-xs" style="color:var(--t3);">${r.Service||'—'}</span>
-              ${kits?`<span class="text-xs font-medium" style="color:var(--acc);">${fmtN(kits)} kits</span>`:''}
+              <span class="detail-line" style="font-size:12px;color:var(--t3);">${r.Service||'—'}</span>
+              ${kits?`<span class="detail-line font-semibold" style="font-size:12px;color:var(--acc);">${fmtN(kits)} kits</span>`:''}
             </div>
-            ${slot||truck?`<div class="flex gap-2 text-xs" style="color:var(--t3);">${slot?`<span>⏰ ${slot}</span>`:''}${truck?`<span>🚛 ${truck}</span>`:''}</div>`:''}
-            ${hasIssue?`<div class="text-xs mt-1.5 p-1.5 rounded leading-tight" style="background:#7f1d1d33;color:#fca5a5;">${hasIssue}</div>`:''}
+            ${slot||truck?`<div class="flex gap-2 detail-line" style="font-size:12px;color:var(--t3);">${slot?`<span>⏰ ${slot}</span>`:''}${truck?`<span>🚛 ${truck}</span>`:''}</div>`:''}
+            ${hasIssue?`<div class="detail-line mt-1.5 p-1.5 rounded leading-tight" style="font-size:12px;background:#7f1d1d33;color:#fca5a5;">${hasIssue}</div>`:''}
           </div>`;
         }).join('')}
-        ${orders.length>40?`<div class="text-xs text-center py-2 card p-2" style="color:var(--t3);">+${orders.length-40} more</div>`:''}
+        ${(!expandedKanbanCols.has(status)&&orders.length>40)?`<button class="w-full text-center py-2.5 rounded-xl font-semibold mt-1" style="font-size:13px;color:var(--acc);background:var(--bg2);border:none;cursor:pointer;" onclick="expandedKanbanCols.add(this.dataset.s);renderDispatch(getGlobalData())" data-s="${status.replace(/"/g,'&quot;')}">+ ${orders.length-40} more</button>`:''}
       </div>
     </div>`;
   }).join('');
