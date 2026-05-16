@@ -11,8 +11,8 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
   *{font-family:'Inter',sans-serif;}
-  :root{--bg0:#0f172a;--bg1:#1e293b;--bg2:#334155;--t1:#f1f5f9;--t2:#94a3b8;--t3:#475569;--bd:#1e293b;--acc:#f97316;}
-  body.light{--bg0:#f1f5f9;--bg1:#ffffff;--bg2:#e2e8f0;--t1:#0f172a;--t2:#475569;--t3:#94a3b8;--bd:#e2e8f0;}
+  :root{--bg0:#f0f6ff;--bg1:#ffffff;--bg2:#dbeafe;--t1:#1e293b;--t2:#475569;--t3:#94a3b8;--bd:#bfdbfe;--acc:#2563eb;}
+  body.dark{--bg0:#0f172a;--bg1:#1e293b;--bg2:#334155;--t1:#f1f5f9;--t2:#94a3b8;--t3:#475569;--bd:#1e293b;--acc:#3b82f6;}
   body{background:var(--bg0);color:var(--t1);}
   .card{background:var(--bg1);border:1px solid var(--bd);border-radius:0.75rem;}
   ::-webkit-scrollbar{width:4px;height:4px;}
@@ -23,19 +23,23 @@
   .chart-hm{position:relative;height:300px;}
   .chart-hg{position:relative;height:180px;}
   .badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:9999px;font-size:11px;font-weight:600;}
-  .b-g{background:#166534;color:#86efac;}.b-y{background:#713f12;color:#fde68a;}
-  .b-r{background:#7f1d1d;color:#fca5a5;}.b-b{background:#1e3a5f;color:#93c5fd;}
-  .b-gray{background:#1e293b;color:#94a3b8;}
+  .b-g{background:#dcfce7;color:#166534;}.b-y{background:#fef9c3;color:#854d0e;}
+  .b-r{background:#fee2e2;color:#991b1b;}.b-b{background:#dbeafe;color:#1d4ed8;}
+  .b-gray{background:#f1f5f9;color:#64748b;}
+  body.dark .b-g{background:#166534;color:#86efac;}body.dark .b-y{background:#713f12;color:#fde68a;}
+  body.dark .b-r{background:#7f1d1d;color:#fca5a5;}body.dark .b-b{background:#1e3a5f;color:#93c5fd;}
+  body.dark .b-gray{background:#1e293b;color:#94a3b8;}
   .kpi{transition:transform .2s;cursor:default;}.kpi:hover{transform:translateY(-2px);}
   .vault-slot{width:24px;height:24px;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:8px;cursor:pointer;}
   .vault-slot:hover{opacity:.7;}
   .pulse{animation:pulse 1.8s cubic-bezier(.4,0,.6,1) infinite;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-  .sa::after{content:' ↑';color:#f97316;}.sd::after{content:' ↓';color:#f97316;}
+  .sa::after{content:' ↑';color:var(--acc);}.sd::after{content:' ↓';color:var(--acc);}
   .cal-cell{width:14px;height:14px;border-radius:2px;cursor:pointer;}
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;display:flex;align-items:center;justify-content:center;}
   .funnel-bar{transition:width .8s ease;}
-  tr:hover{background:rgba(30,41,59,.35);}
+  tr:hover{background:rgba(219,234,254,.45);}
+  body.dark tr:hover{background:rgba(30,41,59,.35);}
   input,select{background:var(--bg1);border:1px solid var(--bg2);color:var(--t1);border-radius:.5rem;padding:.375rem .75rem;font-size:.75rem;}
   input::placeholder{color:var(--t3);}
   .btn{background:var(--bg1);border:1px solid var(--bg2);color:var(--t2);border-radius:.5rem;padding:.375rem .75rem;font-size:.75rem;cursor:pointer;transition:background .15s;}
@@ -61,7 +65,7 @@
 <div id="loginGate" style="position:fixed;inset:0;background:var(--bg0);z-index:9999;display:flex;align-items:center;justify-content:center;">
   <div class="card p-8" style="width:100%;max-width:360px;">
     <div class="flex items-center gap-3 mb-6">
-      <div class="w-10 h-10 bg-orange-500 rounded-lg flex items-center justify-center font-bold text-white">UT</div>
+      <img src="./Final_logos-01.webp" class="h-10 w-auto" alt="UTrucking" />
       <div>
         <div class="font-bold" style="color:var(--t1);">UTrucking Analytics</div>
         <div class="text-xs" style="color:var(--t3);">Sign in to continue</div>
@@ -75,7 +79,7 @@
       <label class="text-xs font-medium mb-1 block" style="color:var(--t2);">Password</label>
       <input id="loginPass" type="password" placeholder="Password" class="w-full" style="padding:.5rem .75rem;font-size:.875rem;" onkeydown="if(event.key==='Enter')doLogin()"/>
     </div>
-    <button onclick="doLogin()" style="width:100%;background:#f97316;color:#fff;border:none;border-radius:.5rem;padding:.6rem;font-size:.875rem;font-weight:600;cursor:pointer;">Sign In</button>
+    <button onclick="doLogin()" style="width:100%;background:#2563eb;color:#fff;border:none;border-radius:.5rem;padding:.6rem;font-size:.875rem;font-weight:600;cursor:pointer;">Sign In</button>
     <div id="loginErr" class="text-xs mt-3 text-center hidden" style="color:#ef4444;">Incorrect username or password.</div>
   </div>
 </div>
@@ -83,7 +87,7 @@
 <!-- HEADER -->
 <div class="no-print sticky top-0 z-50 border-b" style="background:var(--bg1);border-color:var(--bd);">
   <div class="px-5 py-2.5 flex items-center gap-3">
-    <div class="w-8 h-8 bg-orange-500 rounded-lg flex items-center justify-center font-bold text-white text-sm flex-shrink-0">UT</div>
+    <img src="./Final_logos-01.webp" class="h-8 w-auto flex-shrink-0" alt="UTrucking" />
     <div class="flex-1">
       <div class="font-bold text-sm" style="color:var(--t1);">UTrucking Analytics</div>
       <div class="text-xs" style="color:var(--t3);">Master Operations Dashboard</div>
@@ -91,12 +95,12 @@
     <input id="globalSearch" oninput="handleGlobalSearch(this.value)" placeholder="🔍  Search student or order…" class="text-xs" style="width:220px;" />
     <span id="countdown" class="hide-sm text-xs px-2 py-1 rounded" style="color:var(--t3);background:var(--bg2);">↻ 5:00</span>
     <button onclick="loadAll()" class="btn hide-sm">↻</button>
-    <button onclick="toggleTheme()" class="btn" id="themeBtn">☀️</button>
+    <button onclick="toggleTheme()" class="btn" id="themeBtn">🌙</button>
     <button onclick="window.print()" class="btn no-print hide-sm">⬇</button>
     <span id="lastUpdated" class="hide-sm text-xs" style="color:var(--t3);"></span>
   </div>
 </div>
-<div id="loadBar" class="h-0.5 bg-orange-500 pulse" style="display:none;"></div>
+<div id="loadBar" class="h-0.5 bg-blue-600 pulse" style="display:none;"></div>
 
 <!-- ALERT BANNER -->
 <div id="alertBanner" class="hidden no-print px-5 py-2 flex flex-wrap gap-2 items-center border-b" style="background:#7f1d1d;border-color:#991b1b;">
@@ -490,8 +494,8 @@ const DISPATCH_SID = '1x5MQbsCFMJX5eafA6uoFF0nU4qfvCaK-2EyZNPs__kM';
 const DISPATCH_GID = '602263013';
 const P = ['#f97316','#3b82f6','#22c55e','#a855f7','#eab308','#ec4899','#14b8a6','#ef4444','#64748b','#f59e0b','#06b6d4','#84cc16'];
 
-Chart.defaults.color = '#94a3b8';
-Chart.defaults.borderColor = '#1e293b';
+Chart.defaults.color = '#475569';
+Chart.defaults.borderColor = '#bfdbfe';
 
 let D = {}, CH = {}, filtered = [], pg = 1, sCol = null, sDir = 1;
 const PG = 25;
@@ -1271,10 +1275,12 @@ document.addEventListener('click', e => {
 });
 
 function toggleTheme() {
-  document.body.classList.toggle('light');
-  document.getElementById('themeBtn').textContent = document.body.classList.contains('light') ? '🌙' : '☀️';
-  Chart.defaults.color = document.body.classList.contains('light') ? '#475569' : '#94a3b8';
-  Chart.defaults.borderColor = document.body.classList.contains('light') ? '#e2e8f0' : '#1e293b';
+  document.body.classList.toggle('dark');
+  const isDark = document.body.classList.contains('dark');
+  document.getElementById('themeBtn').textContent = isDark ? '☀️' : '🌙';
+  Chart.defaults.color = isDark ? '#94a3b8' : '#475569';
+  Chart.defaults.borderColor = isDark ? '#1e293b' : '#bfdbfe';
+  renderAll();
 }
 
 function handleGlobalSearch(q) {
@@ -1586,7 +1592,9 @@ function renderTodaysRun(data) {
           <table class="w-full text-xs">
             <thead style="background:var(--bg2);"><tr>
               <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+              <th class="px-3 py-2 text-left" style="color:var(--t2);">Service</th>
               <th class="px-3 py-2 text-left" style="color:var(--t2);">Room</th>
+              <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Address</th>
               <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Time Slot</th>
               <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Truck</th>
               <th class="px-3 py-2 text-right" style="color:var(--t2);">Kits</th>
@@ -1597,15 +1605,18 @@ function renderTodaysRun(data) {
             <tbody class="divide-y" style="border-color:var(--bd);">
               ${ords.map(r=>{
                 const note=(r['Mover Notes']||r['Customer Note']||'').trim();
+                const svc=(r.Service||r.Product||'').trim();
                 return`<tr>
                   <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r.Student||'—'}</td>
+                  <td class="px-3 py-2 font-medium" style="color:var(--acc);">${svc||'—'}</td>
                   <td class="px-3 py-2" style="color:var(--t2);">${r.Room||'—'}</td>
+                  <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r.Address||'—'}</td>
                   <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r['Time Slot']||'—'}</td>
                   <td class="px-3 py-2 hide-sm font-medium" style="color:var(--acc);">${r.Truck||'—'}</td>
                   <td class="px-3 py-2 text-right" style="color:var(--t1);">${r.Kits||'0'}</td>
                   <td class="px-3 py-2">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
                   <td class="px-3 py-2" style="color:var(--t2);">${r.Phone||'—'}</td>
-                  <td class="px-3 py-2 max-w-xs" style="color:${note?'#fde68a':'var(--t3)'};">${note||'—'}</td>
+                  <td class="px-3 py-2 max-w-xs" style="color:${note?'#d97706':'var(--t3)'};">${note||'—'}</td>
                 </tr>`;
               }).join('')}
             </tbody>
