@@ -121,20 +121,26 @@
 
 <!-- TAB NAV -->
 <div class="no-print px-5 border-b" style="border-color:var(--bd);">
-  <div class="flex gap-0.5 overflow-x-auto">
+  <div class="flex gap-0.5 items-end">
     <button class="tab-btn tab-active px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('dispatch',this)">🚛 Dispatch</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('todaysrun',this)">📋 Today's Run</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('overview',this)">Overview</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('orders',this)">Orders</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('students',this)">Students</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('operations',this)">Operations</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('revenue',this)">Revenue</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('forecast',this)">Forecast</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('vault',this)">Vault & Items</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('audit',this)">Audit & Events</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('optimization',this)">⚡ Optimization</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('rentals',this)">📦 Rentals</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('history',this)">2025</button>
+    <!-- MORE DROPDOWN -->
+    <div class="relative ml-1" id="moreMenuWrap">
+      <button id="moreBtn" onclick="toggleMoreMenu()" class="px-3 py-2 text-xs font-medium whitespace-nowrap border-b-2 border-transparent transition-colors" style="color:var(--t2);">More ▾</button>
+      <div id="moreMenu" class="hidden absolute left-0 top-full z-50 rounded-lg shadow-xl overflow-hidden" style="background:var(--bg1);border:1px solid var(--bg2);min-width:180px;margin-top:2px;">
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('orders',this)">Orders</button>
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('students',this)">Students</button>
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('operations',this)">Operations</button>
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('revenue',this)">Revenue</button>
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('forecast',this)">Forecast</button>
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('vault',this)">Vault & Items</button>
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('audit',this)">Audit & Events</button>
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('optimization',this)">⚡ Optimization</button>
+        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('rentals',this)">📦 Rentals</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1181,7 +1187,35 @@ function switchTab(tab, btn) {
   document.getElementById('tab-'+tab).classList.remove('hidden');
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('tab-active'));
   if(btn) btn.classList.add('tab-active');
+  // Clear More button highlight when a main tab is clicked
+  const mb = document.getElementById('moreBtn');
+  if(mb) { mb.style.color=''; mb.style.borderBottomColor=''; }
+  closeMoreMenu();
 }
+
+function switchTabMore(tab, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.add('hidden'));
+  document.getElementById('tab-'+tab).classList.remove('hidden');
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('tab-active'));
+  document.querySelectorAll('.more-tab-btn').forEach(b=>{ b.style.background=''; b.style.color=''; });
+  if(btn) { btn.style.background='var(--bg2)'; btn.style.color='var(--acc)'; }
+  // Highlight More button
+  const mb = document.getElementById('moreBtn');
+  if(mb) { mb.style.color='var(--acc)'; mb.style.borderBottomColor='var(--acc)'; }
+  closeMoreMenu();
+}
+
+function toggleMoreMenu() {
+  document.getElementById('moreMenu').classList.toggle('hidden');
+}
+
+function closeMoreMenu() {
+  document.getElementById('moreMenu')?.classList.add('hidden');
+}
+
+document.addEventListener('click', e => {
+  if(!document.getElementById('moreMenuWrap')?.contains(e.target)) closeMoreMenu();
+});
 
 function toggleTheme() {
   document.body.classList.toggle('light');
