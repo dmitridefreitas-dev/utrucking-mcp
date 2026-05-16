@@ -7,6 +7,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
   *{font-family:'Inter',sans-serif;}
@@ -133,6 +134,7 @@
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('audit',this)">Audit & Events</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('optimization',this)">⚡ Optimization</button>
     <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('rentals',this)">📦 Rentals</button>
+    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('history',this)">📊 History</button>
   </div>
 </div>
 
@@ -426,6 +428,37 @@
   </div>
 </div>
 
+<!-- HISTORY -->
+<div id="tab-history" class="tab-panel hidden">
+  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <div>
+      <div class="font-semibold text-base" style="color:var(--t1);">📊 All Orders — History</div>
+      <div class="text-xs" style="color:var(--t3);">Every service type across all years from ORDERS.xlsx</div>
+    </div>
+    <div class="flex gap-2 items-center no-print flex-wrap">
+      <span class="text-xs" style="color:var(--t3);">Year:</span>
+      <select id="histYear" onchange="renderHistory()" class="text-xs"><option value="all">All Years</option></select>
+      <span class="text-xs" style="color:var(--t3);">Service:</span>
+      <select id="histService" onchange="renderHistory()" class="text-xs"><option value="">All Services</option></select>
+    </div>
+  </div>
+  <div id="histKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Orders by Service</div><div style="position:relative;height:300px;"><canvas id="c-histService"></canvas></div></div>
+    <div class="card p-4 lg:col-span-2"><div class="label">Monthly Volume</div><div class="chart-hm"><canvas id="c-histMonthly"></canvas></div></div>
+  </div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Top Buildings</div><div style="position:relative;height:340px;"><canvas id="c-histBuildings"></canvas></div></div>
+    <div class="card overflow-hidden">
+      <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
+        <span class="label" style="margin-bottom:0;">Orders</span>
+        <input id="histSearch" oninput="renderHistTable()" placeholder="Search student, order, building…" class="text-xs w-44"/>
+      </div>
+      <div id="histTableWrap" style="max-height:340px;overflow-y:auto;"></div>
+    </div>
+  </div>
+</div>
+
 </div><!-- end panels -->
 
 <!-- FULLSCREEN MODAL -->
@@ -464,6 +497,27 @@ async function fetchSheet(gid) {
   return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
 }
 
+async function fetchExcel() {
+  try {
+    const r = await fetch('./ORDERS.xlsx');
+    if (!r.ok) return [];
+    const ab = await r.arrayBuffer();
+    const wb = XLSX.read(ab, {type: 'array', cellDates: true});
+    const ws = wb.Sheets['MAIN'];
+    if (!ws) return [];
+    const rows = XLSX.utils.sheet_to_json(ws, {defval: ''});
+    return rows.map(row => {
+      const out = {};
+      for (const [k, v] of Object.entries(row)) {
+        out[k] = (v instanceof Date)
+          ? `${v.getMonth()+1}/${v.getDate()}/${v.getFullYear()}`
+          : v;
+      }
+      return out;
+    });
+  } catch(e) { console.error('Excel load error:', e); return []; }
+}
+
 async function fetchRentalCSV() {
   try {
     const r = await fetch('./ORDERS%20-%20Rental%20Returns.csv');
@@ -483,16 +537,18 @@ async function fetchDispatchSheet() {
 async function loadAll() {
   document.getElementById('loadBar').style.display = 'block';
   try {
-    const [analyticsResults, dispatchRows, rentalRows] = await Promise.all([
+    const [analyticsResults, dispatchRows, rentalRows, mainRows] = await Promise.all([
       Promise.all(Object.values(GIDs).map(g => fetchSheet(g))),
       fetchDispatchSheet(),
-      fetchRentalCSV()
+      fetchRentalCSV(),
+      fetchExcel()
     ]);
     const keys = Object.keys(GIDs);
     keys.forEach((k,i) => D[k] = analyticsResults[i]);
     D.all = [...D.storage, ...D.transit].filter(r => r['Order Number']);
     D.dispatch = dispatchRows;
     D.rentals = rentalRows;
+    D.main = mainRows;
     // Build lookup map: order ID (no #) → dispatch row
     D.dispatchMap = {};
     dispatchRows.forEach(r => {
@@ -569,6 +625,7 @@ function renderAll() {
   renderAudit();
   renderOptimization();
   renderRentals();
+  renderHistory();
 }
 
 // ── KPIs ───────────────────────────────────────────────────────────
@@ -1473,27 +1530,37 @@ function renderTodaysRun(data) {
 
 // ── RENTALS ────────────────────────────────────────────────────────
 function renderRentals() {
-  const rows = D.rentals || [];
+  // Use MAIN data (Excel) if loaded, otherwise fall back to CSV
+  let rows;
+  if (D.main && D.main.length) {
+    rows = D.main.filter(r => {
+      const p = (r['Product Name']||'').trim();
+      return p === 'Appliance Rental Return' || p === 'Appliance Rental';
+    });
+  } else {
+    rows = D.rentals || [];
+  }
+
+  function getDate(r) { return r['Delivery Date']||r['Pickup Date']||r['Event Date']||''; }
+  function getProd(r) {
+    if (r['Product SKU'] && (r['Product Name']||'').startsWith('Appliance')) return (r['Product SKU']||'').replace(/\s*-\s*$/,'').trim();
+    return (r['Product Name']||r['Product SKU/Variant']||'').replace(/^Appliance Rental\s*(Return)?,?\s*/i,'').replace(/(\s*-\s*)+$/,'').trim()||'Unknown';
+  }
 
   function parseRD(s) {
     if (!s) return null;
-    const p = s.split('/');
+    const p = String(s).split('/');
     if (p.length < 3) return null;
-    const [m,d,y] = p.map(Number);
+    const m=+p[0], d=+p[1], y=p[2].length===2?2000+ +p[2]: +p[2];
     if (!m||!d||!y) return null;
     return new Date(y, m-1, d);
-  }
-
-  function prodType(name) {
-    return (name||'').replace(/^Appliance Rental Return,\s*/i,'').replace(/(\s*-\s*)+\s*$/,'').trim() || 'Unknown';
   }
 
   // Populate year selector once
   const ys = document.getElementById('rentalYear');
   if (ys && ys.options.length <= 1) {
-    const years = [...new Set(rows.map(r=>{const d=parseRD(r['Event Date']);return d?d.getFullYear():null;}).filter(Boolean))].sort((a,b)=>b-a);
+    const years = [...new Set(rows.map(r=>{const d=parseRD(getDate(r));return d?d.getFullYear():null;}).filter(Boolean))].sort((a,b)=>b-a);
     years.forEach(y=>{const o=document.createElement('option');o.value=y;o.textContent=y+(y===new Date().getFullYear()?' (current)':'');ys.appendChild(o);});
-    // Default to current year if available
     const cy = String(new Date().getFullYear());
     if ([...ys.options].some(o=>o.value===cy)) ys.value = cy;
   }
@@ -1501,19 +1568,19 @@ function renderRentals() {
   const selYear = ys?.value || 'all';
   const q = (document.getElementById('rentalSearch')?.value||'').toLowerCase();
 
-  let filtered = selYear === 'all' ? rows : rows.filter(r=>{const d=parseRD(r['Event Date']);return d&&d.getFullYear()===+selYear;});
-  if (q) filtered = filtered.filter(r=>(r['Student Name']||r['Client Name']||'').toLowerCase().includes(q)||(r.Building||'').toLowerCase().includes(q)||(r['Order Number']||'').toLowerCase().includes(q));
+  let filtered = selYear === 'all' ? rows : rows.filter(r=>{const d=parseRD(getDate(r));return d&&d.getFullYear()===+selYear;});
+  if (q) filtered = filtered.filter(r=>(r['Student Name']||r['Client Name']||r['Shipping Name']||'').toLowerCase().includes(q)||(r.Building||'').toLowerCase().includes(q)||(r['Order Number']||r['Order Name']||'').toLowerCase().includes(q));
 
   // KPIs
   const total = filtered.length;
-  const uniq = new Set(filtered.map(r=>(r['Student Name']||r['Client Name']||'').trim().toLowerCase())).size;
+  const uniq = new Set(filtered.map(r=>(r['Student Name']||r['Client Name']||r['Shipping Name']||'').trim().toLowerCase())).size;
   const bldgs = new Set(filtered.map(r=>(r.Building||'').trim()).filter(Boolean)).size;
   const prodCts = {};
-  filtered.forEach(r=>{const p=prodType(r['Product Name']);prodCts[p]=(prodCts[p]||0)+1;});
+  filtered.forEach(r=>{const p=getProd(r);prodCts[p]=(prodCts[p]||0)+1;});
   const topProd = Object.entries(prodCts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
 
   document.getElementById('rentalKPIs').innerHTML = [
-    {label:'Total Returns', val:fmtN(total), icon:'📦'},
+    {label:'Appliance Orders', val:fmtN(total), icon:'📦'},
     {label:'Unique Students', val:fmtN(uniq), icon:'👤'},
     {label:'Buildings', val:fmtN(bldgs), icon:'🏢'},
     {label:'Top Product', val:topProd.length>22?topProd.slice(0,22)+'…':topProd, icon:'🏆'},
@@ -1523,17 +1590,16 @@ function renderRentals() {
   const pLabels = Object.keys(prodCts).sort((a,b)=>prodCts[b]-prodCts[a]);
   mk('c-rentalProducts','doughnut',pLabels,[{data:pLabels.map(p=>prodCts[p]),backgroundColor:P,borderWidth:0}],{plugins:{legend:{position:'right',labels:{boxWidth:10,font:{size:10}}}}});
 
-  // Returns by month (use full filtered set for month aggregation, not search-filtered)
-  let base = selYear === 'all' ? rows : rows.filter(r=>{const d=parseRD(r['Event Date']);return d&&d.getFullYear()===+selYear;});
+  // By month
+  let base = selYear === 'all' ? rows : rows.filter(r=>{const d=parseRD(getDate(r));return d&&d.getFullYear()===+selYear;});
   const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const mMap = {};
   base.forEach(r=>{
-    const d=parseRD(r['Event Date']);
+    const d=parseRD(getDate(r));
     if(!d) return;
     const k=`${MN[d.getMonth()]} ${d.getFullYear()}`;
     mMap[k]=(mMap[k]||0)+1;
   });
-  // Sort chronologically
   const mEntries = Object.entries(mMap).sort((a,b)=>{
     const [am,ay]=a[0].split(' '); const [bm,by]=b[0].split(' ');
     return (+ay-+by)||(MN.indexOf(am)-MN.indexOf(bm));
@@ -1543,7 +1609,7 @@ function renderRentals() {
     scales:{x:{grid:{color:'var(--bd)'}},y:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}}}
   });
 
-  // Top buildings horizontal bar
+  // Top buildings
   const bMap = {};
   base.forEach(r=>{const b=(r.Building||'').trim();if(b) bMap[b]=(bMap[b]||0)+1;});
   const topB = Object.entries(bMap).sort((a,b)=>b[1]-a[1]).slice(0,15);
@@ -1553,9 +1619,9 @@ function renderRentals() {
     scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
   });
 
-  // Returns schedule table (search-filtered, sorted by date)
+  // Schedule table
   const tableRows = filtered
-    .map(r=>({...r,_d:parseRD(r['Event Date'])}))
+    .map(r=>({...r,_d:parseRD(getDate(r))}))
     .filter(r=>r._d)
     .sort((a,b)=>a._d-b._d)
     .slice(0,100);
@@ -1572,11 +1638,137 @@ function renderRentals() {
         </tr></thead>
         <tbody class="divide-y" style="border-color:var(--bd);">
           ${tableRows.map(r=>`<tr>
-            <td class="px-3 py-2 font-medium" style="color:var(--acc);">${r['Event Date']||'—'}</td>
-            <td class="px-3 py-2" style="color:var(--t1);">${(r['Student Name']||r['Client Name']||'').trim()||'—'}</td>
+            <td class="px-3 py-2 font-medium" style="color:var(--acc);">${getDate(r)||'—'}</td>
+            <td class="px-3 py-2" style="color:var(--t1);">${(r['Student Name']||r['Client Name']||r['Shipping Name']||'').trim()||'—'}</td>
             <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${(r.Building||'').trim()||'—'}</td>
-            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r['Room Number']||'—'}</td>
-            <td class="px-3 py-2" style="color:var(--t2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${prodType(r['Product Name'])}</td>
+            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r['Room Number 2']||r['Room Number']||'—'}</td>
+            <td class="px-3 py-2" style="color:var(--t2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${getProd(r)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+}
+
+// ── HISTORY ────────────────────────────────────────────────────────
+function histDate(r) { return r['Delivery Date']||r['Pickup Date']||r['Delivery Date 2']||''; }
+function histYear(r) {
+  const d = histDate(r); if(!d) return null;
+  const p = String(d).split('/');
+  if(p.length===3){ const y=+p[2]; return y>100?y:2000+y; }
+  const dt=new Date(d); return isNaN(dt)?null:dt.getFullYear();
+}
+function histSvc(r) { return (r['Product Name']||'').split('[')[0].trim()||'—'; }
+
+function renderHistory() {
+  const rows = D.main || [];
+  if(!rows.length) {
+    document.getElementById('histKPIs').innerHTML = '<div class="col-span-4 text-center py-8 text-xs" style="color:var(--t3);">ORDERS.xlsx loading… refresh in a moment.</div>';
+    return;
+  }
+
+  const ys = document.getElementById('histYear');
+  if(ys && ys.options.length <= 1) {
+    const years=[...new Set(rows.map(histYear).filter(Boolean))].sort((a,b)=>b-a);
+    years.forEach(y=>{const o=document.createElement('option');o.value=y;o.textContent=y;ys.appendChild(o);});
+    const cy=String(new Date().getFullYear());
+    if([...ys.options].some(o=>o.value===cy)) ys.value=cy;
+  }
+  const ss = document.getElementById('histService');
+  if(ss && ss.options.length <= 1) {
+    const svcs=[...new Set(rows.map(histSvc).filter(s=>s&&s!=='—'))].sort();
+    svcs.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;ss.appendChild(o);});
+  }
+
+  const selYear = ys?.value||'all';
+  const selSvc = ss?.value||'';
+  let filtered = rows;
+  if(selYear!=='all') filtered=filtered.filter(r=>histYear(r)===+selYear);
+  if(selSvc) filtered=filtered.filter(r=>histSvc(r)===selSvc);
+
+  const total = filtered.length;
+  const uniq = new Set(filtered.map(r=>(r['Student Name']||r['Shipping Name']||'').trim().toLowerCase()).filter(Boolean)).size;
+  const svcCts={}, bldgCts={};
+  filtered.forEach(r=>{
+    const s=histSvc(r); svcCts[s]=(svcCts[s]||0)+1;
+    const b=(r['Building']||'').trim(); if(b) bldgCts[b]=(bldgCts[b]||0)+1;
+  });
+  const topSvc=Object.entries(svcCts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
+  const topBldg=Object.entries(bldgCts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
+
+  document.getElementById('histKPIs').innerHTML=[
+    {label:'Total Orders',val:fmtN(total),icon:'📦'},
+    {label:'Unique Students',val:fmtN(uniq),icon:'👤'},
+    {label:'Top Service',val:topSvc,icon:'⭐'},
+    {label:'Top Building',val:topBldg.length>18?topBldg.slice(0,18)+'…':topBldg,icon:'🏢'},
+  ].map(k=>`<div class="kpi card p-3"><div class="text-xs mb-1" style="color:var(--t3);">${k.icon} ${k.label}</div><div class="text-xl font-bold truncate" style="color:var(--t1);">${k.val}</div></div>`).join('');
+
+  // Service mix (horizontal bar)
+  const svcE=Object.entries(svcCts).sort((a,b)=>b[1]-a[1]);
+  mk('c-histService','bar',svcE.map(e=>e[0]),[{data:svcE.map(e=>e[1]),backgroundColor:P.slice(0,svcE.length),borderRadius:4,maxBarThickness:22}],{
+    indexAxis:'y',plugins:{legend:{display:false}},
+    scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
+  });
+
+  // Monthly volume
+  const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mMap={};
+  filtered.forEach(r=>{
+    const d=histDate(r); if(!d) return;
+    const p=String(d).split('/'); if(p.length<3) return;
+    const mo=+p[0]-1, yr=+p[2].length===2?2000+ +p[2]: +p[2];
+    if(isNaN(mo)||isNaN(yr)) return;
+    const k=`${MN[mo]} ${yr}`; mMap[k]=(mMap[k]||0)+1;
+  });
+  const mE=Object.entries(mMap).sort((a,b)=>{
+    const [am,ay]=a[0].split(' '); const [bm,by]=b[0].split(' ');
+    return (+ay - +by)||(MN.indexOf(am)-MN.indexOf(bm));
+  });
+  mk('c-histMonthly','bar',mE.map(e=>e[0]),[{data:mE.map(e=>e[1]),backgroundColor:'#3b82f6',borderRadius:4,maxBarThickness:22}],{
+    plugins:{legend:{display:false}},
+    scales:{x:{grid:{color:'var(--bd)'}},y:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}}}
+  });
+
+  // Top buildings
+  const topB=Object.entries(bldgCts).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  mk('c-histBuildings','bar',topB.map(e=>e[0].trim()),[{data:topB.map(e=>e[1]),backgroundColor:'#f97316',borderRadius:3,maxBarThickness:16}],{
+    indexAxis:'y',plugins:{legend:{display:false}},
+    scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
+  });
+
+  renderHistTable();
+}
+
+function renderHistTable() {
+  const rows = D.main||[];
+  const q=(document.getElementById('histSearch')?.value||'').toLowerCase();
+  const selYear=document.getElementById('histYear')?.value||'all';
+  const selSvc=document.getElementById('histService')?.value||'';
+  let filtered=rows;
+  if(selYear!=='all') filtered=filtered.filter(r=>histYear(r)===+selYear);
+  if(selSvc) filtered=filtered.filter(r=>histSvc(r)===selSvc);
+  if(q) filtered=filtered.filter(r=>
+    (r['Student Name']||r['Shipping Name']||'').toLowerCase().includes(q)||
+    (r['Order Name']||'').toLowerCase().includes(q)||
+    (r['Building']||'').toLowerCase().includes(q)||
+    histSvc(r).toLowerCase().includes(q)
+  );
+  const show=filtered.slice(0,100);
+  document.getElementById('histTableWrap').innerHTML=show.length===0
+    ?'<div class="p-6 text-center text-xs" style="color:var(--t3);">No orders match.</div>'
+    :`<table class="w-full text-xs">
+        <thead style="background:var(--bg2);position:sticky;top:0;"><tr>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+          <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Service</th>
+          <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Building</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Date</th>
+        </tr></thead>
+        <tbody class="divide-y" style="border-color:var(--bd);">
+          ${show.map(r=>`<tr>
+            <td class="px-3 py-2 font-medium" style="color:var(--acc);">${r['Order Name']||'—'}</td>
+            <td class="px-3 py-2" style="color:var(--t1);">${(r['Student Name']||r['Shipping Name']||'').trim()||'—'}</td>
+            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${histSvc(r)}</td>
+            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${(r['Building']||'').trim()||'—'}</td>
+            <td class="px-3 py-2" style="color:var(--t2);">${histDate(r)||'—'}</td>
           </tr>`).join('')}
         </tbody>
       </table>`;
