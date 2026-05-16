@@ -237,7 +237,7 @@
       <input id="stuSearch" oninput="renderStudentTable()" placeholder="Search student..." class="text-xs w-40"/>
     </div>
     <div class="overflow-x-auto">
-      <table class="w-full text-xs">
+      <table id="stuTable" class="w-full text-xs">
         <thead style="background:var(--bg2);"><tr>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">Building</th>
@@ -273,7 +273,7 @@
       <select id="dispTruck" onchange="renderDispatchTable()" class="text-xs"><option value="">All Trucks</option></select>
     </div>
     <div class="overflow-x-auto">
-      <table class="w-full text-xs">
+      <table id="opsTable" class="w-full text-xs">
         <thead style="background:var(--bg2);"><tr>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">ID</th>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
@@ -367,7 +367,7 @@
     <div class="card overflow-hidden">
       <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Event Log</span></div>
       <div class="overflow-auto" style="max-height:380px;">
-        <table class="w-full text-xs"><thead class="sticky top-0" style="background:var(--bg2);"><tr>
+        <table id="evtTable" class="w-full text-xs"><thead class="sticky top-0" style="background:var(--bg2);"><tr>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">ID</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Time</th>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">Type</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Issue</th>
@@ -377,7 +377,7 @@
     <div class="card overflow-hidden">
       <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Audit Log</span></div>
       <div class="overflow-auto" style="max-height:380px;">
-        <table class="w-full text-xs"><thead class="sticky top-0" style="background:var(--bg2);"><tr>
+        <table id="audTable" class="w-full text-xs"><thead class="sticky top-0" style="background:var(--bg2);"><tr>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">Verdict</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Count</th>
           <th class="px-3 py-2 text-left" style="color:var(--t2);">Notes</th>
@@ -794,7 +794,7 @@ function renderTable() {
   if(sCol) filtered.sort((a,b)=>(a[sCol]||'').localeCompare(b[sCol]||'')*sDir);
   const pages = Math.ceil(filtered.length/PG);
   const slice = filtered.slice((pg-1)*PG, pg*PG);
-  document.getElementById('ordHead').innerHTML = OCOLS.map(c=>`<th class="px-3 py-2 text-left cursor-pointer hover:text-orange-400 whitespace-nowrap ${sCol===c?(sDir===1?'sa':'sd'):''}" style="color:var(--t2);" onclick="doSort('${c}')">${c}</th>`).join('');
+  document.getElementById('ordHead').innerHTML = OCOLS.map(c=>`<th class="px-3 py-2 text-left cursor-pointer whitespace-nowrap" style="color:${sCol===c?'var(--acc)':'var(--t2)'};" onclick="doSort('${c}')">${c}<span style="font-size:9px;margin-left:3px;opacity:${sCol===c?1:.3};color:var(--acc);">${sCol===c?(sDir===1?'▼':'▲'):'▼'}</span></th>`).join('');
   document.getElementById('ordBody').innerHTML = slice.map(r=>`<tr>
     ${OCOLS.map(c=>{
       const val=r[c]||'—';
@@ -808,6 +808,43 @@ function renderTable() {
 }
 
 function doSort(c) { sDir=sCol===c?sDir*-1:1; sCol=c; renderTable(); }
+
+// ── GENERIC TABLE SORTER ───────────────────────────────────────────
+function initTableSort(tableEl) {
+  if (!tableEl) return;
+  tableEl.querySelectorAll('thead th').forEach((th, idx) => {
+    if (th.querySelector('.si')) return;
+    const si = document.createElement('span');
+    si.className = 'si';
+    si.style.cssText = 'opacity:.3;font-size:9px;margin-left:3px;transition:opacity .15s;';
+    si.textContent = '▼';
+    th.appendChild(si);
+    th.style.cursor = 'pointer';
+    th.style.userSelect = 'none';
+    th.addEventListener('click', () => {
+      const tbody = tableEl.querySelector('tbody');
+      if (!tbody) return;
+      const rows = [...tbody.querySelectorAll('tr')];
+      const asc = th.dataset.dir !== 'asc';
+      tableEl.querySelectorAll('thead th').forEach(h => {
+        h.dataset.dir = '';
+        const s = h.querySelector('.si');
+        if (s) { s.style.opacity='.3'; s.style.color=''; s.textContent='▼'; }
+      });
+      th.dataset.dir = asc ? 'asc' : 'desc';
+      si.style.opacity = '1'; si.style.color = 'var(--acc)';
+      si.textContent = asc ? '▼' : '▲';
+      rows.sort((a, b) => {
+        const av = a.cells[idx]?.textContent?.trim() || '';
+        const bv = b.cells[idx]?.textContent?.trim() || '';
+        const an = parseFloat(av.replace(/[,$%+]/g,'')), bn = parseFloat(bv.replace(/[,$%+]/g,''));
+        const cmp = (!isNaN(an)&&!isNaN(bn)) ? an-bn : av.localeCompare(bv, undefined, {numeric:true});
+        return asc ? cmp : -cmp;
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+}
 function changePg(d) { const p=Math.ceil(filtered.length/PG); pg=Math.max(1,Math.min(p,pg+d)); renderTable(); }
 function exportCSV() {
   const b=new Blob([Papa.unparse(filtered)],{type:'text/csv'});
@@ -870,6 +907,7 @@ function renderStudentTable() {
     <td class="px-3 py-2 text-right" style="color:#22c55e;">${s.revenue>0?'$'+s.revenue.toFixed(2):'—'}</td>
     <td class="px-3 py-2">${sBadge(s.status||'—')}</td>
   </tr>`).join('');
+  initTableSort(document.getElementById('stuTable'));
 }
 
 // ── OPERATIONS ────────────────────────────────────────────────────
@@ -899,6 +937,7 @@ function renderDispatchTable() {
     <td class="px-3 py-2 max-w-xs truncate" style="color:var(--t3);">${r['Mover Notes']||'—'}</td>
   </tr>`).join('');
   document.getElementById('dispPgInfo').textContent = `${fmtN(dispFiltered.length)} orders · Page ${dispPg} of ${pages||1}`;
+  initTableSort(document.getElementById('opsTable'));
 }
 function changeDispPg(d){const p=Math.ceil((dispFiltered.length||1)/DISP_PG);dispPg=Math.max(1,Math.min(p,dispPg+d));renderDispatchTable();}
 
@@ -1149,6 +1188,8 @@ function renderAudit() {
     <td class="px-3 py-2">${r['Item Count Match?']==='TRUE'?'<span class="badge b-g">✓ Match</span>':'<span class="badge b-r">✗ Mismatch</span>'}</td>
     <td class="px-3 py-2 max-w-xs truncate" style="color:var(--t3);">${r['Audit Notes']||'—'}</td>
   </tr>`).join('');
+  initTableSort(document.getElementById('evtTable'));
+  initTableSort(document.getElementById('audTable'));
 }
 
 // ── CHART HELPERS ─────────────────────────────────────────────────
@@ -1560,6 +1601,7 @@ function renderTodaysRun(data) {
         </div>
       </div>`;
     }).join('');
+  document.querySelectorAll('#todaysRunContent table').forEach(t => initTableSort(t));
 }
 
 // ── RENTALS ────────────────────────────────────────────────────────
@@ -1680,6 +1722,7 @@ function renderRentals() {
           </tr>`).join('')}
         </tbody>
       </table>`;
+  initTableSort(document.querySelector('#rentalUpcoming table'));
 }
 
 // ── HISTORY ────────────────────────────────────────────────────────
@@ -1805,6 +1848,7 @@ function renderHistTable() {
           </tr>`).join('')}
         </tbody>
       </table>`;
+  initTableSort(document.querySelector('#histTableWrap table'));
 }
 
 // ── LOGIN ──────────────────────────────────────────────────────────
