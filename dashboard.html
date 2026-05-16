@@ -1593,45 +1593,43 @@ function renderTodaysRun(data) {
       const totalKits=ords.reduce((s,r)=>s+(parseInt(r.Kits)||0),0);
       const hasNotes=ords.filter(r=>(r['Mover Notes']||r['Customer Note']||'').trim()).length;
       const trucks=[...new Set(ords.map(r=>r.Truck).filter(Boolean))];
+      const hasRooms=ords.some(r=>(r.Room||'').trim());
       return `<div class="card overflow-hidden mb-3">
-        <div class="px-4 py-3 flex items-center justify-between flex-wrap gap-2" style="background:var(--bg2);">
-          <div class="flex items-center gap-3 flex-wrap">
-            <span class="font-semibold" style="color:var(--t1);">${building}</span>
+        <div class="px-3 py-2.5 flex items-center justify-between flex-wrap gap-2" style="background:var(--bg2);">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-semibold text-sm" style="color:var(--t1);">${building}</span>
             <span class="badge b-b">${fmtN(ords.length)} orders</span>
             <span class="badge b-gray">${fmtN(totalKits)} kits</span>
-            ${trucks.length?`<span class="badge" style="background:#1e3a5f33;color:var(--acc);">🚛 ${trucks.join(', ')}</span>`:''}
+            ${trucks.length?`<span class="badge b-b hide-sm">🚛 ${trucks.join(', ')}</span>`:''}
             ${hasNotes?`<span class="badge b-y">${hasNotes} notes</span>`:''}
           </div>
         </div>
         <div class="overflow-x-auto">
-          <table class="w-full text-xs">
+          <table class="w-full" style="font-size:12px;">
             <thead style="background:var(--bg2);"><tr>
-              <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-              <th class="px-3 py-2 text-left" style="color:var(--t2);">Service</th>
-              <th class="px-3 py-2 text-left" style="color:var(--t2);">Room</th>
-              <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Address</th>
-              <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Time Slot</th>
-              <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Truck</th>
-              <th class="px-3 py-2 text-right" style="color:var(--t2);">Kits</th>
-              <th class="px-3 py-2 text-left" style="color:var(--t2);">Status</th>
-              <th class="px-3 py-2 text-left" style="color:var(--t2);">Phone</th>
-              <th class="px-3 py-2 text-left" style="color:var(--t2);">Notes</th>
+              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Student</th>
+              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Service</th>
+              ${hasRooms?`<th class="px-2 py-1.5 text-left hide-sm" style="color:var(--t2);">Room</th>`:''}
+              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Address</th>
+              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Time</th>
+              <th class="px-2 py-1.5 text-right" style="color:var(--t2);">Kits</th>
+              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Status</th>
+              <th class="px-2 py-1.5 text-left" style="color:var(--t2);">Notes</th>
             </tr></thead>
             <tbody class="divide-y" style="border-color:var(--bd);">
               ${ords.map(r=>{
                 const note=(r['Mover Notes']||r['Customer Note']||'').trim();
                 const svc=(r.Service||r.Product||'').trim();
+                const addr=(r.Address||'').trim();
                 return`<tr>
-                  <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r.Student||'—'}</td>
-                  <td class="px-3 py-2 font-medium" style="color:var(--acc);">${svc||'—'}</td>
-                  <td class="px-3 py-2" style="color:var(--t2);">${r.Room||'—'}</td>
-                  <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r.Address||'—'}</td>
-                  <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r['Time Slot']||'—'}</td>
-                  <td class="px-3 py-2 hide-sm font-medium" style="color:var(--acc);">${r.Truck||'—'}</td>
-                  <td class="px-3 py-2 text-right" style="color:var(--t1);">${r.Kits||'0'}</td>
-                  <td class="px-3 py-2">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
-                  <td class="px-3 py-2" style="color:var(--t2);">${r.Phone||'—'}</td>
-                  <td class="px-3 py-2 max-w-xs" style="color:${note?'#d97706':'var(--t3)'};">${note||'—'}</td>
+                  <td class="px-2 py-1.5 font-semibold" style="color:var(--t1);white-space:nowrap;">${r.Student||'—'}</td>
+                  <td class="px-2 py-1.5 font-medium" style="color:var(--acc);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${svc||'—'}</td>
+                  ${hasRooms?`<td class="px-2 py-1.5 hide-sm" style="color:var(--t2);">${r.Room||'—'}</td>`:''}
+                  <td class="px-2 py-1.5" style="color:var(--t2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${addr}">${addr||'—'}</td>
+                  <td class="px-2 py-1.5 whitespace-nowrap" style="color:var(--t2);">${r['Time Slot']||'—'}</td>
+                  <td class="px-2 py-1.5 text-right font-medium" style="color:var(--t1);">${r.Kits||'0'}</td>
+                  <td class="px-2 py-1.5">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
+                  <td class="px-2 py-1.5" style="color:${note?'#d97706':'var(--t3)'};max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${note}">${note||'—'}</td>
                 </tr>`;
               }).join('')}
             </tbody>
