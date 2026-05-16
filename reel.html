@@ -56,21 +56,50 @@ video{
   position:absolute;inset:0;
   display:flex;flex-direction:column;
   opacity:0;pointer-events:none;
-  will-change:opacity;
+  transition:opacity .4s ease-in;
 }
-.slide.active{opacity:1;}
+.slide.active{opacity:1;pointer-events:auto;transition:none;}
+.slide.leaving{opacity:0;pointer-events:none;transition:opacity .38s cubic-bezier(.4,0,.7,.2);}
 
-/* Staggered slide-up + fade per child */
+/* ── Text element states ─────────────────────────────────────────── */
+
+/* Base (hidden — no transition so it doesn't flash on load) */
 .w{
-  opacity:0;transform:translateY(24px);
-  transition:opacity .5s cubic-bezier(.22,1,.36,1),
-             transform .5s cubic-bezier(.22,1,.36,1);
+  opacity:0;
+  transform:translateY(30px) scale(.94);
+  filter:blur(12px);
+  will-change:opacity,transform,filter;
 }
-.slide.active .w{opacity:1;transform:translateY(0);}
+
+/* ENTRANCE — blur clears, floats up, springs into place */
+.slide.active .w{
+  opacity:1;
+  transform:translateY(0) scale(1);
+  filter:blur(0px);
+  transition:
+    opacity  .7s cubic-bezier(.16,1,.3,1),
+    transform .72s cubic-bezier(.16,1,.3,1),
+    filter   .6s  cubic-bezier(.16,1,.3,1);
+}
 .slide.active .w:nth-child(1){transition-delay:.04s;}
-.slide.active .w:nth-child(2){transition-delay:.18s;}
-.slide.active .w:nth-child(3){transition-delay:.32s;}
-.slide.active .w:nth-child(4){transition-delay:.46s;}
+.slide.active .w:nth-child(2){transition-delay:.2s;}
+.slide.active .w:nth-child(3){transition-delay:.36s;}
+.slide.active .w:nth-child(4){transition-delay:.52s;}
+
+/* EXIT — drifts up, blurs out, reverse stagger (last in → first out) */
+.slide.leaving .w{
+  opacity:0;
+  transform:translateY(-22px) scale(1.04);
+  filter:blur(10px);
+  transition:
+    opacity  .3s  cubic-bezier(.55,0,1,.45),
+    transform .32s cubic-bezier(.55,0,1,.45),
+    filter   .28s cubic-bezier(.55,0,1,.45);
+}
+.slide.leaving .w:nth-child(4){transition-delay:0s;}
+.slide.leaving .w:nth-child(3){transition-delay:.05s;}
+.slide.leaving .w:nth-child(2){transition-delay:.1s;}
+.slide.leaving .w:nth-child(1){transition-delay:.15s;}
 
 /* ── Slide types ─────────────────────────────────────────────────── */
 
@@ -281,8 +310,19 @@ const T = [[0,6],[6,12],[12,18],[18,24],[24,30],[30,36],[36,42]];
 
 function show(i) {
   if (cur === i) return;
-  slides.forEach((s, j) => s.classList.toggle('active', j === i));
+  const prev = cur;
   cur = i;
+
+  // Exit previous slide
+  if (prev >= 0) {
+    const leaving = slides[prev];
+    leaving.classList.remove('active');
+    leaving.classList.add('leaving');
+    setTimeout(() => leaving.classList.remove('leaving'), 550);
+  }
+
+  // Enter new slide
+  slides[i].classList.add('active');
 }
 
 vid.addEventListener('timeupdate', () => {
