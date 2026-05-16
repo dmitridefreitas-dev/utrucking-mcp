@@ -96,6 +96,7 @@
     <span id="countdown" class="hide-sm text-xs px-2 py-1 rounded" style="color:var(--t3);background:var(--bg2);">↻ 5:00</span>
     <button onclick="loadAll()" class="btn hide-sm">↻</button>
     <button onclick="toggleTheme()" class="btn" id="themeBtn">🌙</button>
+    <button onclick="toggleFullscreen()" class="btn" id="fsBtn" title="Full screen">⛶</button>
     <button onclick="window.print()" class="btn no-print hide-sm">⬇</button>
     <span id="lastUpdated" class="hide-sm text-xs" style="color:var(--t3);"></span>
   </div>
@@ -1272,6 +1273,19 @@ function closeMoreMenu() {
 
 document.addEventListener('click', e => {
   if(!document.getElementById('moreMenuWrap')?.contains(e.target)) closeMoreMenu();
+});
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(()=>{});
+    document.getElementById('fsBtn').textContent = '⊡';
+  } else {
+    document.exitFullscreen();
+    document.getElementById('fsBtn').textContent = '⛶';
+  }
+}
+document.addEventListener('fullscreenchange', () => {
+  document.getElementById('fsBtn').textContent = document.fullscreenElement ? '⊡' : '⛶';
 });
 
 function toggleTheme() {
