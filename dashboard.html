@@ -246,13 +246,45 @@
 
 <!-- OPERATIONS -->
 <div id="tab-operations" class="tab-panel hidden">
+  <div id="opsKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+    <div class="card p-4"><div class="label">Pickup Time Slot Distribution</div><div class="chart-hm"><canvas id="c-timeSlots"></canvas></div></div>
+    <div class="card p-4"><div class="label">Orders by Truck</div><div class="chart-h"><canvas id="c-byTruck"></canvas></div></div>
+  </div>
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
     <div class="card p-4"><div class="label">Event Types Breakdown</div><div class="chart-h"><canvas id="c-eventTypes"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
     <div class="card p-4"><div class="label">Service Completion Rate</div><div class="chart-h"><canvas id="c-completionRate"></canvas></div></div>
-    <div class="card p-4"><div class="label">Audit Pass / Fail by Service</div><div class="chart-h"><canvas id="c-auditByService"></canvas></div></div>
     <div class="card p-4"><div class="label">Order Status Breakdown</div><div class="chart-h"><canvas id="c-statusBreakdown"></canvas></div></div>
+  </div>
+  <div class="card overflow-hidden">
+    <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Dispatch Sheet — All Orders</span></div>
+    <div class="flex flex-wrap gap-2 px-4 py-2 border-b no-print" style="border-color:var(--bd);">
+      <input id="dispSearch" oninput="renderDispatchTable()" placeholder="Search student, building, truck…" class="text-xs flex-1 min-w-40"/>
+      <select id="dispStatus" onchange="renderDispatchTable()" class="text-xs"><option value="">All Statuses</option></select>
+      <select id="dispTruck" onchange="renderDispatchTable()" class="text-xs"><option value="">All Trucks</option></select>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead style="background:var(--bg2);"><tr>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">ID</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Building</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Room</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Date</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Time Slot</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Truck</th>
+          <th class="px-3 py-2 text-right" style="color:var(--t2);">Kits</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Status</th>
+          <th class="px-3 py-2 text-left" style="color:var(--t2);">Notes</th>
+        </tr></thead>
+        <tbody id="dispBody" class="divide-y" style="border-color:var(--bd);"></tbody>
+      </table>
+    </div>
+    <div class="px-4 py-2 border-t flex items-center justify-between no-print" style="border-color:var(--bd);">
+      <button onclick="changeDispPg(-1)" class="btn text-xs">← Prev</button>
+      <span id="dispPgInfo" class="text-xs" style="color:var(--t3);"></span>
+      <button onclick="changeDispPg(1)" class="btn text-xs">Next →</button>
+    </div>
   </div>
 </div>
 
@@ -381,6 +413,8 @@
 <script>
 const SID = '1ZoRH8OENK_wnKUeHvUc7eqytzuu2lMzaVvsPLJyvvng';
 const GIDs = {storage:'529044027',transit:'2098223117',manifest:'1586199848',vault:'1784822441',invoices:'201526587',events:'1549495149',audit:'2085245455',submissions:'543675645',pricing:'580278291'};
+const DISPATCH_SID = '1x5MQbsCFMJX5eafA6uoFF0nU4qfvCaK-2EyZNPs__kM';
+const DISPATCH_GID = '602263013';
 const P = ['#f97316','#3b82f6','#22c55e','#a855f7','#eab308','#ec4899','#14b8a6','#ef4444','#64748b','#f59e0b','#06b6d4','#84cc16'];
 
 Chart.defaults.color = '#94a3b8';
@@ -398,13 +432,30 @@ async function fetchSheet(gid) {
   return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
 }
 
+async function fetchDispatchSheet() {
+  const r = await fetch(`https://docs.google.com/spreadsheets/d/${DISPATCH_SID}/export?format=csv&gid=${DISPATCH_GID}`);
+  const t = await r.text();
+  if (t.trimStart().startsWith('<')) return [];
+  return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
+}
+
 async function loadAll() {
   document.getElementById('loadBar').style.display = 'block';
   try {
-    const results = await Promise.all(Object.values(GIDs).map(g => fetchSheet(g)));
+    const [analyticsResults, dispatchRows] = await Promise.all([
+      Promise.all(Object.values(GIDs).map(g => fetchSheet(g))),
+      fetchDispatchSheet()
+    ]);
     const keys = Object.keys(GIDs);
-    keys.forEach((k,i) => D[k] = results[i]);
+    keys.forEach((k,i) => D[k] = analyticsResults[i]);
     D.all = [...D.storage, ...D.transit].filter(r => r['Order Number']);
+    D.dispatch = dispatchRows;
+    // Build lookup map: order ID (no #) → dispatch row
+    D.dispatchMap = {};
+    dispatchRows.forEach(r => {
+      const id = (r.ID||'').replace(/^#/,'');
+      if(id) D.dispatchMap[id] = r;
+    });
     renderAll();
     document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
     populateGlobalFilters();
@@ -715,7 +766,76 @@ function renderStudentTable() {
 }
 
 // ── OPERATIONS ────────────────────────────────────────────────────
+let dispPg = 1, dispFiltered = [];
+const DISP_PG = 30;
+
+function renderDispatchTable() {
+  const q = (v('dispSearch')||'').toLowerCase();
+  const st = v('dispStatus'), tr = v('dispTruck');
+  dispFiltered = (D.dispatch||[]).filter(r =>
+    (!q || (r.Student||'').toLowerCase().includes(q) || (r.Building||'').toLowerCase().includes(q) || (r.Truck||'').toLowerCase().includes(q) || (r.ID||'').toLowerCase().includes(q)) &&
+    (!st || r['Dispatch Status']===st) &&
+    (!tr || r.Truck===tr)
+  );
+  const pages = Math.ceil(dispFiltered.length/DISP_PG);
+  const slice = dispFiltered.slice((dispPg-1)*DISP_PG, dispPg*DISP_PG);
+  document.getElementById('dispBody').innerHTML = slice.map(r=>`<tr>
+    <td class="px-3 py-2 font-mono" style="color:var(--t3);">${r.ID||'—'}</td>
+    <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r.Student||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r.Building||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r.Room||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r.Date||'—'}</td>
+    <td class="px-3 py-2" style="color:var(--t2);">${r['Time Slot']||'—'}</td>
+    <td class="px-3 py-2 font-medium" style="color:var(--acc);">${r.Truck||'—'}</td>
+    <td class="px-3 py-2 text-right" style="color:var(--t1);">${r.Kits||'0'}</td>
+    <td class="px-3 py-2">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
+    <td class="px-3 py-2 max-w-xs truncate" style="color:var(--t3);">${r['Mover Notes']||'—'}</td>
+  </tr>`).join('');
+  document.getElementById('dispPgInfo').textContent = `${fmtN(dispFiltered.length)} orders · Page ${dispPg} of ${pages||1}`;
+}
+function changeDispPg(d){const p=Math.ceil((dispFiltered.length||1)/DISP_PG);dispPg=Math.max(1,Math.min(p,dispPg+d));renderDispatchTable();}
+
 function renderOperations(data) {
+  // Dispatch KPIs from live dispatch sheet
+  const dRows = D.dispatch||[];
+  const dWithTruck = dRows.filter(r=>r.Truck&&r.Truck.trim());
+  const dWithSlot = dRows.filter(r=>r['Time Slot']&&r['Time Slot'].trim());
+  const totalKits = dRows.reduce((s,r)=>s+(parseInt(r.Kits)||0),0);
+  const trucks = [...new Set(dWithTruck.map(r=>r.Truck))].length;
+  document.getElementById('opsKPIs').innerHTML=[
+    {l:'Total Orders',v:fmtN(dRows.length),sub:'in dispatch sheet',c:'#f97316'},
+    {l:'Assigned to Truck',v:fmtN(dWithTruck.length),sub:`${trucks} trucks active`,c:'#3b82f6'},
+    {l:'Total Kits',v:fmtN(totalKits),sub:'kits required',c:'#22c55e'},
+    {l:'Time Slots Scheduled',v:fmtN(dWithSlot.length),sub:'orders with a time',c:'#a855f7'},
+  ].map(k=>`<div class="kpi card p-3"><div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold mb-0.5" style="color:${k.c};">${k.v}</div><div class="text-xs" style="color:var(--t3);">${k.sub}</div></div>`).join('');
+
+  // Time slot distribution
+  const slots = cb(dWithSlot, 'Time Slot');
+  const slotEntries = Object.entries(slots).sort((a,b)=>b[1]-a[1]);
+  if(slotEntries.length>0){
+    mkBar('c-timeSlots', slotEntries.map(x=>x[0]), [{data:slotEntries.map(x=>x[1]), backgroundColor:P[4]+'bb', borderRadius:4, maxBarThickness:32}],
+      {indexAxis:'y', scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'},ticks:{font:{size:10}}}}});
+  }
+
+  // Orders by truck
+  const truckCounts = cb(dWithTruck, 'Truck');
+  const truckEntries = Object.entries(truckCounts).sort((a,b)=>b[1]-a[1]);
+  if(truckEntries.length>0){
+    mkBar('c-byTruck', truckEntries.map(x=>x[0]), [{data:truckEntries.map(x=>x[1]), backgroundColor:P[0]+'bb', borderRadius:4, maxBarThickness:32}],
+      {scales:{y:{beginAtZero:true,grid:{color:'var(--bd)'}},x:{grid:{color:'var(--bd)'}}}});
+  }
+
+  // Populate dispatch table filters
+  const setOpts = (id, vals, label) => {
+    const el = document.getElementById(id);
+    const cur = el.value;
+    el.innerHTML = `<option value="">All ${label}</option>` + vals.sort().map(v=>`<option${v===cur?' selected':''}>${v}</option>`).join('');
+  };
+  setOpts('dispStatus', [...new Set(dRows.map(r=>r['Dispatch Status']||r.Status).filter(Boolean))], 'Statuses');
+  setOpts('dispTruck', [...new Set(dRows.map(r=>r.Truck).filter(Boolean))], 'Trucks');
+  dispFiltered = [...dRows]; dispPg = 1;
+  renderDispatchTable();
+
   donut('c-eventTypes', cb(D.events.filter(r=>r['Event Type']), 'Event Type'));
 
 
@@ -1151,19 +1271,28 @@ function quickLookup(q) {
     const total=inv.reduce((s,i)=>s+pm(i['Line Total']),0);
     const mRows=D.manifest.filter(m=>m['Order Number']===r['Order Number']);
     const hasIssue=(r['Issue Notes']||'').trim();
+    const dRow=D.dispatchMap?.[r['Order Number']]||{};
+    const phone=dRow.Phone||r.Phone||'';
+    const slot=dRow['Time Slot']||'';
+    const truck=dRow.Truck||'';
+    const kits=dRow.Kits||'';
     return `<div class="order-card card p-3">
       <div class="flex items-start justify-between gap-2 mb-2">
         <div>
           <div class="font-semibold text-sm" style="color:var(--t1);">${r.Student||'—'}</div>
           <div class="text-xs" style="color:var(--t3);">${r['Order Number']} · ${r.Service||'—'}</div>
         </div>
-        ${sBadge(r['Dispatch Status']||'—')}
+        ${sBadge(r['Dispatch Status']||dRow['Dispatch Status']||'—')}
       </div>
       <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-2">
-        <div style="color:var(--t3);">Building <span style="color:var(--t1);font-weight:500;">${r.Building||'—'}</span></div>
-        <div style="color:var(--t3);">Room <span style="color:var(--t1);font-weight:500;">${r.Room||'—'}</span></div>
+        <div style="color:var(--t3);">Building <span style="color:var(--t1);font-weight:500;">${r.Building||dRow.Building||'—'}</span></div>
+        <div style="color:var(--t3);">Room <span style="color:var(--t1);font-weight:500;">${r.Room||dRow.Room||'—'}</span></div>
         <div style="color:var(--t3);">Items <span style="color:var(--acc);font-weight:500;">${fmtN(r['Item Count']||0)}</span></div>
         <div style="color:var(--t3);">Total <span style="color:#22c55e;font-weight:500;">${total>0?usd(total):'Pending'}</span></div>
+        ${phone?`<div style="color:var(--t3);">Phone <span style="color:var(--t1);font-weight:500;">${phone}</span></div>`:''}
+        ${slot?`<div style="color:var(--t3);">Time <span style="color:var(--t1);font-weight:500;">${slot}</span></div>`:''}
+        ${truck?`<div style="color:var(--t3);">Truck <span style="color:var(--acc);font-weight:500;">${truck}</span></div>`:''}
+        ${kits?`<div style="color:var(--t3);">Kits <span style="color:var(--t1);font-weight:500;">${kits}</span></div>`:''}
       </div>
       ${mRows.length?`<div class="text-xs mb-1" style="color:var(--t3);">Stored: ${mRows.map(m=>`${m.Qty||1}× ${m.Item}`).join(', ')}</div>`:''}
       ${hasIssue?`<div class="text-xs p-2 rounded mt-1" style="background:#7f1d1d33;color:#fca5a5;">⚠ ${hasIssue}</div>`:''}
@@ -1173,13 +1302,16 @@ function quickLookup(q) {
 
 // ── DISPATCH KANBAN ────────────────────────────────────────────────
 function renderDispatch(data) {
-  const STATUS_ORDER = ['Queued','In Progress','Complete'];
-  const allStatuses = [...new Set(data.map(r=>r['Dispatch Status']||'Unknown'))];
+  // Use the master dispatch sheet for the Kanban — it has real-time status
+  const src = (D.dispatch&&D.dispatch.length>0) ? D.dispatch : data;
+  const getStatus = r => r['Dispatch Status']||r.Status||'Unknown';
+  const STATUS_ORDER = ['Not Dispatched','Queued','In Progress','Dispatched','Complete','Completed'];
+  const allStatuses = [...new Set(src.map(r=>getStatus(r)))];
   const cols = [...STATUS_ORDER.filter(s=>allStatuses.includes(s)), ...allStatuses.filter(s=>!STATUS_ORDER.includes(s))];
-  const colors = {Queued:'#eab308','In Progress':'#3b82f6',Complete:'#22c55e'};
+  const colors = {'Not Dispatched':'#64748b',Queued:'#eab308','In Progress':'#3b82f6',Dispatched:'#3b82f6',Complete:'#22c55e',Completed:'#22c55e'};
   const groups = {};
   cols.forEach(s=>groups[s]=[]);
-  data.forEach(r=>{const s=r['Dispatch Status']||'Unknown';if(!groups[s])groups[s]=[];groups[s].push(r);});
+  src.forEach(r=>{const s=getStatus(r);if(!groups[s])groups[s]=[];groups[s].push(r);});
 
   // Summary chips
   document.getElementById('dispatchSummary').innerHTML = cols.map(s=>{
@@ -1202,17 +1334,21 @@ function renderDispatch(data) {
       <div class="flex flex-col gap-2">
         ${orders.length===0?`<div class="card p-4 text-center text-xs" style="color:var(--t3);border-style:dashed;">No orders</div>`:''}
         ${orders.slice(0,40).map(r=>{
-          const hasIssue=(r['Issue Notes']||'').trim();
+          const hasIssue=(r['Issue Notes']||r['Mover Notes']||'').trim();
+          const slot=r['Time Slot']||'';
+          const truck=r.Truck||'';
+          const kits=r.Kits||r['Item Count']||'';
           return `<div class="order-card card p-3" style="border-color:${hasIssue?'#ef4444':'var(--bd)'};">
             <div class="flex items-start justify-between gap-1 mb-1">
               <span class="text-xs font-semibold leading-tight" style="color:var(--t1);">${r.Student||'—'}</span>
               ${hasIssue?'<span class="badge b-r flex-shrink-0" style="font-size:9px;">!</span>':''}
             </div>
             <div class="text-xs mb-1" style="color:var(--t2);">${r.Building||'—'}${r.Room?' · '+r.Room:''}</div>
-            <div class="flex justify-between items-center">
+            <div class="flex justify-between items-center mb-1">
               <span class="text-xs" style="color:var(--t3);">${r.Service||'—'}</span>
-              <span class="text-xs font-medium" style="color:var(--acc);">${fmtN(r['Item Count']||0)} items</span>
+              ${kits?`<span class="text-xs font-medium" style="color:var(--acc);">${fmtN(kits)} kits</span>`:''}
             </div>
+            ${slot||truck?`<div class="flex gap-2 text-xs" style="color:var(--t3);">${slot?`<span>⏰ ${slot}</span>`:''}${truck?`<span>🚛 ${truck}</span>`:''}</div>`:''}
             ${hasIssue?`<div class="text-xs mt-1.5 p-1.5 rounded leading-tight" style="background:#7f1d1d33;color:#fca5a5;">${hasIssue}</div>`:''}
           </div>`;
         }).join('')}
@@ -1227,25 +1363,35 @@ function renderTodaysRun(data) {
   const today = new Date();
   const todayStr = `${today.getMonth()+1}/${today.getDate()}/${today.getFullYear()}`;
   document.getElementById('todayDate').textContent = today.toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-  let orders = data.filter(r=>r['Pickup Date']===todayStr);
+
+  // Use dispatch sheet for real date+time data
+  const dRows = D.dispatch||[];
+  let orders = dRows.filter(r=>r.Date===todayStr);
   const isDateMatch = orders.length>0;
-  if(!isDateMatch) orders = data.filter(r=>r['Dispatch Status']==='Queued');
+  if(!isDateMatch) orders = dRows.filter(r=>((r['Dispatch Status']||r.Status||'')==='Queued'||(r['Dispatch Status']||r.Status||'')==='Not Dispatched'));
+
+  // Sort by time slot then building
+  orders = [...orders].sort((a,b)=>(a['Time Slot']||'').localeCompare(b['Time Slot']||'')||(a.Building||'').localeCompare(b.Building||''));
+
   const byBuilding = {};
   orders.forEach(r=>{const b=r.Building||'No Building';if(!byBuilding[b])byBuilding[b]=[];byBuilding[b].push(r);});
   const buildings = Object.entries(byBuilding).sort((a,b)=>b[1].length-a[1].length);
+
   document.getElementById('todaysRunContent').innerHTML =
-    (!isDateMatch&&orders.length>0?`<div class="text-xs px-3 py-2 rounded mb-3" style="background:var(--bg2);color:var(--t3);">No Pickup Date set for today — showing all Queued orders (${fmtN(orders.length)}).</div>`:'')+
-    (buildings.length===0?'<div class="card p-8 text-center text-xs" style="color:var(--t3);">No orders to show.</div>':'')+
+    (!isDateMatch&&orders.length>0?`<div class="text-xs px-3 py-2 rounded mb-3" style="background:var(--bg2);color:var(--t3);">No pickup dates set for today — showing all unDispatched orders (${fmtN(orders.length)}).</div>`:'')+
+    (buildings.length===0?'<div class="card p-8 text-center text-xs" style="color:var(--t3);">No orders to show for today.</div>':'')+
     buildings.map(([building,ords])=>{
-      const totalItems=ords.reduce((s,r)=>s+(parseInt(r['Item Count'])||0),0);
-      const issues=ords.filter(r=>(r['Issue Notes']||'').trim()).length;
+      const totalKits=ords.reduce((s,r)=>s+(parseInt(r.Kits)||0),0);
+      const hasNotes=ords.filter(r=>(r['Mover Notes']||r['Customer Note']||'').trim()).length;
+      const trucks=[...new Set(ords.map(r=>r.Truck).filter(Boolean))];
       return `<div class="card overflow-hidden mb-3">
         <div class="px-4 py-3 flex items-center justify-between flex-wrap gap-2" style="background:var(--bg2);">
           <div class="flex items-center gap-3 flex-wrap">
             <span class="font-semibold" style="color:var(--t1);">${building}</span>
             <span class="badge b-b">${fmtN(ords.length)} orders</span>
-            <span class="badge b-gray">${fmtN(totalItems)} items</span>
-            ${issues?`<span class="badge b-r">${issues} issue${issues>1?'s':''}</span>`:''}
+            <span class="badge b-gray">${fmtN(totalKits)} kits</span>
+            ${trucks.length?`<span class="badge" style="background:#1e3a5f33;color:var(--acc);">🚛 ${trucks.join(', ')}</span>`:''}
+            ${hasNotes?`<span class="badge b-y">${hasNotes} notes</span>`:''}
           </div>
         </div>
         <div class="overflow-x-auto">
@@ -1253,20 +1399,27 @@ function renderTodaysRun(data) {
             <thead style="background:var(--bg2);"><tr>
               <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
               <th class="px-3 py-2 text-left" style="color:var(--t2);">Room</th>
-              <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Service</th>
-              <th class="px-3 py-2 text-right" style="color:var(--t2);">Items</th>
+              <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Time Slot</th>
+              <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Truck</th>
+              <th class="px-3 py-2 text-right" style="color:var(--t2);">Kits</th>
               <th class="px-3 py-2 text-left" style="color:var(--t2);">Status</th>
+              <th class="px-3 py-2 text-left" style="color:var(--t2);">Phone</th>
               <th class="px-3 py-2 text-left" style="color:var(--t2);">Notes</th>
             </tr></thead>
             <tbody class="divide-y" style="border-color:var(--bd);">
-              ${ords.map(r=>{const issue=(r['Issue Notes']||'').trim();return`<tr>
-                <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r.Student||'—'}</td>
-                <td class="px-3 py-2" style="color:var(--t2);">${r.Room||'—'}</td>
-                <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r.Service||'—'}</td>
-                <td class="px-3 py-2 text-right font-medium" style="color:var(--acc);">${fmtN(r['Item Count']||0)}</td>
-                <td class="px-3 py-2">${sBadge(r['Dispatch Status']||'—')}</td>
-                <td class="px-3 py-2 max-w-xs" style="color:${issue?'#fca5a5':'var(--t3)'};">${issue||'—'}</td>
-              </tr>`;}).join('')}
+              ${ords.map(r=>{
+                const note=(r['Mover Notes']||r['Customer Note']||'').trim();
+                return`<tr>
+                  <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r.Student||'—'}</td>
+                  <td class="px-3 py-2" style="color:var(--t2);">${r.Room||'—'}</td>
+                  <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r['Time Slot']||'—'}</td>
+                  <td class="px-3 py-2 hide-sm font-medium" style="color:var(--acc);">${r.Truck||'—'}</td>
+                  <td class="px-3 py-2 text-right" style="color:var(--t1);">${r.Kits||'0'}</td>
+                  <td class="px-3 py-2">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
+                  <td class="px-3 py-2" style="color:var(--t2);">${r.Phone||'—'}</td>
+                  <td class="px-3 py-2 max-w-xs" style="color:${note?'#fde68a':'var(--t3)'};">${note||'—'}</td>
+                </tr>`;
+              }).join('')}
             </tbody>
           </table>
         </div>
