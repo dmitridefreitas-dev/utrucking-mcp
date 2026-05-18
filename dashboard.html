@@ -3,1993 +3,527 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>UTrucking — Analytics Dashboard</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<title>Warehouse Analytics Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-  *{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter','Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;}
-  :root{--bg0:#f0f6ff;--bg1:#ffffff;--bg2:#dbeafe;--t1:#0f172a;--t2:#1e293b;--t3:#475569;--bd:#bfdbfe;--acc:#2563eb;}
-  body.dark{--bg0:#0f172a;--bg1:#1e293b;--bg2:#334155;--t1:#f1f5f9;--t2:#94a3b8;--t3:#475569;--bd:#1e293b;--acc:#3b82f6;}
-  body{background:var(--bg0);color:var(--t1);font-weight:500;}
-  body.dark{font-weight:400;}
-  .card{background:var(--bg1);border:1px solid var(--bd);border-radius:0.75rem;}
-  ::-webkit-scrollbar{width:4px;height:4px;}
-  ::-webkit-scrollbar-track{background:var(--bg0);}
-  ::-webkit-scrollbar-thumb{background:var(--bg2);border-radius:2px;}
-  .tab-active{border-bottom:2px solid var(--acc)!important;color:var(--acc)!important;}
-  .chart-h{position:relative;height:240px;}
-  .chart-hm{position:relative;height:300px;}
-  .chart-hg{position:relative;height:180px;}
-  .badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:9999px;font-size:11px;font-weight:600;}
-  .b-g{background:#dcfce7;color:#166534;}.b-y{background:#fef9c3;color:#854d0e;}
-  .b-r{background:#fee2e2;color:#991b1b;}.b-b{background:#dbeafe;color:#1d4ed8;}
-  .b-gray{background:#f1f5f9;color:#64748b;}
-  body.dark .b-g{background:#166534;color:#86efac;}body.dark .b-y{background:#713f12;color:#fde68a;}
-  body.dark .b-r{background:#7f1d1d;color:#fca5a5;}body.dark .b-b{background:#1e3a5f;color:#93c5fd;}
-  body.dark .b-gray{background:#1e293b;color:#94a3b8;}
-  .kpi{transition:transform .2s;cursor:default;}.kpi:hover{transform:translateY(-2px);}
-  .vault-slot{width:24px;height:24px;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:8px;cursor:pointer;}
-  .vault-slot:hover{opacity:.7;}
-  .pulse{animation:pulse 1.8s cubic-bezier(.4,0,.6,1) infinite;}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-  .sa::after{content:' ↑';color:var(--acc);}.sd::after{content:' ↓';color:var(--acc);}
-  .cal-cell{width:14px;height:14px;border-radius:2px;cursor:pointer;}
-  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;display:flex;align-items:center;justify-content:center;}
-  .funnel-bar{transition:width .8s ease;}
-  tr:hover{background:rgba(219,234,254,.45);}
-  body.dark tr:hover{background:rgba(30,41,59,.35);}
-  input,select{background:var(--bg1);border:1px solid var(--bg2);color:var(--t1);border-radius:.5rem;padding:.375rem .75rem;font-size:.75rem;}
-  input::placeholder{color:var(--t3);}
-  .btn{background:var(--bg1);border:1px solid var(--bg2);color:var(--t2);border-radius:.5rem;padding:.375rem .75rem;font-size:.75rem;cursor:pointer;transition:background .15s;}
-  .btn:hover{background:var(--bg2);}
-  .kanban-col{min-width:260px;flex:1;max-width:380px;}
-  .order-card{transition:border-color .15s,transform .1s;cursor:default;}.order-card:hover{transform:translateY(-1px);}
-  .season-bar{height:8px;border-radius:4px;background:var(--bg2);overflow:hidden;}
-  .season-fill{height:100%;border-radius:4px;transition:width .9s ease;}
-  .ql-result{animation:fadeIn .2s ease;}
-  @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-  @media(max-width:768px){
-    .hide-sm{display:none!important;}
-    .mobile-stack{flex-direction:column!important;}
-    .mobile-full{width:100%!important;}
-    /* Today's Run — large readable text while driving */
-    #todaysRunContent table{font-size:14px!important;}
-    #todaysRunContent th{font-size:12px!important;font-weight:600;letter-spacing:.03em;}
-    #todaysRunContent td{padding-top:10px!important;padding-bottom:10px!important;}
-    /* Kanban cards */
-    .order-card{padding:14px!important;}
-    .order-card .student-name{font-size:15px!important;font-weight:700!important;letter-spacing:-.01em;}
-    .order-card .detail-line{font-size:13px!important;}
-    /* Badges bigger on mobile */
-    .badge{font-size:12px!important;padding:3px 10px!important;}
-    /* KPI numbers */
-    .kpi .text-xl{font-size:22px!important;}
-  }
-  @media print{.no-print{display:none!important;}.tab-panel{display:block!important;}}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+       background:#f0f2f5; color:#1a1a2e; line-height:1.5; }
+
+.header { background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);
+           color:#fff; padding:28px 40px; display:flex; align-items:center; justify-content:space-between; }
+.header-left { flex:1; }
+.header h1 { font-size:24px; font-weight:700; letter-spacing:-0.5px; }
+.header h1 a { color:#fff; text-decoration:none; }
+.header h1 a:hover { text-decoration:underline; }
+.header .sub { color:#a0aec0; font-size:13px; margin-top:4px; }
+.header-logo { height:60px; width:auto; border-radius:8px; }
+
+.nav { background:#16213e; padding:0 40px; display:flex; gap:0; border-bottom:2px solid #0f3460; }
+.nav a { color:#a0aec0; text-decoration:none; padding:10px 18px; font-size:13px; font-weight:500;
+          border-bottom:2px solid transparent; transition:all .2s; }
+.nav a:hover, .nav a.active { color:#fff; border-bottom-color:#4e79a7; }
+
+.container { max-width:1400px; margin:0 auto; padding:24px; }
+
+/* KPI cards */
+.kpi-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr));
+             gap:16px; margin-bottom:28px; }
+.kpi { background:#fff; border-radius:10px; padding:20px; text-align:center;
+        box-shadow:0 1px 3px rgba(0,0,0,.08); border-top:3px solid #4e79a7; }
+.kpi .value { font-size:28px; font-weight:700; color:#1a1a2e; }
+.kpi .label { font-size:12px; color:#666; text-transform:uppercase; letter-spacing:.5px; margin-top:4px; }
+.kpi.green { border-top-color:#59a14f; }
+.kpi.orange { border-top-color:#f28e2b; }
+.kpi.red { border-top-color:#e15759; }
+.kpi.purple { border-top-color:#b07aa1; }
+
+/* Sections */
+.section { margin-bottom:32px; }
+.section-title { font-size:18px; font-weight:700; color:#1a1a2e; margin-bottom:16px;
+                  padding-bottom:8px; border-bottom:2px solid #e2e8f0; }
+
+/* Chart grid */
+.chart-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.chart-card { background:#fff; border-radius:10px; padding:20px;
+               box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.chart-card h3 { font-size:14px; font-weight:600; color:#333; margin-bottom:12px; }
+.chart-card canvas { max-height:320px; }
+.chart-card.full { grid-column: 1 / -1; }
+.empty-chart { display:flex; flex-direction:column; align-items:center; justify-content:center;
+                min-height:200px; color:#999; }
+.empty-chart .empty-val { font-size:48px; font-weight:700; color:#ccc; }
+.empty-chart .empty-msg { font-size:13px; margin-top:8px; }
+
+/* Recommendations */
+.rec { background:#fff; border-radius:10px; padding:20px; margin-bottom:12px;
+        box-shadow:0 1px 3px rgba(0,0,0,.08); border-left:4px solid #ccc; }
+.rec.critical { border-left-color:#e15759; }
+.rec.warning { border-left-color:#f28e2b; }
+.rec.info { border-left-color:#4e79a7; }
+.rec .rec-header { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.rec .badge { display:inline-block; padding:2px 10px; border-radius:12px;
+               font-size:11px; font-weight:600; text-transform:uppercase; color:#fff; }
+.rec.critical .badge { background:#e15759; }
+.rec.warning .badge { background:#f28e2b; }
+.rec.info .badge { background:#4e79a7; }
+.rec h4 { font-size:14px; font-weight:600; color:#1a1a2e; }
+.rec .detail { font-size:13px; color:#555; margin-bottom:6px; }
+.rec .action { font-size:13px; color:#333; padding:8px 12px; background:#f7f9fc;
+                border-radius:6px; border-left:3px solid #4e79a7; }
+.rec .metric { font-size:12px; color:#888; margin-top:6px; }
+
+/* Forecast cards */
+.forecast-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.forecast-card { background:#fff; border-radius:10px; padding:20px;
+                  box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.forecast-card h3 { font-size:14px; font-weight:600; margin-bottom:12px; }
+.forecast-card .stat { display:flex; justify-content:space-between; padding:6px 0;
+                        border-bottom:1px solid #f0f0f0; font-size:13px; }
+.forecast-card .stat:last-child { border-bottom:none; }
+.forecast-card .stat .k { color:#666; }
+.forecast-card .stat .v { font-weight:600; color:#1a1a2e; }
+.trend-up { color:#59a14f; }
+.trend-down { color:#e15759; }
+.trend-flat { color:#f28e2b; }
+
+/* Responsive -- tablet */
+@media (max-width:900px) {
+  .chart-grid, .forecast-grid { grid-template-columns:1fr; }
+  .kpi-grid { grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); }
+  .container { padding:16px; }
+  .header { padding:20px; }
+}
+
+/* Responsive -- mobile */
+@media (max-width:600px) {
+  .header { flex-direction:column; text-align:center; padding:16px; gap:12px; }
+  .header-left { order:2; }
+  .header-logo { height:48px; order:1; }
+  .header h1 { font-size:18px; }
+  .header .sub { font-size:11px; }
+  .nav { padding:0 8px; overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap; }
+  .nav a { padding:10px 12px; font-size:12px; flex-shrink:0; }
+  .container { padding:10px; }
+  .kpi-grid { grid-template-columns:repeat(2, 1fr); gap:10px; }
+  .kpi { padding:14px 10px; }
+  .kpi .value { font-size:22px; }
+  .kpi .label { font-size:10px; }
+  .chart-grid, .forecast-grid { grid-template-columns:1fr; gap:12px; }
+  .chart-card { padding:14px; }
+  .chart-card h3 { font-size:13px; }
+  .chart-card canvas { max-height:260px; }
+  .section-title { font-size:16px; }
+  .rec { padding:14px; }
+  .rec h4 { font-size:13px; }
+  .rec .detail, .rec .action { font-size:12px; }
+  .forecast-card .stat { font-size:12px; }
+}
+
+@media print {
+  .nav { display:none; }
+  .chart-card, .rec, .forecast-card { break-inside:avoid; }
+}
 </style>
 </head>
 <body>
 
-<!-- LOGIN GATE -->
-<div id="loginGate" style="position:fixed;inset:0;background:var(--bg0);z-index:9999;display:flex;align-items:center;justify-content:center;">
-  <div class="card p-8" style="width:100%;max-width:360px;">
-    <div class="flex items-center gap-3 mb-6">
-      <img src="./Final_logos-01.webp" class="h-10 w-auto" alt="UTrucking" />
-      <div>
-        <div class="font-bold" style="color:var(--t1);">UTrucking Analytics</div>
-        <div class="text-xs" style="color:var(--t3);">Sign in to continue</div>
-      </div>
-    </div>
-    <div class="mb-3">
-      <label class="text-xs font-medium mb-1 block" style="color:var(--t2);">Username</label>
-      <input id="loginUser" type="text" placeholder="Username" class="w-full" style="padding:.5rem .75rem;font-size:.875rem;" onkeydown="if(event.key==='Enter')doLogin()"/>
-    </div>
-    <div class="mb-5">
-      <label class="text-xs font-medium mb-1 block" style="color:var(--t2);">Password</label>
-      <input id="loginPass" type="password" placeholder="Password" class="w-full" style="padding:.5rem .75rem;font-size:.875rem;" onkeydown="if(event.key==='Enter')doLogin()"/>
-    </div>
-    <button onclick="doLogin()" style="width:100%;background:#2563eb;color:#fff;border:none;border-radius:.5rem;padding:.6rem;font-size:.875rem;font-weight:600;cursor:pointer;">Sign In</button>
-    <div id="loginErr" class="text-xs mt-3 text-center hidden" style="color:#dc2626;">Incorrect username or password.</div>
+<div class="header">
+  <div class="header-left">
+    <h1><a href="https://utrucking.com/" target="_blank">UTrucking</a> -- Warehouse Analytics Dashboard</h1>
+    <div class="sub">Generated May 18, 2026 at 09:22 AM | Comprehensive operational analysis with forecasting</div>
+  </div>
+  <a href="https://utrucking.com/" target="_blank"><img src="data:image/webp;base64,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" class="header-logo" alt="UTrucking"></a>
+</div>
+
+<div class="nav">
+  <a href="#kpis" class="active">Overview</a>
+  <a href="#vault">Vault</a>
+  <a href="#shipping">Shipping</a>
+  <a href="#items">Inventory</a>
+  <a href="#financial">Financial</a>
+  <a href="#audit">Quality</a>
+  <a href="#dispatch">Dispatch</a>
+  <a href="#forms">Forms</a>
+  <a href="#forecasting">Forecasting</a>
+  <a href="#recommendations">Recommendations</a>
+</div>
+
+<div class="container">
+
+<!-- KPIs -->
+<div id="kpis" class="section">
+  <div class="section-title">Key Performance Indicators</div>
+  <div class="kpi-grid" id="kpiGrid"></div>
+</div>
+
+<!-- Vault Operations -->
+<div id="vault" class="section">
+  <div class="section-title">Vault Operations</div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Dispatch Status Breakdown</h3><canvas id="c_dispatch_status"></canvas></div>
+    <div class="chart-card"><h3>Orders by Building (Top 15)</h3><canvas id="c_vault_buildings"></canvas></div>
+    <div class="chart-card"><h3>Days in Warehouse Distribution</h3><canvas id="c_days_dist"></canvas></div>
+    <div class="chart-card"><h3>Flagged Issues (Top 10)</h3><canvas id="c_vault_issues"></canvas></div>
+    <div class="chart-card full"><h3>Pickup Volume by Week</h3><canvas id="c_pickup_timeline"></canvas></div>
   </div>
 </div>
 
-<!-- HEADER -->
-<div class="no-print sticky top-0 z-50 border-b" style="background:var(--bg1);border-color:var(--bd);">
-  <div class="px-5 py-2.5 flex items-center gap-3">
-    <img src="./Final_logos-01.webp" class="h-8 w-auto flex-shrink-0" alt="UTrucking" />
-    <div class="flex-1">
-      <div class="font-bold text-sm" style="color:var(--t1);">UTrucking Analytics</div>
-      <div class="text-xs" style="color:var(--t3);">Master Operations Dashboard</div>
-    </div>
-    <input id="globalSearch" oninput="handleGlobalSearch(this.value)" placeholder="🔍  Search student or order…" class="text-xs" style="width:220px;" />
-    <span id="countdown" class="hide-sm text-xs px-2 py-1 rounded" style="color:var(--t3);background:var(--bg2);">↻ 5:00</span>
-    <button onclick="loadAll()" class="btn hide-sm">↻</button>
-    <button onclick="toggleTheme()" class="btn" id="themeBtn">🌙</button>
-    <button onclick="toggleFullscreen()" class="btn" id="fsBtn" title="Full screen">⛶</button>
-    <button onclick="window.print()" class="btn no-print hide-sm">⬇</button>
-    <span id="lastUpdated" class="hide-sm text-xs" style="color:var(--t3);"></span>
-  </div>
-</div>
-<div id="loadBar" class="h-0.5 bg-blue-600 pulse" style="display:none;"></div>
-
-<!-- ALERT BANNER -->
-<div id="alertBanner" class="hidden no-print px-5 py-2 flex flex-wrap gap-2 items-center border-b" style="background:#7f1d1d;border-color:#991b1b;">
-  <span class="text-xs font-semibold" style="color:#fca5a5;">⚠ Needs attention:</span>
-  <div id="alertItems" class="flex flex-wrap gap-1.5 flex-1"></div>
-  <button onclick="document.getElementById('alertBanner').classList.add('hidden')" class="text-xs ml-2" style="color:#fca5a5;background:none;border:none;cursor:pointer;">✕</button>
-</div>
-
-<!-- KPI STRIP -->
-<div class="px-5 pt-4 pb-2">
-  <div id="kpiStrip" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2.5"></div>
-</div>
-
-<!-- GLOBAL FILTER -->
-<div class="no-print px-5 pb-2 flex flex-wrap gap-2 items-center">
-  <span class="text-xs" style="color:var(--t3);">Filter all:</span>
-  <select id="gService" onchange="renderAll()" class="text-xs"><option value="">All Services</option></select>
-  <select id="gBuilding" onchange="renderAll()" class="text-xs"><option value="">All Buildings</option></select>
-  <button onclick="clearFilters()" class="btn text-xs">✕ Clear</button>
-  <span id="filterInfo" class="text-xs" style="color:var(--t3);"></span>
-</div>
-
-<!-- TAB NAV -->
-<div class="no-print px-5 border-b" style="border-color:var(--bd);">
-  <div class="flex gap-0.5 items-end">
-    <button class="tab-btn tab-active px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('dispatch',this)">🚛 Dispatch</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('todaysrun',this)">📋 Today's Run</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('overview',this)">Overview</button>
-    <button class="tab-btn px-3 py-2 text-xs font-medium border-b-2 border-transparent whitespace-nowrap transition-colors" style="color:var(--t2);" onclick="switchTab('history',this)">2025</button>
-    <!-- MORE DROPDOWN -->
-    <div class="relative ml-1" id="moreMenuWrap">
-      <button id="moreBtn" onclick="toggleMoreMenu()" class="px-3 py-2 text-xs font-medium whitespace-nowrap border-b-2 border-transparent transition-colors" style="color:var(--t2);">More ▾</button>
-      <div id="moreMenu" class="hidden absolute left-0 top-full z-50 rounded-lg shadow-xl overflow-hidden" style="background:var(--bg1);border:1px solid var(--bg2);min-width:180px;margin-top:2px;">
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('orders',this)">Orders</button>
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('students',this)">Students</button>
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('operations',this)">Operations</button>
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('revenue',this)">Revenue</button>
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('forecast',this)">Forecast</button>
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('vault',this)">Vault & Items</button>
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('audit',this)">Audit & Events</button>
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('optimization',this)">⚡ Optimization</button>
-        <button class="more-tab-btn w-full text-left px-4 py-2.5 text-xs hover:bg-opacity-50 transition-colors whitespace-nowrap" style="color:var(--t2);" onclick="switchTabMore('rentals',this)">📦 Rentals</button>
-      </div>
-    </div>
+<!-- Shipping -->
+<div id="shipping" class="section">
+  <div class="section-title">Shipping Operations</div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Shipping Status</h3><canvas id="c_ship_status"></canvas></div>
+    <div class="chart-card"><h3>Shipments by Building (Top 15)</h3><canvas id="c_ship_buildings"></canvas></div>
   </div>
 </div>
 
-<div class="px-5 py-4">
-
-<!-- DISPATCH BOARD -->
-<div id="tab-dispatch" class="tab-panel">
-  <div class="mb-3 flex flex-wrap gap-3 items-start">
-    <div class="flex-1" style="min-width:260px;">
-      <div class="text-xs font-semibold uppercase tracking-wide mb-1" style="color:var(--t3);">Quick Student Lookup</div>
-      <div class="flex gap-2">
-        <input id="qlInput" oninput="quickLookup(this.value)" placeholder="Type student name or order #…" class="flex-1" style="font-size:.8rem;"/>
-        <button onclick="document.getElementById('qlInput').value='';document.getElementById('qlResult').innerHTML=''" class="btn text-xs">✕</button>
-      </div>
-      <div id="qlResult" class="mt-2"></div>
-    </div>
-    <div id="dispatchSummary" class="flex gap-2 flex-wrap"></div>
-  </div>
-  <div id="kanban" class="flex gap-3 overflow-x-auto pb-3"></div>
-</div>
-
-<!-- TODAY'S RUN -->
-<div id="tab-todaysrun" class="tab-panel hidden">
-  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-    <div>
-      <div class="font-bold text-base" id="todayDate" style="color:var(--t1);"></div>
-      <div class="text-xs" style="color:var(--t3);">Grouped by building — driver dispatch manifest</div>
-    </div>
-    <button onclick="window.print()" class="btn no-print">⬇ Print Manifest</button>
-  </div>
-  <div id="todaysRunContent"></div>
-</div>
-
-<!-- OVERVIEW -->
-<div id="tab-overview" class="tab-panel hidden">
-  <div class="card p-4 mb-3">
-    <div class="label">Season Progress</div>
-    <div id="seasonProgress"></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Service Mix</div><div class="chart-h"><canvas id="c-serviceMix"></canvas></div></div>
-    <div class="card p-4"><div class="label">Dispatch Status</div><div class="chart-h"><canvas id="c-dispatchStatus"></canvas></div></div>
-    <div class="card p-4"><div class="label">Shipping Status</div><div class="chart-h"><canvas id="c-shippingStatus"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4 lg:col-span-2"><div class="label">Top Buildings by Volume</div><div class="chart-hm"><canvas id="c-buildings"></canvas></div></div>
-    <div class="card p-4"><div class="label">Operations Funnel</div><div id="funnelChart" class="py-2"></div></div>
+<!-- Items / Inventory -->
+<div id="items" class="section">
+  <div class="section-title">Inventory Analysis</div>
+  <div class="chart-grid">
+    <div class="chart-card full"><h3>Item Type Distribution (Top 20)</h3><canvas id="c_item_types"></canvas></div>
+    <div class="chart-card"><h3>Total Quantity by Item Type</h3><canvas id="c_item_qty"></canvas></div>
+    <div class="chart-card"><h3>Estimated Monthly Revenue by Item</h3><canvas id="c_item_rev"></canvas></div>
   </div>
 </div>
 
-<!-- ORDERS -->
-<div id="tab-orders" class="tab-panel hidden">
-  <div class="flex flex-wrap gap-2 mb-3">
-    <select id="fService" onchange="applyOrderFilters()" class="text-xs"></select>
-    <select id="fBuilding" onchange="applyOrderFilters()" class="text-xs"></select>
-    <select id="fDispatch" onchange="applyOrderFilters()" class="text-xs"></select>
-    <select id="fShipping" onchange="applyOrderFilters()" class="text-xs"></select>
-    <input id="fSearch" oninput="applyOrderFilters()" placeholder="Search name or order..." class="flex-1 min-w-36"/>
-    <button onclick="exportCSV()" class="btn">↓ Export CSV</button>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">By Service</div><div class="chart-h"><canvas id="c-ordByService"></canvas></div></div>
-    <div class="card p-4"><div class="label">By Building (Top 10)</div><div class="chart-h"><canvas id="c-ordByBuilding"></canvas></div></div>
-  </div>
-  <div class="card overflow-hidden">
-    <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
-      <span class="label">All Orders</span>
-      <span id="ordCount" class="text-xs" style="color:var(--t3);"></span>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full text-xs"><thead style="background:var(--bg2);"><tr id="ordHead"></tr></thead><tbody id="ordBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
-    </div>
-    <div class="px-4 py-2 border-t flex items-center justify-between" style="border-color:var(--bd);">
-      <button onclick="changePg(-1)" class="btn text-xs">← Prev</button>
-      <span id="pgInfo" class="text-xs" style="color:var(--t3);"></span>
-      <button onclick="changePg(1)" class="btn text-xs">Next →</button>
-    </div>
+<!-- Financial -->
+<div id="financial" class="section">
+  <div class="section-title">Financial Overview</div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Payment Status</h3><canvas id="c_pay_status"></canvas></div>
+    <div class="chart-card"><h3>Revenue by Service</h3><canvas id="c_rev_service"></canvas></div>
+    <div class="chart-card full"><h3>Revenue by Building (Top 15)</h3><canvas id="c_rev_building"></canvas></div>
   </div>
 </div>
 
-<!-- STUDENTS -->
-<div id="tab-students" class="tab-panel hidden">
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4 lg:col-span-2"><div class="label">Top 20 Students by Item Count</div><div class="chart-hm"><canvas id="c-topStudents"></canvas></div></div>
-    <div class="card p-4"><div class="label">Orders Per Student Distribution</div><div class="chart-h"><canvas id="c-studentDist"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Students by Building</div><div class="chart-h"><canvas id="c-studentBuilding"></canvas></div></div>
-    <div class="card p-4"><div class="label">Student Service Preferences</div><div class="chart-h"><canvas id="c-studentService"></canvas></div></div>
-  </div>
-  <div class="card overflow-hidden">
-    <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
-      <span class="label">Student Directory</span>
-      <input id="stuSearch" oninput="renderStudentTable()" placeholder="Search student..." class="text-xs w-40"/>
-    </div>
-    <div class="overflow-x-auto">
-      <table id="stuTable" class="w-full text-xs">
-        <thead style="background:var(--bg2);"><tr>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Building</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Service</th>
-          <th class="px-3 py-2 text-right" style="color:var(--t2);">Orders</th>
-          <th class="px-3 py-2 text-right" style="color:var(--t2);">Items</th>
-          <th class="px-3 py-2 text-right" style="color:var(--t2);">Total $</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Status</th>
-        </tr></thead>
-        <tbody id="stuBody" class="divide-y" style="border-color:var(--bd);"></tbody>
-      </table>
-    </div>
+<!-- Audit / Quality -->
+<div id="audit" class="section">
+  <div class="section-title">Audit and Quality</div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Audit Verdicts</h3><canvas id="c_verdicts"></canvas></div>
+    <div class="chart-card"><h3>Quantity Match Rate</h3><canvas id="c_qty_match"></canvas></div>
+    <div class="chart-card"><h3>Service Match Rate</h3><canvas id="c_svc_match"></canvas></div>
   </div>
 </div>
 
-<!-- OPERATIONS -->
-<div id="tab-operations" class="tab-panel hidden">
-  <div id="opsKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Pickup Time Slot Distribution</div><div class="chart-hm"><canvas id="c-timeSlots"></canvas></div></div>
-    <div class="card p-4"><div class="label">Orders by Truck</div><div class="chart-h"><canvas id="c-byTruck"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Event Types Breakdown</div><div class="chart-h"><canvas id="c-eventTypes"></canvas></div></div>
-    <div class="card p-4"><div class="label">Service Completion Rate</div><div class="chart-h"><canvas id="c-completionRate"></canvas></div></div>
-    <div class="card p-4"><div class="label">Order Status Breakdown</div><div class="chart-h"><canvas id="c-statusBreakdown"></canvas></div></div>
-  </div>
-  <div class="card overflow-hidden">
-    <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Dispatch Sheet — All Orders</span></div>
-    <div class="flex flex-wrap gap-2 px-4 py-2 border-b no-print" style="border-color:var(--bd);">
-      <input id="dispSearch" oninput="renderDispatchTable()" placeholder="Search student, building, truck…" class="text-xs flex-1 min-w-40"/>
-      <select id="dispStatus" onchange="renderDispatchTable()" class="text-xs"><option value="">All Statuses</option></select>
-      <select id="dispTruck" onchange="renderDispatchTable()" class="text-xs"><option value="">All Trucks</option></select>
-    </div>
-    <div class="overflow-x-auto">
-      <table id="opsTable" class="w-full text-xs">
-        <thead style="background:var(--bg2);"><tr>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">ID</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Building</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Room</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Date</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Time Slot</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Truck</th>
-          <th class="px-3 py-2 text-right" style="color:var(--t2);">Kits</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Status</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Notes</th>
-        </tr></thead>
-        <tbody id="dispBody" class="divide-y" style="border-color:var(--bd);"></tbody>
-      </table>
-    </div>
-    <div class="px-4 py-2 border-t flex items-center justify-between no-print" style="border-color:var(--bd);">
-      <button onclick="changeDispPg(-1)" class="btn text-xs">← Prev</button>
-      <span id="dispPgInfo" class="text-xs" style="color:var(--t3);"></span>
-      <button onclick="changeDispPg(1)" class="btn text-xs">Next →</button>
-    </div>
+<!-- Dispatch -->
+<div id="dispatch" class="section">
+  <div class="section-title">Dispatch and Logistics</div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Dispatch Order Status</h3><canvas id="c_disp_status"></canvas></div>
+    <div class="chart-card"><h3>Orders by Service Type</h3><canvas id="c_disp_services"></canvas></div>
+    <div class="chart-card full"><h3>Dispatch by Building (Top 15)</h3><canvas id="c_disp_buildings"></canvas></div>
   </div>
 </div>
 
-<!-- REVENUE -->
-<div id="tab-revenue" class="tab-panel hidden">
-  <div id="revKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Revenue by Service</div><div class="chart-h"><canvas id="c-revService"></canvas></div></div>
-    <div class="card p-4"><div class="label">Revenue by Item Type (Top 10)</div><div class="chart-h"><canvas id="c-revItem"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Revenue by Building (Top 10)</div><div class="chart-h"><canvas id="c-revBuilding"></canvas></div></div>
-    <div class="card p-4"><div class="label">Surcharges vs Base Revenue</div><div class="chart-h"><canvas id="c-revSurcharge"></canvas></div></div>
-  </div>
-  <div class="card overflow-hidden">
-    <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Invoice Line Items</span></div>
-    <div class="overflow-x-auto">
-      <table class="w-full text-xs"><thead style="background:var(--bg2);"><tr>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Service</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Item</th>
-        <th class="px-3 py-2 text-right" style="color:var(--t2);">Qty</th><th class="px-3 py-2 text-right" style="color:var(--t2);">Unit</th>
-        <th class="px-3 py-2 text-right" style="color:var(--t2);">Line Total</th><th class="px-3 py-2 text-right" style="color:var(--t2);">Surcharge</th>
-      </tr></thead><tbody id="invBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
-    </div>
+<!-- Form Submissions -->
+<div id="forms" class="section">
+  <div class="section-title">Form Submissions</div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Submissions by Service Type</h3><canvas id="c_form_services"></canvas></div>
+    <div class="chart-card"><h3>Submission Volume by Week</h3><canvas id="c_form_timeline"></canvas></div>
   </div>
 </div>
 
-<!-- FORECAST -->
-<div id="tab-forecast" class="tab-panel hidden">
-  <div id="fcKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Revenue by Price Tier</div><div class="chart-h"><canvas id="c-priceTier"></canvas></div></div>
-    <div class="card p-4"><div class="label">Pending vs Invoiced Orders</div><div class="chart-h"><canvas id="c-pendingVsInvoiced"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-    <div class="card p-4"><div class="label">Monthly Recurring Revenue by Item Type</div><div class="chart-hm"><canvas id="c-mrr"></canvas></div></div>
-    <div class="card p-4"><div class="label">Revenue per Building (from Manifest)</div><div class="chart-hm"><canvas id="c-revPerBuilding"></canvas></div></div>
+<!-- Forecasting -->
+<div id="forecasting" class="section">
+  <div class="section-title">Forecasting and Projections</div>
+  <div class="forecast-grid" id="forecastGrid"></div>
+  <div class="chart-grid" style="margin-top:20px">
+    <div class="chart-card"><h3>Submission Volume Forecast</h3><canvas id="c_forecast_volume"></canvas></div>
+    <div class="chart-card"><h3>Completion Trend Forecast</h3><canvas id="c_forecast_completions"></canvas></div>
   </div>
 </div>
 
-<!-- VAULT & ITEMS -->
-<div id="tab-vault" class="tab-panel hidden">
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Item Type Distribution</div><div class="chart-h"><canvas id="c-itemTypes"></canvas></div></div>
-    <div class="card p-4"><div class="label">Monthly Revenue by Item Type</div><div style="position:relative;height:320px;"><canvas id="c-itemRevenue"></canvas></div></div>
-  </div>
-  <div class="card overflow-hidden">
-    <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
-      <span class="label">Item Manifest</span>
-      <input id="manifSearch" oninput="renderManifest()" placeholder="Search..." class="text-xs w-36"/>
-    </div>
-    <div class="overflow-x-auto">
-      <table class="w-full text-xs"><thead style="background:var(--bg2);"><tr>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Building</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Item</th>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Size</th><th class="px-3 py-2 text-right" style="color:var(--t2);">Qty</th>
-        <th class="px-3 py-2 text-right" style="color:var(--t2);">$/mo</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Vault</th>
-        <th class="px-3 py-2 text-left" style="color:var(--t2);">Checked</th>
-      </tr></thead><tbody id="manifBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
-    </div>
-  </div>
+<!-- Recommendations -->
+<div id="recommendations" class="section">
+  <div class="section-title">Optimization Recommendations</div>
+  <div id="recsContainer"></div>
 </div>
 
-<!-- AUDIT & EVENTS -->
-<div id="tab-audit" class="tab-panel hidden">
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Audit Verdicts</div><div class="chart-h"><canvas id="c-auditVerdict"></canvas></div></div>
-    <div class="card p-4"><div class="label">Issues Flagged in Events</div><div class="chart-h"><canvas id="c-issueFlag"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-    <div class="card overflow-hidden">
-      <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Event Log</span></div>
-      <div class="overflow-auto" style="max-height:380px;">
-        <table id="evtTable" class="w-full text-xs"><thead class="sticky top-0" style="background:var(--bg2);"><tr>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">ID</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Time</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Type</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Issue</th>
-        </tr></thead><tbody id="evtBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
-      </div>
-    </div>
-    <div class="card overflow-hidden">
-      <div class="px-4 py-2.5 border-b" style="border-color:var(--bd);"><span class="label">Audit Log</span></div>
-      <div class="overflow-auto" style="max-height:380px;">
-        <table id="audTable" class="w-full text-xs"><thead class="sticky top-0" style="background:var(--bg2);"><tr>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Verdict</th><th class="px-3 py-2 text-left" style="color:var(--t2);">Count</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Notes</th>
-        </tr></thead><tbody id="audBody" class="divide-y" style="border-color:var(--bd);"></tbody></table>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- OPTIMIZATION -->
-<div id="tab-optimization" class="tab-panel hidden">
-  <div id="optKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Revenue per Order by Building</div><div class="chart-hm"><canvas id="c-revPerOrder"></canvas></div></div>
-    <div class="card p-4"><div class="label">Item Type Pricing — Monthly Revenue vs Unit Price</div><div class="chart-hm"><canvas id="c-itemPricing"></canvas></div></div>
-  </div>
-  <div class="card p-4 mb-3">
-    <div class="label">Stop Density — Avg Items per Order by Building</div><div class="chart-hm"><canvas id="c-stopDensity"></canvas></div>
-  </div>
-  <div class="card p-4 mb-3">
-    <div class="label">Smart Recommendations</div>
-    <div id="optRecommendations" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mt-1"></div>
-  </div>
-</div>
-
-<!-- RENTALS -->
-<div id="tab-rentals" class="tab-panel hidden">
-  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-    <div>
-      <div class="font-semibold text-base" style="color:var(--t1);">📦 Appliance Rental Returns</div>
-      <div class="text-xs" style="color:var(--t3);">Mini fridges, microwaves &amp; appliance return orders</div>
-    </div>
-    <div class="flex gap-2 items-center no-print">
-      <span class="text-xs" style="color:var(--t3);">Year:</span>
-      <select id="rentalYear" onchange="renderRentals()" class="text-xs">
-        <option value="all">All Years</option>
-      </select>
-    </div>
-  </div>
-  <div id="rentalKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Product Mix</div><div class="chart-hm"><canvas id="c-rentalProducts"></canvas></div></div>
-    <div class="card p-4 lg:col-span-2"><div class="label">Returns by Month</div><div class="chart-hm"><canvas id="c-rentalByMonth"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Top Buildings</div><div style="position:relative;height:320px;"><canvas id="c-rentalBuildings"></canvas></div></div>
-    <div class="card overflow-hidden">
-      <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
-        <span class="label" style="margin-bottom:0;">Returns Schedule</span>
-        <input id="rentalSearch" oninput="renderRentals()" placeholder="Search student or building…" class="text-xs w-44"/>
-      </div>
-      <div id="rentalUpcoming" style="max-height:320px;overflow-y:auto;"></div>
-    </div>
-  </div>
-</div>
-
-<!-- HISTORY -->
-<div id="tab-history" class="tab-panel hidden">
-  <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-    <div>
-      <div class="font-semibold text-base" style="color:var(--t1);">2025 Orders</div>
-      <div class="text-xs" style="color:var(--t3);">All service types from ORDERS.xlsx</div>
-    </div>
-    <div class="flex gap-2 items-center no-print flex-wrap">
-      <span class="text-xs" style="color:var(--t3);">Sheet:</span>
-      <select id="histSheet" onchange="renderHistory(true)" class="text-xs"><option value="MAIN">All (MAIN)</option></select>
-      <span class="text-xs" style="color:var(--t3);">Year:</span>
-      <select id="histYear" onchange="renderHistory()" class="text-xs"><option value="all">All Years</option></select>
-      <span class="text-xs" style="color:var(--t3);">Service:</span>
-      <select id="histService" onchange="renderHistory()" class="text-xs"><option value="">All Services</option></select>
-    </div>
-  </div>
-  <div id="histKPIs" class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3"></div>
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Orders by Service</div><div style="position:relative;height:300px;"><canvas id="c-histService"></canvas></div></div>
-    <div class="card p-4 lg:col-span-2"><div class="label">Monthly Volume</div><div class="chart-hm"><canvas id="c-histMonthly"></canvas></div></div>
-  </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
-    <div class="card p-4"><div class="label">Top Buildings</div><div style="position:relative;height:340px;"><canvas id="c-histBuildings"></canvas></div></div>
-    <div class="card overflow-hidden">
-      <div class="px-4 py-2.5 border-b flex items-center justify-between" style="border-color:var(--bd);">
-        <span class="label" style="margin-bottom:0;">Orders</span>
-        <input id="histSearch" oninput="renderHistTable()" placeholder="Search student, order, building…" class="text-xs w-44"/>
-      </div>
-      <div id="histTableWrap" style="max-height:340px;overflow-y:auto;"></div>
-    </div>
-  </div>
-</div>
-
-</div><!-- end panels -->
-
-<!-- FULLSCREEN MODAL -->
-<div id="modal" class="modal-overlay hidden" onclick="closeModal()">
-  <div class="rounded-xl p-6" style="background:var(--bg1);width:90vw;max-width:900px;max-height:85vh;" onclick="event.stopPropagation()">
-    <div class="flex justify-between items-center mb-4">
-      <span id="modalTitle" class="font-semibold" style="color:var(--t1);"></span>
-      <button onclick="closeModal()" class="btn">✕ Close</button>
-    </div>
-    <div style="height:500px;position:relative;"><canvas id="modalCanvas"></canvas></div>
-  </div>
-</div>
-
-<style>.label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--t2);margin-bottom:.75rem;display:flex;align-items:center;justify-content:space-between;}
-.expand-btn{font-size:10px;cursor:pointer;opacity:.5;transition:opacity .15s;}.expand-btn:hover{opacity:1;}</style>
+</div><!-- /container -->
 
 <script>
-const SID = '1ZoRH8OENK_wnKUeHvUc7eqytzuu2lMzaVvsPLJyvvng';
-const GIDs = {storage:'529044027',transit:'2098223117',manifest:'1586199848',vault:'1784822441',invoices:'201526587',events:'1549495149',audit:'2085245455',submissions:'543675645',pricing:'580278291'};
-const DISPATCH_SID = '1x5MQbsCFMJX5eafA6uoFF0nU4qfvCaK-2EyZNPs__kM';
-const DISPATCH_GID = '602263013';
-const P = ['#2563eb','#0891b2','#059669','#d97706','#dc2626','#475569','#1d4ed8','#0f766e','#92400e','#991b1b','#334155','#1e40af'];
+const CHARTS = {"dispatch_status": {"labels": ["Complete", "Queued", "Issue"], "values": [572, 195, 36]}, "vault_buildings": {"labels": ["Umrath", "Danforth", "Lien", "Park", "Koenig", "Dardick", "Eliot A", "Lopata", "Lee", "Zetcher", "Village House", "Off-Campus", "Nemerov", "Dauten", "Gregg"], "values": [61, 51, 43, 42, 41, 39, 37, 31, 29, 29, 25, 24, 23, 22, 22]}, "days_distribution": {"labels": ["Future (neg)", "Same day", "1-3 days", "4-7 days", "8-14 days", "15-30 days", "30+ days"], "values": [5, 30, 150, 263, 315, 31, 7]}, "pickup_timeline": {"labels": ["2026-W02", "2026-W03", "2026-W06", "2026-W09", "2026-W13", "2026-W15", "2026-W16", "2026-W17", "2026-W18", "2026-W19", "2026-W20", "2026-W22", "2026-W33"], "values": [2, 1, 1, 1, 1, 2, 1, 30, 314, 436, 9, 2, 1]}, "vault_issues": {"labels": [], "values": []}, "ship_status": {"labels": ["Unknown", "Shipped", "Picked Up", "Labeled"], "values": [46, 46, 11, 8]}, "ship_buildings": {"labels": ["Off-Campus", "Lopata", "Danforth", "Park", "Umrath", "Greenway Apartments", "Millbrook Bldg. 4", "Dauten", "Rutledge", "Lien", "Village East", "LL6255", "Millbrook Bldg. 3", "Eliot B", "Zetcher"], "values": [37, 8, 7, 5, 5, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2]}, "item_types": {"labels": ["UTrucking Box", "Plastic Container", "Mini Fridge", "Luggage", "Other Box", "Rolling Cart", "Shoe Rack", "Camp Duffel", "Headboard", "Ottoman", "*Bookshelf", "Hamper/Laundry Basket", "Rug", "*Dresser", "Mirror", "Un-opened Kit", "TV", "Framed Art", "Lamp", "Swivel/Arm Chair"], "values": [634, 186, 106, 98, 93, 79, 46, 41, 39, 37, 32, 30, 25, 24, 22, 19, 19, 18, 18, 15]}, "item_qty": {"labels": ["UTrucking Box", "Plastic Container", "Other Box", "Luggage", "Mini Fridge", "Rolling Cart", "Camp Duffel", "Shoe Rack", "Headboard", "Ottoman", "*Bookshelf", "Hamper/Laundry Basket", "Framed Art", "*Dresser", "Rug"], "values": [2962, 314, 157, 143, 115, 106, 90, 55, 41, 37, 37, 33, 32, 30, 27]}, "item_rev": {"labels": ["UTrucking Box", "Plastic Container", "Other Box", "Camp Duffel", "Mini Fridge", "Luggage", "Rolling Cart", "*Bookshelf", "*Dresser", "Headboard", "Shoe Rack", "Ottoman", "Hamper/Laundry Basket", "Framed Art", "Mattress"], "values": [65529.0, 6332.0, 3140.0, 2970.0, 2853.0, 2782.0, 2438.0, 1221.0, 1170.0, 1107.0, 990.0, 666.0, 594.0, 576.0, 540.0]}, "verdicts": {"labels": ["OK", "MISSING SUBMISSION"], "values": [661, 253]}, "qty_match": {"labels": ["Y"], "values": [661]}, "svc_match": {"labels": ["Y", "~"], "values": [654, 7]}, "pay_status": {"labels": ["Unpaid", "Unknown"], "values": [1678, 618]}, "rev_by_service": {"labels": ["Unknown", "Summer Storage", "Home Shipping", "Study Abroad Storage"], "values": [390914.0, 358344.0, 29830.0, 2740.0]}, "rev_by_building": {"labels": ["Danforth", "Umrath", "Park", "Eliot A", "Dardick", "Lopata", "Koenig", "Village House", "Nemerov", "Lee", "Gregg", "Zetcher", "Off-Campus", "Liggett", "Millbrook Bldg. 4"], "values": [37976.0, 37612.0, 24844.0, 24388.0, 22276.0, 21312.0, 20704.0, 17660.0, 15016.0, 14436.0, 13796.0, 12836.0, 12080.0, 11244.0, 10584.0]}, "disp_status": {"labels": ["Complete", "Queued", "Issue"], "values": [803, 609, 48]}, "disp_services": {"labels": ["Summer Storage", "Rental Returns", "Home Shipping", "SIR", "Rentals", "General Moving Service", "TSA", "NSTS", "Study Abroad Storage", "Leave of Absence Storage"], "values": [797, 415, 143, 40, 16, 15, 13, 9, 7, 5]}, "disp_buildings": {"labels": ["Umrath", "Danforth", "Off-Campus", "Lien", "Park", "Dardick", "Lopata", "Koenig", "Zetcher", "Eliot A", "Nemerov", "Lee", "Village House", "Dauten", "Gregg"], "values": [109, 88, 87, 72, 72, 69, 63, 61, 54, 53, 47, 44, 40, 40, 35]}, "form_services": {"labels": ["Summer Storage", "Home Shipping", "Appliance Pickup/Delivery/Swap", "Kit Delivery", "General Moving", "ResLife", "Spec Ops"], "values": [584, 98, 77, 44, 9, 5, 1]}, "form_timeline": {"labels": ["2026-W09", "2026-W10", "2026-W13", "2026-W14", "2026-W15", "2026-W16", "2026-W17", "2026-W18", "2026-W19"], "values": [3, 1, 2, 23, 4, 3, 11, 211, 560]}};
+const KPIS = {"total_orders": 914, "vault_orders": 803, "ship_orders": 111, "completion_rate": 71.2, "queued": 195, "avg_days": 7.4, "median_days": 6, "total_billed": 781828, "total_unpaid": 390914, "collection_rate": 50.0, "audit_pass_rate": 72.3, "total_items": 1678, "unique_buildings": 55, "total_forms": 818, "stuck_14": 38, "issue_count": 0, "dispatch_total": 1460};
+const FORECASTS = {"volume": {"historical_labels": ["2026-W10", "2026-W13", "2026-W14", "2026-W15", "2026-W16", "2026-W17", "2026-W18", "2026-W19"], "historical_values": [1, 2, 23, 4, 3, 11, 211, 560], "forecast_labels": ["Week +1", "Week +2", "Week +3", "Week +4"], "forecast_values": [329, 376, 424, 472], "trend": "increasing", "slope_per_week": 47.6}, "completions": {"historical_labels": ["2026-W13", "2026-W15", "2026-W17", "2026-W18", "2026-W19"], "historical_values": [1, 2, 7, 206, 527], "forecast_labels": ["Week +1", "Week +2", "Week +3", "Week +4"], "forecast_values": [525, 651, 777, 902], "trend": "increasing"}, "revenue": {"total_billed": 781828, "avg_order_value": 340.52, "projected_monthly": 97167.0, "unpaid": 390914, "collection_rate": 50.0}, "capacity": {"active_orders": 231, "avg_days": 7.4, "median_days": 6, "stuck_14_plus": 38, "stuck_pct": 4.7, "est_weekly_throughput": 114.4}};
+const RECS = [{"severity": "critical", "title": "Audit Discrepancies: 253 of 914 orders flagged (27.7%)", "detail": "Mismatches between master records and form submissions indicate data entry errors, miscounts, or process breakdowns.", "action": "Investigate top discrepancy patterns. Consider barcode scanning or photo verification at pickup to reduce errors.", "metric": "Pass rate: 72.3%"}, {"severity": "critical", "title": "Revenue at Risk: $390,914 unpaid (50.0% of billed)", "detail": "Outstanding balances reduce cash flow and may indicate billing process issues.", "action": "Send payment reminders, verify billing contact info, and consider automated follow-up sequences.", "metric": "Collected: 50.0% | Unpaid: $390,914"}, {"severity": "warning", "title": "Dispatch Queue: 195 orders (24.3%) still queued", "detail": "A significant portion of vault orders remain in 'Queued' status. This may indicate scheduling bottlenecks or insufficient dispatch capacity.", "action": "Review dispatch scheduling, consider adding pickup slots or crew capacity for peak periods.", "metric": "195 / 803 orders"}, {"severity": "warning", "title": "Unmatched Records: 28 form submissions with no master order", "detail": "These submissions exist in JotForm but have no matching order in Vault or Shipping master sheets.", "action": "Review orphaned entries \u2014 they may be test submissions, name mismatches, or orders that were not imported.", "metric": "28 orphans"}, {"severity": "info", "title": "Storage Duration: 38 items in warehouse >14 days (4.7%)", "detail": "Extended storage times increase handling costs and reduce warehouse capacity. These may be abandoned orders, unresolved issues, or scheduling gaps.", "action": "Audit orders with >14 day dwell time. Contact students, escalate unresolved issues, and consider surcharges for extended storage.", "metric": "Avg: 7.4 days | Median: 6 days"}, {"severity": "info", "title": "Service Mix Analysis", "detail": "Summer Storage: 791 (98.5%) | Study Abroad Storage: 7 (0.9%) | Leave of Absence Storage: 5 (0.6%)", "action": "Align staffing and equipment to match service demand. Consider promotional pricing for underutilized services.", "metric": "3 service types"}, {"severity": "info", "title": "Queue Clearance Estimate: ~1.7 weeks at current throughput", "detail": "Current throughput is ~114.4 completions/week. With 195 queued orders, the backlog will take approximately 1.7 weeks to clear at current pace.", "action": "If queue clearance timeline exceeds acceptable window, increase crew shifts or prioritize high-value orders.", "metric": "Throughput: 114.4/week | Queue: 195"}];
+const COLORS = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac", "#86bcb6", "#8cd17d", "#b6992d", "#499894", "#d37295", "#a0cbe8", "#ffbe7d", "#ff9d9a", "#d4a6c8", "#b9ca5d"];
 
-Chart.defaults.color = '#475569';
-Chart.defaults.borderColor = '#bfdbfe';
+// ── Helpers ──────────────────────────────────────────────────────
+function palette(n) { return COLORS.slice(0, n); }
 
-let D = {}, CH = {}, filtered = [], pg = 1, sCol = null, sDir = 1, expandedKanbanCols = new Set();
-const PG = 25;
-let refreshSecs = 300, refreshInterval = null;
-
-// ── FETCH ──────────────────────────────────────────────────────────
-async function fetchSheet(gid) {
-  const r = await fetch(`https://docs.google.com/spreadsheets/d/${SID}/export?format=csv&gid=${gid}`);
-  const t = await r.text();
-  if (t.trimStart().startsWith('<')) return [];
-  return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
+function fmtNum(n) {
+  if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return n >= 10000 ? '$' + (n/1000).toFixed(0) + 'K' : n.toLocaleString();
+  return n.toLocaleString();
 }
 
-async function fetchExcel() {
-  try {
-    const r = await fetch('./ORDERS.xlsx');
-    if (!r.ok) return {};
-    const ab = await r.arrayBuffer();
-    const wb = XLSX.read(ab, {type: 'array', cellDates: true});
-    const LOAD_SHEETS = [
-      'MAIN', 'Summer Storage', 'Home Shipping', 'NSTS', 'TSA', 'SIR',
-      'Study Abroad Storage', 'Leave of Absence Storage', 'General Moving Service',
-      'Spec Ops', 'Rentals', 'Rental Returns'
-    ];
-    const result = {};
-    for (const name of LOAD_SHEETS) {
-      const ws = wb.Sheets[name];
-      if (!ws) continue;
-      const rows = XLSX.utils.sheet_to_json(ws, {defval: ''});
-      result[name] = rows.map(row => {
-        const out = {};
-        for (const [k, v] of Object.entries(row)) {
-          out[k] = (v instanceof Date)
-            ? `${v.getMonth()+1}/${v.getDate()}/${v.getFullYear()}`
-            : v;
-        }
-        return out;
-      });
+function isEmpty(data) {
+  return !data || !data.labels || !data.labels.length || data.values.every(v => v === 0);
+}
+
+function showEmpty(id) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  ctx.style.display = 'none';
+  const div = document.createElement('div');
+  div.className = 'empty-chart';
+  div.innerHTML = '<div class="empty-val">0</div><div class="empty-msg">No data found -- verify spreadsheet data for this category</div>';
+  ctx.parentElement.appendChild(div);
+}
+
+function isSkewed(values) {
+  if (values.length < 2) return false;
+  const sorted = [...values].sort((a,b) => b - a);
+  const max = sorted[0];
+  const median = sorted[Math.floor(sorted.length / 2)];
+  return median > 0 && max > 5 * median;
+}
+
+function doughnut(id, data) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  if (isEmpty(data)) { showEmpty(id); return; }
+  new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: data.labels,
+      datasets: [{ data: data.values, backgroundColor: palette(data.labels.length),
+                     borderWidth: 2, borderColor: '#fff' }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'right', labels: { boxWidth: 12, padding: 10, font: { size: 11 } } },
+        tooltip: { callbacks: {
+          label: (c) => c.label + ': ' + c.parsed.toLocaleString() +
+            ' (' + (100 * c.parsed / c.dataset.data.reduce((a,b)=>a+b,0)).toFixed(1) + '%)'
+        } }
+      }
     }
-    return result;
-  } catch(e) { console.error('Excel load error:', e); return {}; }
-}
-
-async function fetchRentalCSV() {
-  try {
-    const r = await fetch('./ORDERS%20-%20Rental%20Returns.csv');
-    if (!r.ok) return [];
-    const t = await r.text();
-    return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
-  } catch(e) { return []; }
-}
-
-async function fetchDispatchSheet() {
-  const r = await fetch(`https://docs.google.com/spreadsheets/d/${DISPATCH_SID}/export?format=csv&gid=${DISPATCH_GID}`);
-  const t = await r.text();
-  if (t.trimStart().startsWith('<')) return [];
-  return Papa.parse(t, {header:true, skipEmptyLines:true}).data;
-}
-
-async function loadAll() {
-  document.getElementById('loadBar').style.display = 'block';
-  try {
-    const [analyticsResults, dispatchRows, rentalRows, xlData] = await Promise.all([
-      Promise.all(Object.values(GIDs).map(g => fetchSheet(g))),
-      fetchDispatchSheet(),
-      fetchRentalCSV(),
-      fetchExcel()
-    ]);
-    const keys = Object.keys(GIDs);
-    keys.forEach((k,i) => D[k] = analyticsResults[i]);
-    D.all = [...D.storage, ...D.transit].filter(r => r['Order Number']);
-    D.dispatch = dispatchRows;
-    D.rentals = rentalRows;
-    D.xl = xlData;
-    D.main = xlData['MAIN'] || [];
-    // Build lookup map: order ID (no #) → dispatch row
-    D.dispatchMap = {};
-    dispatchRows.forEach(r => {
-      const id = (r.ID||'').replace(/^#/,'');
-      if(id) D.dispatchMap[id] = r;
-    });
-    renderAll();
-    document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
-    populateGlobalFilters();
-    startRefresh();
-  } catch(e) { console.error(e); }
-  document.getElementById('loadBar').style.display = 'none';
-}
-
-// ── AUTO REFRESH ───────────────────────────────────────────────────
-function startRefresh() {
-  clearInterval(refreshInterval);
-  refreshSecs = 300;
-  refreshInterval = setInterval(() => {
-    refreshSecs--;
-    const m = Math.floor(refreshSecs/60), s = refreshSecs%60;
-    document.getElementById('countdown').textContent = `↻ ${m}:${s.toString().padStart(2,'0')}`;
-    if (refreshSecs <= 0) loadAll();
-  }, 1000);
-}
-
-// ── GLOBAL FILTERS ─────────────────────────────────────────────────
-function populateGlobalFilters() {
-  const setOpts = (id, vals, label) => {
-    const el = document.getElementById(id);
-    el.innerHTML = `<option value="">All ${label}</option>` + vals.sort().map(v=>`<option>${v}</option>`).join('');
-  };
-  setOpts('gService',  [...new Set(D.all.map(r=>r.Service).filter(Boolean))], 'Services');
-  setOpts('gBuilding', [...new Set(D.all.map(r=>r.Building).filter(Boolean))], 'Buildings');
-  setOpts('fService',  [...new Set(D.all.map(r=>r.Service).filter(Boolean))], 'Services');
-  setOpts('fBuilding', [...new Set(D.all.map(r=>r.Building).filter(Boolean))], 'Buildings');
-  setOpts('fDispatch', [...new Set(D.all.map(r=>r['Dispatch Status']).filter(Boolean))], 'Dispatch');
-  setOpts('fShipping', [...new Set(D.all.map(r=>r['Shipping Status']).filter(Boolean))], 'Shipping');
-}
-
-function getGlobalData() {
-  const svc = document.getElementById('gService')?.value;
-  const bld = document.getElementById('gBuilding')?.value;
-  let data = D.all;
-  if (svc) data = data.filter(r => r.Service === svc);
-  if (bld) data = data.filter(r => r.Building === bld);
-  const count = D.all.length - data.length;
-  document.getElementById('filterInfo').textContent = count > 0 ? `Filtered: ${data.length} of ${D.all.length} orders` : '';
-  return data;
-}
-
-function clearFilters() {
-  ['gService','gBuilding','fService','fBuilding','fDispatch','fShipping'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
-  document.getElementById('fSearch').value = '';
-  document.getElementById('filterInfo').textContent = '';
-  renderAll();
-}
-
-// ── RENDER ALL ─────────────────────────────────────────────────────
-function renderAll() {
-  const data = getGlobalData();
-  renderKPIs(data);
-  renderAlertBanner(data);
-  renderDispatch(data);
-  renderTodaysRun(data);
-  renderSeasonProgress(data);
-  renderOverview(data);
-  renderOrdersTab(data);
-  renderStudents(data);
-  renderOperations(data);
-  renderRevenue();
-  renderForecast();
-  renderVault();
-  renderAudit();
-  renderOptimization();
-  renderRentals();
-  renderHistory();
-}
-
-// ── KPIs ───────────────────────────────────────────────────────────
-function renderKPIs(data) {
-  const lines = D.invoices.filter(r => r['Item Type'] && !r['Item Type'].includes('──') && !r['Item Type'].includes('⚠️'));
-  const totalRev = lines.reduce((s,r) => s + pm(r['Line Total']), 0);
-  const vTotal = D.vault.length;
-  const vOcc = D.vault.filter(r => r['Occupied']==='1'||r['Occupied']?.toLowerCase()==='true').length;
-  const issues = data.filter(r => (r['Issue Notes']||'').trim()).length;
-  const auditRows = D.audit.filter(r => r['Order Number'] && r['Audit Verdict']);
-  const auditPass = auditRows.filter(r => r['Audit Verdict']==='PASS').length;
-  const complete = data.filter(r => r['Dispatch Status']==='Complete').length;
-  const mrr = D.manifest.reduce((s,r) => s + (parseInt(r['Qty'])||0) * pm(r['Unit $/mo']), 0);
-  const manifItems = D.manifest.reduce((s,r) => s + (parseInt(r['Qty'])||0), 0);
-
-  const kpis = [
-    {l:'Total Orders', v:fmtN(data.length), sub:`${fmtN(D.storage.length)} storage · ${fmtN(D.transit.length)} transit`, c:'#2563eb'},
-    {l:'Total Revenue', v:usd(totalRev), sub:`${fmtN(lines.length)} line items`, c:'#059669'},
-    {l:'Completed', v:fmtN(complete), sub:data.length?Math.round(complete/data.length*100)+'% of orders':'—', c:'#3b82f6'},
-    {l:'Vault Slots', v:vTotal?Math.round(vOcc/vTotal*100)+'%':'—', sub:`${fmtN(vOcc)}/${fmtN(vTotal)} occupied`, c:'#0891b2'},
-    {l:'Issues', v:fmtN(issues), sub:'orders with notes', c:issues>0?'#dc2626':'#94a3b8'},
-    {l:'Audit Pass', v:auditRows.length?Math.round(auditPass/auditRows.length*100)+'%':'—', sub:`${fmtN(auditPass)}/${fmtN(auditRows.length)} audited`, c:'#d97706'},
-    {l:'MRR (Manifest)', v:usd(mrr,0), sub:'from stored items', c:'#0891b2'},
-    {l:'Items Stored', v:fmtN(manifItems), sub:`${fmtN(D.manifest.length)} manifest rows`, c:'#475569'},
-  ];
-
-  document.getElementById('kpiStrip').innerHTML = kpis.map(k => `
-    <div class="kpi card p-3">
-      <div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div>
-      <div class="text-xl font-bold mb-0.5" style="color:${k.c};" data-target="${typeof k.v==='number'?k.v:''}">${k.v}</div>
-      <div class="text-xs" style="color:var(--t3);">${k.sub}</div>
-    </div>`).join('');
-
-  // animate numeric counters
-  document.querySelectorAll('[data-target]').forEach(el => {
-    const t = parseInt(el.dataset.target);
-    if (!isNaN(t) && t > 0) animateNum(el, t);
   });
 }
 
-function animateNum(el, target) {
-  const dur = 800, start = performance.now();
-  const orig = el.textContent;
-  const update = (now) => {
-    const p = Math.min((now-start)/dur, 1);
-    const ease = 1 - Math.pow(1-p, 3);
-    el.textContent = Math.floor(ease * target).toLocaleString();
-    if (p < 1) requestAnimationFrame(update);
-    else el.textContent = orig;
-  };
-  requestAnimationFrame(update);
-}
-
-// ── OVERVIEW ───────────────────────────────────────────────────────
-function renderOverview(data) {
-  donut('c-serviceMix',    cb(data, 'Service'));
-  donut('c-dispatchStatus',cb(data, 'Dispatch Status'));
-  donut('c-shippingStatus',cb(data, 'Shipping Status'));
-
-  const bldg = cb(data.filter(r=>r.Building), 'Building');
-  const top = Object.entries(bldg).sort((a,b)=>b[1]-a[1]).slice(0,12);
-  mkBar('c-buildings', top.map(x=>x[0]), [{data:top.map(x=>x[1]), backgroundColor:P[0]+'bb', borderRadius:4, label:'Orders'}],
-    {indexAxis:'y', onClick:(e,el,ch) => drillBuilding(top[el[0]?.index]?.[0])});
-
-  // Funnel
-  const funnelData = [
-    {l:'All Orders', v:D.all.length, c:P[0]},
-    {l:'Have Building', v:D.all.filter(r=>r.Building).length, c:P[1]},
-    {l:'Have Items', v:D.all.filter(r=>parseInt(r['Item Count'])>0).length, c:P[2]},
-    {l:'Completed', v:D.all.filter(r=>r['Dispatch Status']==='Complete').length, c:P[3]},
-  ];
-  const max = funnelData[0].v || 1;
-  document.getElementById('funnelChart').innerHTML = funnelData.map((f,i) => `
-    <div class="mb-2">
-      <div class="flex justify-between text-xs mb-1" style="color:var(--t2);">
-        <span>${f.l}</span><span style="color:${f.c};">${f.v.toLocaleString()} (${Math.round(f.v/max*100)}%)</span>
-      </div>
-      <div style="background:var(--bg2);border-radius:4px;overflow:hidden;height:20px;">
-        <div class="funnel-bar" style="height:100%;width:${Math.round(f.v/max*100)}%;background:${f.c};border-radius:4px;min-width:2px;"></div>
-      </div>
-    </div>`).join('');
-
-}
-
-function renderVolumeChart(id, data) {
-  const byDate = {};
-  data.forEach(r => {
-    const d = r['First Seen'] || r['Pickup Date'];
-    if (d) byDate[d] = (byDate[d]||0) + 1;
-  });
-  const dates = Object.keys(byDate).sort();
-  const vals = dates.map(d => byDate[d]);
-  // 7-day rolling avg
-  const avg = vals.map((_,i) => {
-    const slice = vals.slice(Math.max(0,i-6), i+1);
-    return +(slice.reduce((a,b)=>a+b,0)/slice.length).toFixed(1);
-  });
-  mk(id,'line', dates, [
-    {label:'Orders', data:vals, borderColor:P[0], backgroundColor:P[0]+'22', fill:true, tension:.3, pointRadius:2},
-    {label:'7-day avg', data:avg, borderColor:P[1], borderDash:[4,4], pointRadius:0, tension:.3},
-  ]);
-}
-
-function renderCalendar(data) {
-  const byDate = {};
-  data.forEach(r => { const d=r['First Seen']||r['Pickup Date']; if(d) byDate[d]=(byDate[d]||0)+1; });
-  const today = new Date();
-  const days = [];
-  for (let i=59; i>=0; i--) {
-    const d = new Date(today); d.setDate(d.getDate()-i);
-    const key = `${d.getMonth()+1}/${d.getDate()}/${d.getFullYear()}`;
-    days.push({key, label:`${d.getMonth()+1}/${d.getDate()}`, count: byDate[key]||0});
-  }
-  const max = Math.max(...days.map(d=>d.count), 1);
-  const weeks = [];
-  for (let i=0; i<days.length; i+=7) weeks.push(days.slice(i,i+7));
-  document.getElementById('calendarHeatmap').innerHTML = `
-    <div class="flex gap-1 flex-wrap">
-      ${weeks.map(w=>`<div class="flex flex-col gap-1">
-        ${w.map(d=>{
-          const intensity = Math.round(d.count/max*4);
-          const colors = ['var(--bg2)','#bfdbfe','#60a5fa','#2563eb','#1d4ed8'];
-          return `<div class="cal-cell" style="background:${colors[intensity]};" title="${d.label}: ${d.count} orders"></div>`;
-        }).join('')}
-      </div>`).join('')}
-    </div>
-    <div class="flex items-center gap-2 mt-2 text-xs" style="color:var(--t3);">
-      <span>Less</span>
-      ${['var(--bg2)','#bfdbfe','#60a5fa','#2563eb','#1d4ed8'].map(c=>`<span class="w-3 h-3 rounded inline-block" style="background:${c};"></span>`).join('')}
-      <span>More</span>
-    </div>`;
-}
-
-// ── ORDERS TAB ─────────────────────────────────────────────────────
-function renderOrdersTab(data) {
-  const svc = cb(data, 'Service');
-  mkBar('c-ordByService', Object.keys(svc), [{data:Object.values(svc), backgroundColor:P.map(c=>c+'bb'), borderRadius:4}]);
-
-  const bld = cb(data.filter(r=>r.Building), 'Building');
-  const top10 = Object.entries(bld).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  mkBar('c-ordByBuilding', top10.map(x=>x[0]), [{data:top10.map(x=>x[1]), backgroundColor:P[1]+'bb', borderRadius:4}], {indexAxis:'y'});
-
-  filtered = [...data];
-  renderTable();
-}
-
-function applyOrderFilters() {
-  const svc = v('fService'), bld = v('fBuilding'), dsp = v('fDispatch'), shp = v('fShipping'), q = v('fSearch').toLowerCase();
-  filtered = getGlobalData().filter(r =>
-    (!svc||r.Service===svc) && (!bld||r.Building===bld) &&
-    (!dsp||r['Dispatch Status']===dsp) && (!shp||r['Shipping Status']===shp) &&
-    (!q||(r.Student||'').toLowerCase().includes(q)||(r['Order Number']||'').toLowerCase().includes(q))
-  );
-  pg = 1; renderTable();
-}
-
-const OCOLS = ['Order Number','Student','Building','Room','Service','Dispatch Status','Shipping Status','Item Count','Total $','Days In Storage','Handled By'];
-
-function renderTable() {
-  if(sCol) filtered.sort((a,b)=>(a[sCol]||'').localeCompare(b[sCol]||'')*sDir);
-  const pages = Math.ceil(filtered.length/PG);
-  const slice = filtered.slice((pg-1)*PG, pg*PG);
-  document.getElementById('ordHead').innerHTML = OCOLS.map(c=>`<th class="px-3 py-2 text-left cursor-pointer whitespace-nowrap" style="color:${sCol===c?'var(--acc)':'var(--t2)'};" onclick="doSort('${c}')">${c}<span style="font-size:9px;margin-left:3px;opacity:${sCol===c?1:.3};color:var(--acc);">${sCol===c?(sDir===1?'▼':'▲'):'▼'}</span></th>`).join('');
-  document.getElementById('ordBody').innerHTML = slice.map(r=>`<tr>
-    ${OCOLS.map(c=>{
-      const val=r[c]||'—';
-      if(c==='Dispatch Status') return `<td class="px-3 py-2">${sBadge(val)}</td>`;
-      if(c==='Total $') return `<td class="px-3 py-2 text-right" style="color:#059669;font-weight:500;">${val}</td>`;
-      return `<td class="px-3 py-2 whitespace-nowrap" style="color:var(--t1);">${val}</td>`;
-    }).join('')}
-  </tr>`).join('');
-  document.getElementById('ordCount').textContent = filtered.length + ' orders';
-  document.getElementById('pgInfo').textContent = `Page ${pg} of ${pages||1}`;
-}
-
-function doSort(c) { sDir=sCol===c?sDir*-1:1; sCol=c; renderTable(); }
-
-// ── GENERIC TABLE SORTER ───────────────────────────────────────────
-function initTableSort(tableEl) {
-  if (!tableEl) return;
-  tableEl.querySelectorAll('thead th').forEach((th, idx) => {
-    if (th.querySelector('.si')) return;
-    const si = document.createElement('span');
-    si.className = 'si';
-    si.style.cssText = 'opacity:.3;font-size:9px;margin-left:3px;transition:opacity .15s;';
-    si.textContent = '▼';
-    th.appendChild(si);
-    th.style.cursor = 'pointer';
-    th.style.userSelect = 'none';
-    th.addEventListener('click', () => {
-      const tbody = tableEl.querySelector('tbody');
-      if (!tbody) return;
-      const rows = [...tbody.querySelectorAll('tr')];
-      const asc = th.dataset.dir !== 'asc';
-      tableEl.querySelectorAll('thead th').forEach(h => {
-        h.dataset.dir = '';
-        const s = h.querySelector('.si');
-        if (s) { s.style.opacity='.3'; s.style.color=''; s.textContent='▼'; }
-      });
-      th.dataset.dir = asc ? 'asc' : 'desc';
-      si.style.opacity = '1'; si.style.color = 'var(--acc)';
-      si.textContent = asc ? '▼' : '▲';
-      rows.sort((a, b) => {
-        const av = a.cells[idx]?.textContent?.trim() || '';
-        const bv = b.cells[idx]?.textContent?.trim() || '';
-        const an = parseFloat(av.replace(/[,$%+]/g,'')), bn = parseFloat(bv.replace(/[,$%+]/g,''));
-        const cmp = (!isNaN(an)&&!isNaN(bn)) ? an-bn : av.localeCompare(bv, undefined, {numeric:true});
-        return asc ? cmp : -cmp;
-      });
-      rows.forEach(r => tbody.appendChild(r));
-    });
-  });
-}
-function changePg(d) { const p=Math.ceil(filtered.length/PG); pg=Math.max(1,Math.min(p,pg+d)); renderTable(); }
-function exportCSV() {
-  const b=new Blob([Papa.unparse(filtered)],{type:'text/csv'});
-  Object.assign(document.createElement('a'),{href:URL.createObjectURL(b),download:'orders.csv'}).click();
-}
-function drillBuilding(bld) {
-  if(!bld) return;
-  switchTab('orders', document.querySelector('[onclick*="orders"]'));
-  document.getElementById('fBuilding').value = bld;
-  applyOrderFilters();
-}
-
-// ── STUDENTS ──────────────────────────────────────────────────────
-function renderStudents(data) {
-  const stuMap = {};
-  data.forEach(r => {
-    const s = r.Student;
-    if(!s) return;
-    if(!stuMap[s]) stuMap[s] = {orders:0, items:0, revenue:0, buildings:new Set(), services:new Set(), status:r['Dispatch Status']||''};
-    stuMap[s].orders++;
-    stuMap[s].items += parseInt(r['Item Count'])||0;
-    stuMap[s].revenue += pm(r['Total $']);
-    if(r.Building) stuMap[s].buildings.add(r.Building);
-    if(r.Service) stuMap[s].services.add(r.Service);
-  });
-  D._stuMap = stuMap;
-
-  const byItems = Object.entries(stuMap).sort((a,b)=>b[1].items-a[1].items).slice(0,20);
-  mkBar('c-topStudents', byItems.map(x=>x[0]), [{data:byItems.map(x=>x[1].items), backgroundColor:P[0]+'bb', borderRadius:4}],
-    {indexAxis:'y', plugins:{legend:{display:false}}});
-
-  // Distribution: how many students have 1, 2, 3+ orders
-  const dist = {};
-  Object.values(stuMap).forEach(s => { const k=s.orders>3?'4+':s.orders.toString(); dist[k]=(dist[k]||0)+1; });
-  donut('c-studentDist', dist);
-
-  const bldCounts = {};
-  Object.values(stuMap).forEach(s => s.buildings.forEach(b => { bldCounts[b]=(bldCounts[b]||0)+1; }));
-  const topBld = Object.entries(bldCounts).sort((a,b)=>b[1]-a[1]).slice(0,12);
-  mkBar('c-studentBuilding', topBld.map(x=>x[0]), [{data:topBld.map(x=>x[1]), backgroundColor:P[1]+'bb', borderRadius:4}], {indexAxis:'y'});
-
-  const svcCounts = {};
-  Object.values(stuMap).forEach(s => s.services.forEach(sv => { svcCounts[sv]=(svcCounts[sv]||0)+1; }));
-  donut('c-studentService', svcCounts);
-
-  renderStudentTable();
-}
-
-function renderStudentTable() {
-  const q = (v('stuSearch')||'').toLowerCase();
-  const rows = Object.entries(D._stuMap||{})
-    .filter(([n]) => !q || n.toLowerCase().includes(q))
-    .sort((a,b)=>b[1].items-a[1].items).slice(0,150);
-  document.getElementById('stuBody').innerHTML = rows.map(([name,s])=>`<tr>
-    <td class="px-3 py-2 font-medium" style="color:var(--t1);">${name}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${[...s.buildings].join(', ')||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${[...s.services].join(', ')||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:var(--t1);">${s.orders}</td>
-    <td class="px-3 py-2 text-right" style="color:var(--t1);">${s.items}</td>
-    <td class="px-3 py-2 text-right" style="color:#059669;">${s.revenue>0?'$'+s.revenue.toFixed(2):'—'}</td>
-    <td class="px-3 py-2">${sBadge(s.status||'—')}</td>
-  </tr>`).join('');
-  initTableSort(document.getElementById('stuTable'));
-}
-
-// ── OPERATIONS ────────────────────────────────────────────────────
-let dispPg = 1, dispFiltered = [];
-const DISP_PG = 30;
-
-function renderDispatchTable() {
-  const q = (v('dispSearch')||'').toLowerCase();
-  const st = v('dispStatus'), tr = v('dispTruck');
-  dispFiltered = (D.dispatch||[]).filter(r =>
-    (!q || (r.Student||'').toLowerCase().includes(q) || (r.Building||'').toLowerCase().includes(q) || (r.Truck||'').toLowerCase().includes(q) || (r.ID||'').toLowerCase().includes(q)) &&
-    (!st || r['Dispatch Status']===st) &&
-    (!tr || r.Truck===tr)
-  );
-  const pages = Math.ceil(dispFiltered.length/DISP_PG);
-  const slice = dispFiltered.slice((dispPg-1)*DISP_PG, dispPg*DISP_PG);
-  document.getElementById('dispBody').innerHTML = slice.map(r=>`<tr>
-    <td class="px-3 py-2 font-mono" style="color:var(--t3);">${r.ID||'—'}</td>
-    <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r.Student||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r.Building||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r.Room||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r.Date||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Time Slot']||'—'}</td>
-    <td class="px-3 py-2 font-medium" style="color:var(--acc);">${r.Truck||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:var(--t1);">${r.Kits||'0'}</td>
-    <td class="px-3 py-2">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
-    <td class="px-3 py-2 max-w-xs truncate" style="color:var(--t3);">${r['Mover Notes']||'—'}</td>
-  </tr>`).join('');
-  document.getElementById('dispPgInfo').textContent = `${fmtN(dispFiltered.length)} orders · Page ${dispPg} of ${pages||1}`;
-  initTableSort(document.getElementById('opsTable'));
-}
-function changeDispPg(d){const p=Math.ceil((dispFiltered.length||1)/DISP_PG);dispPg=Math.max(1,Math.min(p,dispPg+d));renderDispatchTable();}
-
-function renderOperations(data) {
-  // Dispatch KPIs from live dispatch sheet
-  const dRows = D.dispatch||[];
-  const dWithTruck = dRows.filter(r=>r.Truck&&r.Truck.trim());
-  const dWithSlot = dRows.filter(r=>r['Time Slot']&&r['Time Slot'].trim());
-  const totalKits = dRows.reduce((s,r)=>s+(parseInt(r.Kits)||0),0);
-  const trucks = [...new Set(dWithTruck.map(r=>r.Truck))].length;
-  document.getElementById('opsKPIs').innerHTML=[
-    {l:'Total Orders',v:fmtN(dRows.length),sub:'in dispatch sheet',c:'#2563eb'},
-    {l:'Assigned to Truck',v:fmtN(dWithTruck.length),sub:`${trucks} trucks active`,c:'#3b82f6'},
-    {l:'Total Kits',v:fmtN(totalKits),sub:'kits required',c:'#059669'},
-    {l:'Time Slots Scheduled',v:fmtN(dWithSlot.length),sub:'orders with a time',c:'#0891b2'},
-  ].map(k=>`<div class="kpi card p-3"><div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold mb-0.5" style="color:${k.c};">${k.v}</div><div class="text-xs" style="color:var(--t3);">${k.sub}</div></div>`).join('');
-
-  // Time slot distribution
-  const slots = cb(dWithSlot, 'Time Slot');
-  const slotEntries = Object.entries(slots).sort((a,b)=>b[1]-a[1]);
-  if(slotEntries.length>0){
-    mkBar('c-timeSlots', slotEntries.map(x=>x[0]), [{data:slotEntries.map(x=>x[1]), backgroundColor:P[4]+'bb', borderRadius:4, maxBarThickness:32}],
-      {indexAxis:'y', scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'},ticks:{font:{size:10}}}}});
-  }
-
-  // Orders by truck
-  const truckCounts = cb(dWithTruck, 'Truck');
-  const truckEntries = Object.entries(truckCounts).sort((a,b)=>b[1]-a[1]);
-  if(truckEntries.length>0){
-    mkBar('c-byTruck', truckEntries.map(x=>x[0]), [{data:truckEntries.map(x=>x[1]), backgroundColor:P[0]+'bb', borderRadius:4, maxBarThickness:32}],
-      {scales:{y:{beginAtZero:true,grid:{color:'var(--bd)'}},x:{grid:{color:'var(--bd)'}}}});
-  }
-
-  // Populate dispatch table filters
-  const setOpts = (id, vals, label) => {
-    const el = document.getElementById(id);
-    const cur = el.value;
-    el.innerHTML = `<option value="">All ${label}</option>` + vals.sort().map(v=>`<option${v===cur?' selected':''}>${v}</option>`).join('');
-  };
-  setOpts('dispStatus', [...new Set(dRows.map(r=>r['Dispatch Status']||r.Status).filter(Boolean))], 'Statuses');
-  setOpts('dispTruck', [...new Set(dRows.map(r=>r.Truck).filter(Boolean))], 'Trucks');
-  dispFiltered = [...dRows]; dispPg = 1;
-  renderDispatchTable();
-
-  donut('c-eventTypes', cb(D.events.filter(r=>r['Event Type']), 'Event Type'));
-
-
-  // Completion rate by service
-  const svcComplete = {}, svcTotal = {};
-  data.forEach(r => {
-    const s = r.Service||'Unknown';
-    svcTotal[s] = (svcTotal[s]||0)+1;
-    if(r['Dispatch Status']==='Complete') svcComplete[s]=(svcComplete[s]||0)+1;
-  });
-  const svcs = Object.keys(svcTotal);
-  mkBar('c-completionRate', svcs,
-    [{label:'Completed', data:svcs.map(s=>svcComplete[s]||0), backgroundColor:P[2]+'bb', borderRadius:4},
-     {label:'Pending',   data:svcs.map(s=>(svcTotal[s]||0)-(svcComplete[s]||0)), backgroundColor:P[7]+'bb', borderRadius:4}],
-    {scales:{x:{stacked:true},y:{stacked:true}}, plugins:{legend:{display:true, labels:{boxWidth:10,font:{size:10}}}}});
-
-  // Audit pass/fail by service
-  const apSvc = {}, afSvc = {};
-  D.audit.filter(r=>r['Audit Verdict']&&r.Service).forEach(r => {
-    const s=r.Service;
-    if(r['Audit Verdict']==='PASS') apSvc[s]=(apSvc[s]||0)+1;
-    else afSvc[s]=(afSvc[s]||0)+1;
-  });
-  const auditSvcs = [...new Set([...Object.keys(apSvc),...Object.keys(afSvc)])];
-  mkBar('c-auditByService', auditSvcs,
-    [{label:'Pass', data:auditSvcs.map(s=>apSvc[s]||0), backgroundColor:P[2]+'bb', borderRadius:4},
-     {label:'Fail', data:auditSvcs.map(s=>afSvc[s]||0), backgroundColor:P[7]+'bb', borderRadius:4}],
-    {scales:{x:{stacked:true},y:{stacked:true}}, plugins:{legend:{display:true, labels:{boxWidth:10,font:{size:10}}}}});
-
-  // Overall status breakdown stacked
-  const statuses = cb(data, 'Dispatch Status');
-  donut('c-statusBreakdown', statuses);
-}
-
-// ── REVENUE ───────────────────────────────────────────────────────
-function renderRevenue() {
-  const lines = D.invoices.filter(r => r['Item Type']&&!r['Item Type'].includes('──')&&!r['Item Type'].includes('⚠️')&&r['Order Number']);
-  const bySvc = {}, byItem = {}, byBld = {}, bySur = {base:0, surcharge:0};
-  lines.forEach(r => {
-    const v = pm(r['Line Total']), sv = pm(r['Surcharge']||'0');
-    bySvc[r.Service||'Unknown'] = (bySvc[r.Service||'Unknown']||0)+v;
-    byItem[r['Item Type']||'Unknown'] = (byItem[r['Item Type']||'Unknown']||0)+v;
-    // find building from orders
-    const ord = D.all.find(o=>o['Order Number']===r['Order Number']);
-    if(ord?.Building) byBld[ord.Building] = (byBld[ord.Building]||0)+v;
-    bySur.base += v; bySur.surcharge += sv;
-  });
-
-  mkBar('c-revService', Object.keys(bySvc), [{data:Object.values(bySvc).map(x=>+x.toFixed(2)), backgroundColor:P[2]+'bb', borderRadius:4}],
-    {scales:{y:{ticks:{callback:v=>'$'+fmtN(v)}}}});
-
-  const topItems = Object.entries(byItem).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  mkBar('c-revItem', topItems.map(x=>x[0]), [{data:topItems.map(x=>+x[1].toFixed(2)), backgroundColor:P.map(c=>c+'bb'), borderRadius:4}],
-    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+fmtN(v)}}}});
-
-  const topBld = Object.entries(byBld).sort((a,b)=>b[1]-a[1]).slice(0,10);
-  mkBar('c-revBuilding', topBld.map(x=>x[0]), [{data:topBld.map(x=>+x[1].toFixed(2)), backgroundColor:P[1]+'bb', borderRadius:4}], {indexAxis:'y'});
-
-  mk('c-revSurcharge','doughnut',['Base Revenue','Surcharges'],
-    [{data:[+bySur.base.toFixed(2), +bySur.surcharge.toFixed(2)], backgroundColor:[P[2]+'cc',P[4]+'cc'], borderColor:'var(--bg0)', borderWidth:2}],
-    {plugins:{legend:{display:true, position:'bottom', labels:{boxWidth:10,font:{size:11}}}}});
-
-  const totalRev = lines.reduce((s,r)=>s+pm(r['Line Total']),0);
-  const totalSur = lines.reduce((s,r)=>s+pm(r['Surcharge']||'0'),0);
-  const uOrd = [...new Set(lines.map(r=>r['Order Number']))].length;
-  document.getElementById('revKPIs').innerHTML = [
-    {l:'Total Revenue',    v:usd(totalRev), c:'#059669'},
-    {l:'Total Surcharges', v:usd(totalSur), c:'#d97706'},
-    {l:'Invoiced Orders',  v:fmtN(uOrd), c:'#3b82f6'},
-    {l:'Avg Order Value',  v:usd(uOrd?totalRev/uOrd:0), c:'#2563eb'},
-  ].map(k=>`<div class="kpi card p-3"><div class="text-xs uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold" style="color:${k.c};">${k.v}</div></div>`).join('');
-
-  document.getElementById('invBody').innerHTML = lines.slice(0,200).map(r=>`<tr>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Service']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t1);">${r['Item Type']||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:var(--t2);">${r['Qty']||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:var(--t2);">${r['Unit Price']||'—'}</td>
-    <td class="px-3 py-2 text-right font-medium" style="color:#059669;">${r['Line Total']||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:#d97706;">${r['Surcharge']&&r['Surcharge']!=='$0.00'?r['Surcharge']:'—'}</td>
-  </tr>`).join('');
-}
-
-// ── FORECAST ─────────────────────────────────────────────────────
-function renderForecast() {
-  // MRR from manifest
-  const mrrByType = {};
-  D.manifest.forEach(r => {
-    const item = r['Item']||'Unknown';
-    const rev = (parseInt(r['Qty'])||0) * pm(r['Unit $/mo']);
-    mrrByType[item] = (mrrByType[item]||0) + rev;
-  });
-  const totalMRR = Object.values(mrrByType).reduce((a,b)=>a+b,0);
-  const annualRev = totalMRR * 4; // ~4 month storage season
-
-  // Pending orders
-  const pending = D.all.filter(r=>pm(r['Total $'])===0).length;
-  const invoiced = D.all.filter(r=>pm(r['Total $'])>0).length;
-  const lines = D.invoices.filter(r=>r['Item Type']&&!r['Item Type'].includes('──')&&!r['Item Type'].includes('⚠️'));
-  const totalRev = lines.reduce((s,r)=>s+pm(r['Line Total']),0);
-
-  // Price tier donut
-  const tiers = {'Budget (<$15/mo)':0, 'Standard ($15–25/mo)':0, 'Premium (>$25/mo)':0};
-  D.manifest.forEach(r => {
-    const p = pm(r['Unit $/mo']), qty = parseInt(r['Qty'])||1;
-    if(p<15) tiers['Budget (<$15/mo)']+=qty;
-    else if(p<=25) tiers['Standard ($15–25/mo)']+=qty;
-    else tiers['Premium (>$25/mo)']+=qty;
-  });
-  donut('c-priceTier', tiers);
-
-  // Pending vs invoiced
-  mk('c-pendingVsInvoiced','doughnut',['Pending Revenue','Invoiced'],
-    [{data:[pending, invoiced], backgroundColor:[P[4]+'cc',P[2]+'cc'], borderColor:'var(--bg0)', borderWidth:2}],
-    {plugins:{legend:{display:true, position:'bottom', labels:{boxWidth:10,font:{size:11}}}}});
-
-  // MRR by item type
-  const mrrEntries = Object.entries(mrrByType).sort((a,b)=>b[1]-a[1]);
-  mkBar('c-mrr', mrrEntries.map(x=>x[0]), [{data:mrrEntries.map(x=>+x[1].toFixed(2)), backgroundColor:P.map(c=>c+'bb'), borderRadius:4}],
-    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+fmtN(v)}}}});
-
-  // Revenue per building from manifest
-  const revBld = {};
-  D.manifest.forEach(r => {
-    const b=r.Building; if(!b) return;
-    revBld[b]=(revBld[b]||0)+(parseInt(r['Qty'])||0)*pm(r['Unit $/mo']);
-  });
-  const topBldRev = Object.entries(revBld).sort((a,b)=>b[1]-a[1]).slice(0,12);
-  mkBar('c-revPerBuilding', topBldRev.map(x=>x[0]), [{data:topBldRev.map(x=>+x[1].toFixed(2)), backgroundColor:P[0]+'bb', borderRadius:4}],
-    {indexAxis:'y', scales:{x:{ticks:{callback:v=>'$'+fmtN(v)}}}});
-
-  document.getElementById('fcKPIs').innerHTML = [
-    {l:'Monthly Recurring Rev', v:usd(totalMRR), c:'#059669'},
-    {l:'Projected Seasonal',    v:usd(annualRev), c:'#3b82f6'},
-    {l:'Pending Orders',        v:fmtN(pending)+' orders', c:'#d97706'},
-    {l:'Invoiced Revenue',      v:usd(totalRev), c:'#2563eb'},
-  ].map(k=>`<div class="kpi card p-3"><div class="text-xs uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold" style="color:${k.c};">${k.v}</div></div>`).join('');
-}
-
-// ── VAULT ─────────────────────────────────────────────────────────
-function renderVault() {
-  const itemCounts={};
-  D.manifest.forEach(r=>{ const k=r['Item']||'Unknown'; itemCounts[k]=(itemCounts[k]||0)+(parseInt(r['Qty'])||1); });
-  donut('c-itemTypes', itemCounts);
-
-  // Monthly revenue by item type: qty × unit $/mo
-  const itemRev={}, itemQty={}, itemPrice={};
-  D.manifest.forEach(r=>{
-    const k=r['Item']||'Unknown', qty=parseInt(r['Qty'])||1, price=pm(r['Unit $/mo']);
-    itemRev[k]=(itemRev[k]||0)+qty*price;
-    itemQty[k]=(itemQty[k]||0)+qty;
-    itemPrice[k]=price; // last price seen
-  });
-  const revEntries=Object.entries(itemRev).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
-  if(revEntries.length>0){
-    mkBar('c-itemRevenue',revEntries.map(x=>x[0]),
-      [{label:'$/mo Revenue',data:revEntries.map(x=>+x[1].toFixed(2)),backgroundColor:P.map(c=>c+'bb'),borderRadius:4,maxBarThickness:28,barPercentage:0.75}],
-      {indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:(ctx)=>{
-        const item=ctx.label;
-        return [`${usd(ctx.raw)}/mo total`, `${fmtN(itemQty[item])} units × ${usd(itemPrice[item],0)}/mo`];
-      }}}},scales:{x:{beginAtZero:true,ticks:{callback:v=>'$'+fmtN(v)},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
-  }
-
-  renderManifest();
-}
-
-function renderManifest() {
-  const q=(v('manifSearch')||'').toLowerCase();
-  const rows=D.manifest.filter(r=>!q||(r['Student']||'').toLowerCase().includes(q)||(r['Item']||'').toLowerCase().includes(q)||(r['Order Number']||'').toLowerCase().includes(q)).slice(0,200);
-  document.getElementById('manifBody').innerHTML=rows.map(r=>`<tr>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Building']||'—'}</td>
-    <td class="px-3 py-2 font-medium" style="color:var(--t1);">${r['Item']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Size']||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:var(--t1);">${r['Qty']||'—'}</td>
-    <td class="px-3 py-2 text-right" style="color:#059669;">${r['Unit $/mo']?'$'+r['Unit $/mo']:'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Vault Location']||'—'}</td>
-    <td class="px-3 py-2">${r['Checked?']==='TRUE'?'<span class="badge b-g">✓</span>':'<span class="badge b-gray">—</span>'}</td>
-  </tr>`).join('');
-}
-
-// ── AUDIT ─────────────────────────────────────────────────────────
-function renderAudit() {
-  donut('c-auditVerdict', cb(D.audit.filter(r=>r['Audit Verdict']),'Audit Verdict'));
-  const issY=D.events.filter(r=>r['Issue?']==='Y').length;
-  const issN=D.events.length-issY;
-  donut('c-issueFlag',{'No Issue':issN,'Has Issue':issY});
-
-  document.getElementById('evtBody').innerHTML=D.events.slice(0,200).map(r=>`<tr>
-    <td class="px-3 py-2" style="color:var(--t3);">${r['Event ID']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Event Time']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t1);">${r['Event Type']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td>
-    <td class="px-3 py-2">${r['Issue?']==='Y'?'<span class="badge b-r">Yes</span>':'<span class="badge b-g">No</span>'}</td>
-  </tr>`).join('');
-
-  document.getElementById('audBody').innerHTML=D.audit.slice(0,200).map(r=>`<tr>
-    <td class="px-3 py-2" style="color:var(--t2);">${r['Order Number']||'—'}</td>
-    <td class="px-3 py-2" style="color:var(--t1);">${r['Student']||'—'}</td>
-    <td class="px-3 py-2">${vBadge(r['Audit Verdict'])}</td>
-    <td class="px-3 py-2">${r['Item Count Match?']==='TRUE'?'<span class="badge b-g">✓ Match</span>':'<span class="badge b-r">✗ Mismatch</span>'}</td>
-    <td class="px-3 py-2 max-w-xs truncate" style="color:var(--t3);">${r['Audit Notes']||'—'}</td>
-  </tr>`).join('');
-  initTableSort(document.getElementById('evtTable'));
-  initTableSort(document.getElementById('audTable'));
-}
-
-// ── CHART HELPERS ─────────────────────────────────────────────────
-function donut(id, obj) {
-  destroy(id);
-  CH[id]=new Chart(document.getElementById(id),{
-    type:'doughnut',
-    data:{labels:Object.keys(obj),datasets:[{data:Object.values(obj),backgroundColor:P.map(c=>c+'cc'),borderColor:'var(--bg0)',borderWidth:2}]},
-    options:{responsive:true,maintainAspectRatio:false,cutout:'62%',plugins:{legend:{position:'right',labels:{boxWidth:9,font:{size:10}}}}}
-  });
-}
-
-function mkBar(id, labels, datasets, extra={}) {
-  mk(id,'bar',labels,datasets,merge({plugins:{legend:{display:false}},scales:{x:{grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}}, extra));
-}
-
-function mk(id, type, labels, datasets, opts={}) {
-  destroy(id);
-  CH[id]=new Chart(document.getElementById(id),{type,data:{labels,datasets},options:merge({responsive:true,maintainAspectRatio:false},opts)});
-}
-
-function destroy(id) { if(CH[id]){CH[id].destroy();delete CH[id];} }
-
-// ── MODAL ─────────────────────────────────────────────────────────
-function openModal(title, type, labels, datasets, opts) {
-  document.getElementById('modalTitle').textContent = title;
-  document.getElementById('modal').classList.remove('hidden');
-  destroy('modalCanvas');
-  CH['modalCanvas']=new Chart(document.getElementById('modalCanvas'),{type,data:{labels,datasets},options:merge({responsive:true,maintainAspectRatio:false},opts||{})});
-}
-function closeModal() { document.getElementById('modal').classList.add('hidden'); destroy('modalCanvas'); }
-
-// ── UI HELPERS ────────────────────────────────────────────────────
-function switchTab(tab, btn) {
-  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.add('hidden'));
-  document.getElementById('tab-'+tab).classList.remove('hidden');
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('tab-active'));
-  if(btn) btn.classList.add('tab-active');
-  // Clear More button highlight when a main tab is clicked
-  const mb = document.getElementById('moreBtn');
-  if(mb) { mb.style.color=''; mb.style.borderBottomColor=''; }
-  closeMoreMenu();
-}
-
-function switchTabMore(tab, btn) {
-  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.add('hidden'));
-  document.getElementById('tab-'+tab).classList.remove('hidden');
-  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('tab-active'));
-  document.querySelectorAll('.more-tab-btn').forEach(b=>{ b.style.background=''; b.style.color=''; });
-  if(btn) { btn.style.background='var(--bg2)'; btn.style.color='var(--acc)'; }
-  // Highlight More button
-  const mb = document.getElementById('moreBtn');
-  if(mb) { mb.style.color='var(--acc)'; mb.style.borderBottomColor='var(--acc)'; }
-  closeMoreMenu();
-}
-
-function toggleMoreMenu() {
-  document.getElementById('moreMenu').classList.toggle('hidden');
-}
-
-function closeMoreMenu() {
-  document.getElementById('moreMenu')?.classList.add('hidden');
-}
-
-document.addEventListener('click', e => {
-  if(!document.getElementById('moreMenuWrap')?.contains(e.target)) closeMoreMenu();
-});
-
-function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(()=>{});
-    document.getElementById('fsBtn').textContent = '⊡';
-  } else {
-    document.exitFullscreen();
-    document.getElementById('fsBtn').textContent = '⛶';
-  }
-}
-document.addEventListener('fullscreenchange', () => {
-  document.getElementById('fsBtn').textContent = document.fullscreenElement ? '⊡' : '⛶';
-});
-
-function toggleTheme() {
-  document.body.classList.toggle('dark');
-  const isDark = document.body.classList.contains('dark');
-  document.getElementById('themeBtn').textContent = isDark ? '☀️' : '🌙';
-  Chart.defaults.color = isDark ? '#94a3b8' : '#475569';
-  Chart.defaults.borderColor = isDark ? '#1e293b' : '#bfdbfe';
-  renderAll();
-}
-
-function handleGlobalSearch(q) {
-  if (!q) return;
-  switchTab('orders', document.querySelector('[onclick*="\'orders\'"]'));
-  document.getElementById('fSearch').value = q;
-  applyOrderFilters();
-}
-
-// ── UTILS ─────────────────────────────────────────────────────────
-function cb(arr, key) { return arr.reduce((acc,r)=>{ const k=r[key]||'Unknown'; acc[k]=(acc[k]||0)+1; return acc; },{}); }
-function pm(s) { return parseFloat((s||'0').replace(/[$,]/g,''))||0; }
-function v(id) { return document.getElementById(id)?.value||''; }
-function merge(a,b) { const r={...a}; for(const k in b) r[k]=(b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k]))?merge(a[k]||{},b[k]):b[k]; return r; }
-function fmtN(n,dec=0){return (+n||0).toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec});}
-function usd(n,dec=2){return '$'+fmtN(n,dec);}
-function sBadge(val) {
-  const cls=val==='Complete'?'b-g':val==='Queued'?'b-y':val?.toLowerCase().includes('process')?'b-b':'b-gray';
-  return `<span class="badge ${cls}">${val}</span>`;
-}
-function vBadge(v) {
-  if(!v) return '<span class="badge b-gray">—</span>';
-  return `<span class="badge ${v==='PASS'?'b-g':v==='FAIL'?'b-r':'b-y'}">${v}</span>`;
-}
-
-// ── OPTIMIZATION ──────────────────────────────────────────────────
-function renderOptimization() {
-  const data = getGlobalData();
-  const lines = D.invoices.filter(r=>r['Item Type']&&!r['Item Type'].includes('──')&&!r['Item Type'].includes('⚠️'));
-  const totalRev = lines.reduce((s,r)=>s+pm(r['Line Total']),0);
-  const uniqueBuildings = new Set(data.filter(r=>r.Building).map(r=>r.Building)).size;
-  const revPerStop = uniqueBuildings?(totalRev/uniqueBuildings).toFixed(2):'0';
-  const issueCount = data.filter(r=>(r['Issue Notes']||'').trim()).length;
-  const issueRate = data.length?Math.round(issueCount/data.length*100):0;
-  const totalItems = D.manifest.reduce((s,r)=>s+(parseInt(r['Qty'])||0),0);
-  const mrrTotal = D.manifest.reduce((s,r)=>s+(parseInt(r['Qty'])||0)*pm(r['Unit $/mo']),0);
-
-  // KPIs
-  document.getElementById('optKPIs').innerHTML=[
-    {l:'Revenue / Building Stop',v:usd(revPerStop),sub:`${fmtN(uniqueBuildings)} buildings served`,c:'#059669'},
-    {l:'Items in Storage',v:fmtN(totalItems),sub:`${fmtN(D.manifest.length)} manifest rows`,c:'#3b82f6'},
-    {l:'Issue Rate',v:issueRate+'%',sub:`${fmtN(issueCount)} flagged orders`,c:issueRate>10?'#dc2626':'#94a3b8'},
-    {l:'Monthly Storage Revenue',v:usd(mrrTotal,0),sub:'from manifest items',c:'#2563eb'},
-  ].map(k=>`<div class="kpi card p-3"><div class="text-xs font-medium uppercase tracking-wide mb-1" style="color:var(--t3);">${k.l}</div><div class="text-xl font-bold mb-0.5" style="color:${k.c};">${k.v}</div><div class="text-xs" style="color:var(--t3);">${k.sub}</div></div>`).join('');
-
-  // Revenue per order by building (from invoices × order lookup)
-  const bldRev={}, bldOrdCount={};
-  lines.forEach(r=>{
-    const ord=D.all.find(o=>o['Order Number']===r['Order Number']);
-    if(!ord?.Building) return;
-    bldRev[ord.Building]=(bldRev[ord.Building]||0)+pm(r['Line Total']);
-  });
-  D.all.filter(r=>r.Building).forEach(r=>{bldOrdCount[r.Building]=(bldOrdCount[r.Building]||0)+1;});
-  const revPerOrd=Object.keys(bldRev).map(b=>({b,v:bldRev[b]/(bldOrdCount[b]||1)})).sort((a,c)=>c.v-a.v).slice(0,12);
-  if(revPerOrd.length>0){
-    mkBar('c-revPerOrder',revPerOrd.map(x=>x.b),[{data:revPerOrd.map(x=>+x.v.toFixed(2)),backgroundColor:P[2]+'bb',borderRadius:4}],
-      {indexAxis:'y',scales:{x:{ticks:{callback:v=>'$'+fmtN(v)},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
-  }
-
-  // Item pricing: grouped bar — qty stored (left axis) + unit $/mo (right axis), sorted by monthly revenue
-  const itemStats={};
-  D.manifest.forEach(r=>{
-    const item=r['Item']||'Unknown', qty=parseInt(r['Qty'])||1, price=pm(r['Unit $/mo']);
-    if(!itemStats[item]) itemStats[item]={qty:0,rev:0,price:0};
-    itemStats[item].qty+=qty; itemStats[item].rev+=qty*price; itemStats[item].price=price;
-  });
-  const priceEntries=Object.entries(itemStats).filter(([,s])=>s.rev>0).sort((a,b)=>b[1].rev-a[1].rev);
-  if(priceEntries.length>0){
-    destroy('c-itemPricing');
-    CH['c-itemPricing']=new Chart(document.getElementById('c-itemPricing'),{
-      type:'bar',
-      data:{
-        labels:priceEntries.map(x=>x[0]),
-        datasets:[
-          {label:'Qty Stored',data:priceEntries.map(x=>x[1].qty),backgroundColor:P[1]+'bb',borderRadius:4,yAxisID:'yQty'},
-          {label:'Unit $/mo',data:priceEntries.map(x=>x[1].price),backgroundColor:P[0]+'bb',borderRadius:4,yAxisID:'yPrice'},
-        ]
-      },
-      options:{responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:true,labels:{boxWidth:10,font:{size:10}}},
-          tooltip:{callbacks:{label:(ctx)=>ctx.dataset.label==='Unit $/mo'?`$${ctx.raw}/mo`:ctx.raw+' units'}}},
-        scales:{
-          x:{grid:{color:'var(--bd)'},ticks:{maxRotation:35,font:{size:10}}},
-          yQty:{position:'left',title:{display:true,text:'Qty',color:'var(--t2)'},grid:{color:'var(--bd)'}},
-          yPrice:{position:'right',title:{display:true,text:'$/mo',color:'var(--t2)'},ticks:{callback:v=>'$'+v},grid:{drawOnChartArea:false}}
-        }
+function hbar(id, data, label, color) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  if (isEmpty(data)) { showEmpty(id); return; }
+  const useLog = isSkewed(data.values);
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.labels,
+      datasets: [{ label: label||'Count', data: data.values,
+                     backgroundColor: color || '#4e79a7', borderRadius: 4 }]
+    },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: c => c.parsed.x.toLocaleString() } } },
+      scales: {
+        x: { type: useLog ? 'logarithmic' : 'linear',
+               grid: { color: '#f0f0f0' }, ticks: { font: { size: 11 },
+               callback: function(v) { return v.toLocaleString(); } } },
+        y: { grid: { display: false }, ticks: { font: { size: 11 } } }
       }
-    });
-  }
-
-  // Stop density: avg items per order by building (from storage sheet Item Count)
-  const bldItems={},bldCnt={};
-  data.forEach(r=>{ if(!r.Building) return; bldItems[r.Building]=(bldItems[r.Building]||0)+(parseInt(r['Item Count'])||0); bldCnt[r.Building]=(bldCnt[r.Building]||0)+1; });
-  const density=Object.keys(bldItems).map(b=>({b,v:bldCnt[b]>0?bldItems[b]/bldCnt[b]:0})).filter(x=>x.v>0).sort((a,c)=>c.v-a.v).slice(0,12);
-  if(density.length>0){
-    mkBar('c-stopDensity',density.map(x=>x.b),[{data:density.map(x=>+x.v.toFixed(1)),backgroundColor:P[5]+'bb',borderRadius:4}],
-      {indexAxis:'y',scales:{x:{title:{display:true,text:'Avg Items/Order',color:'var(--t2)'},grid:{color:'var(--bd)'}},y:{grid:{color:'var(--bd)'}}}});
-  } else {
-    const el=document.getElementById('c-stopDensity'); if(el) el.parentElement.innerHTML='<div class="text-xs text-center py-6" style="color:var(--t3);">Item count data not yet populated</div>';
-  }
-
-  // Smart recommendations
-  const recs=[];
-  if(issueRate>10) recs.push({i:'🔧',c:'#dc2626',t:'High Issue Rate',b:`${issueRate}% of orders are flagged. Review dispatch notes for common patterns.`});
-  if(priceEntries.length>0){
-    const underpriced=priceEntries.filter(([,s])=>s.qty>5&&s.price>0&&s.price<15).sort((a,b)=>b[1].qty-a[1].qty);
-    if(underpriced.length>0) recs.push({i:'📈',c:'#d97706',t:'Pricing Opportunity',b:`"${underpriced[0][0]}" has ${fmtN(underpriced[0][1].qty)} units at only ${usd(underpriced[0][1].price,0)}/mo — consider a price increase.`});
-    const topItem=priceEntries[0];
-    recs.push({i:'💰',c:'#059669',t:'Top Revenue Item',b:`"${topItem[0]}" drives ${usd(topItem[1].rev,0)}/mo (${fmtN(topItem[1].qty)} units × ${usd(topItem[1].price,0)}/mo). Protect this category.`});
-  }
-  if(density.length>0){
-    recs.push({i:'🏠',c:'#3b82f6',t:'Best Stop Efficiency',b:`${density[0].b} averages ${fmtN(density[0].v,1)} items/order — prioritize in routing for max efficiency.`});
-    if(density.length>1){const worst=density[density.length-1]; if(worst.v<density[0].v*0.4) recs.push({i:'📍',c:'#94a3b8',t:'Low-Density Building',b:`${worst.b} averages only ${fmtN(worst.v,1)} items/order. Batch pickups or set a minimum order.`});}
-  }
-  if(revPerOrd.length>0) recs.push({i:'🏆',c:'#0891b2',t:'Highest-Value Building',b:`${revPerOrd[0].b} generates ${usd(revPerOrd[0].v)} avg revenue per order — your most profitable building.`});
-  if(recs.length===0) recs.push({i:'✅',c:'#059669',t:'All Good',b:'No optimization gaps detected with current data.'});
-
-  document.getElementById('optRecommendations').innerHTML=recs.map(r=>`
-    <div class="rounded-lg p-4" style="background:var(--bg2);">
-      <div class="flex items-start gap-3">
-        <span class="text-xl">${r.i}</span>
-        <div><div class="font-semibold text-sm mb-1" style="color:${r.c};">${r.t}</div><div class="text-xs leading-relaxed" style="color:var(--t2);">${r.b}</div></div>
-      </div>
-    </div>`).join('');
+    }
+  });
 }
 
-// ── ALERT BANNER ──────────────────────────────────────────────────
-function renderAlertBanner(data) {
-  const issues = data.filter(r=>(r['Issue Notes']||'').trim());
-  const failAudits = D.audit.filter(r=>r['Audit Verdict']==='FAIL');
-  const all = [
-    ...issues.map(r=>`${r.Student||r['Order Number']}: ${r['Issue Notes']}`),
-    ...failAudits.map(r=>`Audit FAIL — ${r['Order Number']}`)
-  ];
-  const banner = document.getElementById('alertBanner');
-  if(all.length>0){
-    document.getElementById('alertItems').innerHTML = all.slice(0,6).map(a=>
-      `<span class="badge" style="background:#991b1b;color:#fca5a5;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${a}</span>`
-    ).join('') + (all.length>6?`<span class="text-xs" style="color:#fca5a5;">+${all.length-6} more</span>`:'');
-    banner.classList.remove('hidden');
-  } else {
-    banner.classList.add('hidden');
-  }
-}
-
-// ── SEASON PROGRESS ────────────────────────────────────────────────
-function renderSeasonProgress(data) {
-  const m = new Date().getMonth()+1;
-  const phases = [
-    {n:'Spring Pickup', active:m>=3&&m<=5, c:'#059669', pct:m===3?20:m===4?60:m===5?90:100},
-    {n:'Summer Storage', active:m>=6&&m<=7, c:'#3b82f6', pct:m===6?40:m===7?80:m>7?100:0},
-    {n:'Fall Delivery', active:m>=8&&m<=9, c:'#d97706', pct:m===8?40:m===9?85:m>9?100:0},
-  ];
-  const cur = phases.find(p=>p.active) || {n:'Off Season', c:'#64748b', pct:0};
-  const complete = data.filter(r=>r['Dispatch Status']==='Complete').length;
-  const orderPct = data.length?Math.round(complete/data.length*100):0;
-
-  document.getElementById('seasonProgress').innerHTML = `
-    <div class="flex items-center gap-4 mb-3 flex-wrap">
-      <span class="badge" style="background:${cur.c}22;color:${cur.c};padding:3px 10px;font-size:12px;">${cur.n}</span>
-      <span class="text-sm font-bold" style="color:var(--t1);">${orderPct}% orders complete</span>
-      <span class="text-xs" style="color:var(--t3);">${fmtN(complete)} of ${fmtN(data.length)} dispatched</span>
-    </div>
-    <div class="flex gap-2 items-center mb-1">
-      ${phases.map(p=>`
-        <div class="flex-1">
-          <div class="text-xs mb-1 font-medium" style="color:${p.active?p.c:'var(--t3)'};">${p.n}</div>
-          <div class="season-bar"><div class="season-fill" style="width:${p.active?cur.pct:p.pct===100?100:0}%;background:${p.c};"></div></div>
-        </div>`).join('<div style="color:var(--t3);font-size:18px;margin-top:12px;">›</div>')}
-    </div>`;
-}
-
-// ── QUICK LOOKUP ───────────────────────────────────────────────────
-function quickLookup(q) {
-  q = (q||'').trim();
-  const el = document.getElementById('qlResult');
-  if(!q){el.innerHTML='';return;}
-  const matches=(D.all||[]).filter(r=>(r.Student||'').toLowerCase().includes(q.toLowerCase())||(r['Order Number']||'').toLowerCase().includes(q.toLowerCase()));
-  if(!matches.length){el.innerHTML=`<div class="text-xs py-2" style="color:var(--t3);">No results for "${q}"</div>`;return;}
-  el.innerHTML=`<div class="ql-result flex flex-col gap-2">`+matches.slice(0,4).map(r=>{
-    const inv=D.invoices.filter(i=>i['Order Number']===r['Order Number']&&i['Item Type']&&!i['Item Type'].includes('──')&&!i['Item Type'].includes('⚠️'));
-    const total=inv.reduce((s,i)=>s+pm(i['Line Total']),0);
-    const mRows=D.manifest.filter(m=>m['Order Number']===r['Order Number']);
-    const hasIssue=(r['Issue Notes']||'').trim();
-    const dRow=D.dispatchMap?.[r['Order Number']]||{};
-    const phone=dRow.Phone||r.Phone||'';
-    const slot=dRow['Time Slot']||'';
-    const truck=dRow.Truck||'';
-    const kits=dRow.Kits||'';
-    return `<div class="order-card card p-3">
-      <div class="flex items-start justify-between gap-2 mb-2">
-        <div>
-          <div class="font-semibold text-sm" style="color:var(--t1);">${r.Student||'—'}</div>
-          <div class="text-xs" style="color:var(--t3);">${r['Order Number']} · ${r.Service||'—'}</div>
-        </div>
-        ${sBadge(r['Dispatch Status']||dRow['Dispatch Status']||'—')}
-      </div>
-      <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-2">
-        <div style="color:var(--t3);">Building <span style="color:var(--t1);font-weight:500;">${r.Building||dRow.Building||'—'}</span></div>
-        <div style="color:var(--t3);">Room <span style="color:var(--t1);font-weight:500;">${r.Room||dRow.Room||'—'}</span></div>
-        <div style="color:var(--t3);">Items <span style="color:var(--acc);font-weight:500;">${fmtN(r['Item Count']||0)}</span></div>
-        <div style="color:var(--t3);">Total <span style="color:#059669;font-weight:500;">${total>0?usd(total):'Pending'}</span></div>
-        ${phone?`<div style="color:var(--t3);">Phone <span style="color:var(--t1);font-weight:500;">${phone}</span></div>`:''}
-        ${slot?`<div style="color:var(--t3);">Time <span style="color:var(--t1);font-weight:500;">${slot}</span></div>`:''}
-        ${truck?`<div style="color:var(--t3);">Truck <span style="color:var(--acc);font-weight:500;">${truck}</span></div>`:''}
-        ${kits?`<div style="color:var(--t3);">Kits <span style="color:var(--t1);font-weight:500;">${kits}</span></div>`:''}
-      </div>
-      ${mRows.length?`<div class="text-xs mb-1" style="color:var(--t3);">Stored: ${mRows.map(m=>`${m.Qty||1}× ${m.Item}`).join(', ')}</div>`:''}
-      ${hasIssue?`<div class="text-xs p-2 rounded mt-1" style="background:#7f1d1d33;color:#fca5a5;">⚠ ${hasIssue}</div>`:''}
-    </div>`;
-  }).join('')+(matches.length>4?`<div class="text-xs" style="color:var(--t3);">+${matches.length-4} more — use Orders tab</div>`:'')+`</div>`;
-}
-
-// ── DISPATCH KANBAN ────────────────────────────────────────────────
-function renderDispatch(data) {
-  // Use the master dispatch sheet for the Kanban — it has real-time status
-  const src = (D.dispatch&&D.dispatch.length>0) ? D.dispatch : data;
-  const getStatus = r => r['Dispatch Status']||r.Status||'Unknown';
-  const STATUS_ORDER = ['Not Dispatched','Queued','In Progress','Dispatched','Complete','Completed'];
-  const allStatuses = [...new Set(src.map(r=>getStatus(r)))];
-  const cols = [...STATUS_ORDER.filter(s=>allStatuses.includes(s)), ...allStatuses.filter(s=>!STATUS_ORDER.includes(s))];
-  const colors = {'Not Dispatched':'#64748b',Queued:'#d97706','In Progress':'#3b82f6',Dispatched:'#3b82f6',Complete:'#059669',Completed:'#059669'};
-  const groups = {};
-  cols.forEach(s=>groups[s]=[]);
-  src.forEach(r=>{const s=getStatus(r);if(!groups[s])groups[s]=[];groups[s].push(r);});
-
-  // Summary chips
-  document.getElementById('dispatchSummary').innerHTML = cols.map(s=>{
-    const c=colors[s]||'#64748b';
-    return `<div class="card px-3 py-2 text-center" style="min-width:90px;">
-      <div class="text-xl font-bold" style="color:${c};">${fmtN(groups[s].length)}</div>
-      <div class="text-xs" style="color:var(--t3);">${s}</div>
-    </div>`;
-  }).join('');
-
-  document.getElementById('kanban').innerHTML = cols.map(status=>{
-    const orders=groups[status]||[];
-    const c=colors[status]||'#64748b';
-    return `<div class="kanban-col">
-      <div class="flex items-center gap-2 mb-2 px-1">
-        <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${c};"></span>
-        <span class="text-xs font-semibold uppercase tracking-wide" style="color:${c};">${status}</span>
-        <span class="text-xs px-1.5 py-0.5 rounded-full font-bold" style="background:${c}22;color:${c};">${orders.length}</span>
-      </div>
-      <div class="flex flex-col gap-2">
-        ${orders.length===0?`<div class="card p-4 text-center text-xs" style="color:var(--t3);border-style:dashed;">No orders</div>`:''}
-        ${orders.slice(0, expandedKanbanCols.has(status) ? orders.length : 40).map(r=>{
-          const hasIssue=(r['Issue Notes']||r['Mover Notes']||'').trim();
-          const slot=r['Time Slot']||'';
-          const truck=r.Truck||'';
-          const kits=r.Kits||r['Item Count']||'';
-          return `<div class="order-card card p-3" style="border-color:${hasIssue?'#dc2626':'var(--bd)'};">
-            <div class="flex items-start justify-between gap-1 mb-1.5">
-              <span class="student-name font-bold leading-tight" style="font-size:13px;color:var(--t1);">${r.Student||'—'}</span>
-              ${hasIssue?'<span class="badge b-r flex-shrink-0">!</span>':''}
-            </div>
-            <div class="detail-line mb-1" style="font-size:12px;font-weight:600;color:var(--t2);">${r.Building||'—'}${r.Room?' · '+r.Room:''}</div>
-            <div class="flex justify-between items-center mb-1">
-              <span class="detail-line" style="font-size:12px;color:var(--t3);">${r.Service||'—'}</span>
-              ${kits?`<span class="detail-line font-semibold" style="font-size:12px;color:var(--acc);">${fmtN(kits)} kits</span>`:''}
-            </div>
-            ${slot||truck?`<div class="flex gap-2 detail-line" style="font-size:12px;color:var(--t3);">${slot?`<span>⏰ ${slot}</span>`:''}${truck?`<span>🚛 ${truck}</span>`:''}</div>`:''}
-            ${hasIssue?`<div class="detail-line mt-1.5 p-1.5 rounded leading-tight" style="font-size:12px;background:#7f1d1d33;color:#fca5a5;">${hasIssue}</div>`:''}
-          </div>`;
-        }).join('')}
-        ${(!expandedKanbanCols.has(status)&&orders.length>40)?`<button class="w-full text-center py-2.5 rounded-xl font-semibold mt-1" style="font-size:13px;color:var(--acc);background:var(--bg2);border:none;cursor:pointer;" onclick="expandedKanbanCols.add(this.dataset.s);renderDispatch(getGlobalData())" data-s="${status.replace(/"/g,'&quot;')}">+ ${orders.length-40} more</button>`:''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-// ── SHARE RUN CARD ─────────────────────────────────────────────────
-async function shareRunCard(cardEl) {
-  try {
-    const isDark = document.body.classList.contains('dark');
-
-    // Clone off-screen with no overflow clipping so the full table renders
-    const clone = cardEl.cloneNode(true);
-    clone.style.cssText = 'position:absolute;left:-9999px;top:0;max-width:none;width:max-content;box-shadow:none;';
-    clone.querySelectorAll('.overflow-x-auto').forEach(d => {
-      d.style.overflow = 'visible';
-      d.style.width = 'auto';
-    });
-    clone.querySelector('.no-capture')?.remove();
-    document.body.appendChild(clone);
-
-    // Wait one frame for layout to settle
-    await new Promise(r => requestAnimationFrame(r));
-
-    const w = clone.scrollWidth;
-    const h = clone.scrollHeight;
-
-    const canvas = await html2canvas(clone, {
-      backgroundColor: isDark ? '#1e293b' : '#ffffff',
-      scale: 2,
-      useCORS: true,
-      logging: false,
-      width: w,
-      height: h,
-      windowWidth: w + 200
-    });
-
-    document.body.removeChild(clone);
-
-    canvas.toBlob(async blob => {
-      const ts = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'}).replace(' ','-');
-      const file = new File([blob], `run-${ts}.png`, {type:'image/png'});
-      if (navigator.canShare && navigator.canShare({files:[file]})) {
-        await navigator.share({files:[file], title:"Today's Run"});
-      } else {
-        const url = URL.createObjectURL(blob);
-        Object.assign(document.createElement('a'),{href:url,download:`run-${ts}.png`}).click();
-        setTimeout(()=>URL.revokeObjectURL(url), 1000);
+function vbar(id, data, label, color) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  if (isEmpty(data)) { showEmpty(id); return; }
+  const useLog = isSkewed(data.values);
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: data.labels,
+      datasets: [{ label: label||'Count', data: data.values,
+                     backgroundColor: color || '#4e79a7', borderRadius: 4 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { type: useLog ? 'logarithmic' : 'linear',
+               grid: { color: '#f0f0f0' }, ticks: { font: { size: 11 },
+               callback: function(v) { return v.toLocaleString(); } } },
+        x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 45 } }
       }
-    }, 'image/png');
-  } catch(e) {
-    console.error('Share failed:', e);
-    alert('Could not share. Try screenshot instead.');
-  }
+    }
+  });
 }
 
-// ── TODAY'S RUN ────────────────────────────────────────────────────
-function renderTodaysRun(data) {
-  const today = new Date();
-  const todayStr = `${today.getMonth()+1}/${today.getDate()}/${today.getFullYear()}`;
-  document.getElementById('todayDate').textContent = today.toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
-
-  // Use dispatch sheet for real date+time data
-  const dRows = D.dispatch||[];
-  let orders = dRows.filter(r=>r.Date===todayStr);
-  const isDateMatch = orders.length>0;
-  if(!isDateMatch) orders = dRows.filter(r=>((r['Dispatch Status']||r.Status||'')==='Queued'||(r['Dispatch Status']||r.Status||'')==='Not Dispatched'));
-
-  // Sort by time slot then building
-  orders = [...orders].sort((a,b)=>(a['Time Slot']||'').localeCompare(b['Time Slot']||'')||(a.Building||'').localeCompare(b.Building||''));
-
-  const byBuilding = {};
-  orders.forEach(r=>{const b=r.Building||'No Building';if(!byBuilding[b])byBuilding[b]=[];byBuilding[b].push(r);});
-  const buildings = Object.entries(byBuilding).sort((a,b)=>b[1].length-a[1].length);
-
-  document.getElementById('todaysRunContent').innerHTML =
-    (!isDateMatch&&orders.length>0?`<div class="text-xs px-3 py-2 rounded mb-3" style="background:var(--bg2);color:var(--t3);">No pickup dates set for today — showing all unDispatched orders (${fmtN(orders.length)}).</div>`:'')+
-    (buildings.length===0?'<div class="card p-8 text-center text-xs" style="color:var(--t3);">No orders to show for today.</div>':'')+
-    buildings.map(([building,ords])=>{
-      const totalKits=ords.reduce((s,r)=>s+(parseInt(r.Kits)||0),0);
-      const hasNotes=ords.filter(r=>(r['Mover Notes']||r['Customer Note']||'').trim()).length;
-      const trucks=[...new Set(ords.map(r=>r.Truck).filter(Boolean))];
-      const hasRooms=ords.some(r=>(r.Room||'').trim());
-      return `<div class="card overflow-hidden mb-3">
-        <div class="px-3 py-2.5 flex items-center justify-between flex-wrap gap-2" style="background:var(--bg2);">
-          <div class="flex items-center gap-2 flex-wrap">
-            <span class="font-semibold text-sm" style="color:var(--t1);">${building}</span>
-            <span class="badge b-b">${fmtN(ords.length)} orders</span>
-            <span class="badge b-gray">${fmtN(totalKits)} kits</span>
-            ${trucks.length?`<span class="badge b-b">🚛 ${trucks.join(', ')}</span>`:''}
-            ${hasNotes?`<span class="badge b-y">${hasNotes} notes</span>`:''}
-          </div>
-          <button class="no-capture no-print btn text-xs" style="flex-shrink:0;" onclick="shareRunCard(this.closest('.card'))">📤 Share</button>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full" style="font-size:12px;">
-            <thead style="background:var(--bg2);"><tr>
-              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Student</th>
-              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Service</th>
-              ${hasRooms?`<th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Room</th>`:''}
-              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Address</th>
-              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Time</th>
-              <th class="px-2 py-1.5 text-right whitespace-nowrap" style="color:var(--t2);">Kits</th>
-              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Status</th>
-              <th class="px-2 py-1.5 text-left whitespace-nowrap" style="color:var(--t2);">Notes</th>
-            </tr></thead>
-            <tbody class="divide-y" style="border-color:var(--bd);">
-              ${ords.map(r=>{
-                const note=(r['Mover Notes']||r['Customer Note']||'').trim();
-                const svc=(r.Service||r.Product||'').trim();
-                const addr=(r.Address||'').trim();
-                return`<tr>
-                  <td class="px-2 py-1.5 font-semibold whitespace-nowrap" style="color:var(--t1);">${r.Student||'—'}</td>
-                  <td class="px-2 py-1.5 font-medium whitespace-nowrap" style="color:var(--acc);">${svc||'—'}</td>
-                  ${hasRooms?`<td class="px-2 py-1.5 whitespace-nowrap" style="color:var(--t2);">${r.Room||'—'}</td>`:''}
-                  <td class="px-2 py-1.5" style="color:var(--t2);min-width:140px;" title="${addr}">${addr||'—'}</td>
-                  <td class="px-2 py-1.5 whitespace-nowrap" style="color:var(--t2);">${r['Time Slot']||'—'}</td>
-                  <td class="px-2 py-1.5 text-right font-medium whitespace-nowrap" style="color:var(--t1);">${r.Kits||'0'}</td>
-                  <td class="px-2 py-1.5 whitespace-nowrap">${sBadge(r['Dispatch Status']||r.Status||'—')}</td>
-                  <td class="px-2 py-1.5" style="color:${note?'#d97706':'var(--t3)'};min-width:140px;" title="${note}">${note||'—'}</td>
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
-    }).join('');
-  document.querySelectorAll('#todaysRunContent table').forEach(t => initTableSort(t));
+function line(id, data, label, color) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  if (isEmpty(data)) { showEmpty(id); return; }
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: data.labels,
+      datasets: [{ label: label||'Value', data: data.values,
+                     borderColor: color || '#4e79a7', backgroundColor: (color||'#4e79a7') + '20',
+                     fill: true, tension: 0.3, pointRadius: 3 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { grid: { color: '#f0f0f0' }, beginAtZero: true },
+        x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 45 } }
+      }
+    }
+  });
 }
 
-// ── RENTALS ────────────────────────────────────────────────────────
-function renderRentals() {
-  // Prefer dedicated Rental Returns / Rentals sheet, then fall back to MAIN filter, then CSV
-  let rows;
-  if (D.xl && (D.xl['Rental Returns'] || D.xl['Rentals'])) {
-    rows = D.xl['Rental Returns'] || D.xl['Rentals'];
-  } else if (D.main && D.main.length) {
-    rows = D.main.filter(r => {
-      const p = (r['Product Name']||'').trim();
-      return p === 'Appliance Rental Return' || p === 'Appliance Rental';
-    });
-  } else {
-    rows = D.rentals || [];
-  }
+function forecastLine(id, hist, fore) {
+  const ctx = document.getElementById(id);
+  if (!ctx || !hist) return;
+  const labels = [...(hist.historical_labels||[]), ...(fore||hist.forecast_labels||[])];
+  const hVals = hist.historical_values || [];
+  const fVals = hist.forecast_values || [];
+  const pad = new Array(hVals.length).fill(null);
+  const bridge = new Array(hVals.length - 1).fill(null);
+  bridge.push(hVals[hVals.length-1]);
 
-  function getDate(r) { return r['Delivery Date']||r['Pickup Date']||r['Event Date']||''; }
-  function getProd(r) {
-    if (r['Product SKU'] && (r['Product Name']||'').startsWith('Appliance')) return (r['Product SKU']||'').replace(/\s*-\s*$/,'').trim();
-    return (r['Product Name']||r['Product SKU/Variant']||'').replace(/^Appliance Rental\s*(Return)?,?\s*/i,'').replace(/(\s*-\s*)+$/,'').trim()||'Unknown';
-  }
-
-  function parseRD(s) {
-    if (!s) return null;
-    const p = String(s).split('/');
-    if (p.length < 3) return null;
-    const m=+p[0], d=+p[1], y=p[2].length===2?2000+ +p[2]: +p[2];
-    if (!m||!d||!y) return null;
-    return new Date(y, m-1, d);
-  }
-
-  // Populate year selector once
-  const ys = document.getElementById('rentalYear');
-  if (ys && ys.options.length <= 1) {
-    const years = [...new Set(rows.map(r=>{const d=parseRD(getDate(r));return d?d.getFullYear():null;}).filter(Boolean))].sort((a,b)=>b-a);
-    years.forEach(y=>{const o=document.createElement('option');o.value=y;o.textContent=y+(y===new Date().getFullYear()?' (current)':'');ys.appendChild(o);});
-    const cy = String(new Date().getFullYear());
-    if ([...ys.options].some(o=>o.value===cy)) ys.value = cy;
-  }
-
-  const selYear = ys?.value || 'all';
-  const q = (document.getElementById('rentalSearch')?.value||'').toLowerCase();
-
-  let filtered = selYear === 'all' ? rows : rows.filter(r=>{const d=parseRD(getDate(r));return d&&d.getFullYear()===+selYear;});
-  if (q) filtered = filtered.filter(r=>(r['Student Name']||r['Client Name']||r['Shipping Name']||'').toLowerCase().includes(q)||(r.Building||'').toLowerCase().includes(q)||(r['Order Number']||r['Order Name']||'').toLowerCase().includes(q));
-
-  // KPIs
-  const total = filtered.length;
-  const uniq = new Set(filtered.map(r=>(r['Student Name']||r['Client Name']||r['Shipping Name']||'').trim().toLowerCase())).size;
-  const bldgs = new Set(filtered.map(r=>(r.Building||'').trim()).filter(Boolean)).size;
-  const prodCts = {};
-  filtered.forEach(r=>{const p=getProd(r);prodCts[p]=(prodCts[p]||0)+1;});
-  const topProd = Object.entries(prodCts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
-
-  document.getElementById('rentalKPIs').innerHTML = [
-    {label:'Appliance Orders', val:fmtN(total), icon:'📦'},
-    {label:'Unique Students', val:fmtN(uniq), icon:'👤'},
-    {label:'Buildings', val:fmtN(bldgs), icon:'🏢'},
-    {label:'Top Product', val:topProd.length>22?topProd.slice(0,22)+'…':topProd, icon:'🏆'},
-  ].map(k=>`<div class="kpi card p-3"><div class="text-xs mb-1" style="color:var(--t3);">${k.icon} ${k.label}</div><div class="text-xl font-bold truncate" style="color:var(--t1);">${k.val}</div></div>`).join('');
-
-  // Product donut
-  const pLabels = Object.keys(prodCts).sort((a,b)=>prodCts[b]-prodCts[a]);
-  mk('c-rentalProducts','doughnut',pLabels,[{data:pLabels.map(p=>prodCts[p]),backgroundColor:P,borderWidth:0}],{plugins:{legend:{position:'right',labels:{boxWidth:10,font:{size:10}}}}});
-
-  // By month
-  let base = selYear === 'all' ? rows : rows.filter(r=>{const d=parseRD(getDate(r));return d&&d.getFullYear()===+selYear;});
-  const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const mMap = {};
-  base.forEach(r=>{
-    const d=parseRD(getDate(r));
-    if(!d) return;
-    const k=`${MN[d.getMonth()]} ${d.getFullYear()}`;
-    mMap[k]=(mMap[k]||0)+1;
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: 'Actual', data: [...hVals, ...new Array(fVals.length).fill(null)],
+           borderColor: '#4e79a7', backgroundColor: '#4e79a720', fill: true, tension: 0.3, pointRadius: 3 },
+        { label: 'Forecast', data: [...bridge, ...fVals],
+           borderColor: '#e15759', borderDash: [6,3], backgroundColor: '#e1575920',
+           fill: true, tension: 0.3, pointRadius: 3, pointStyle: 'triangle' }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { boxWidth: 12 } } },
+      scales: {
+        y: { grid: { color: '#f0f0f0' }, beginAtZero: true },
+        x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 45 } }
+      }
+    }
   });
-  const mEntries = Object.entries(mMap).sort((a,b)=>{
-    const [am,ay]=a[0].split(' '); const [bm,by]=b[0].split(' ');
-    return (+ay-+by)||(MN.indexOf(am)-MN.indexOf(bm));
-  });
-  mk('c-rentalByMonth','bar',mEntries.map(e=>e[0]),[{data:mEntries.map(e=>e[1]),backgroundColor:'#3b82f6',borderRadius:4,maxBarThickness:28}],{
-    plugins:{legend:{display:false}},
-    scales:{x:{grid:{color:'var(--bd)'}},y:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}}}
-  });
-
-  // Top buildings
-  const bMap = {};
-  base.forEach(r=>{const b=(r.Building||'').trim();if(b) bMap[b]=(bMap[b]||0)+1;});
-  const topB = Object.entries(bMap).sort((a,b)=>b[1]-a[1]).slice(0,15);
-  mk('c-rentalBuildings','bar',topB.map(e=>e[0].trim()),[{data:topB.map(e=>e[1]),backgroundColor:'#2563eb',borderRadius:3,maxBarThickness:18}],{
-    indexAxis:'y',
-    plugins:{legend:{display:false}},
-    scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
-  });
-
-  // Schedule table
-  const tableRows = filtered
-    .map(r=>({...r,_d:parseRD(getDate(r))}))
-    .filter(r=>r._d)
-    .sort((a,b)=>a._d-b._d)
-    .slice(0,100);
-
-  document.getElementById('rentalUpcoming').innerHTML = tableRows.length === 0
-    ? `<div class="p-6 text-center text-xs" style="color:var(--t3);">No returns match the current filter.</div>`
-    : `<table class="w-full text-xs">
-        <thead style="background:var(--bg2);position:sticky;top:0;"><tr>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Date</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-          <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Building</th>
-          <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Room</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Product</th>
-        </tr></thead>
-        <tbody class="divide-y" style="border-color:var(--bd);">
-          ${tableRows.map(r=>`<tr>
-            <td class="px-3 py-2 font-medium" style="color:var(--acc);">${getDate(r)||'—'}</td>
-            <td class="px-3 py-2" style="color:var(--t1);">${(r['Student Name']||r['Client Name']||r['Shipping Name']||'').trim()||'—'}</td>
-            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${(r.Building||'').trim()||'—'}</td>
-            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${r['Room Number 2']||r['Room Number']||'—'}</td>
-            <td class="px-3 py-2" style="color:var(--t2);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${getProd(r)}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
-  initTableSort(document.querySelector('#rentalUpcoming table'));
 }
 
-// ── HISTORY ────────────────────────────────────────────────────────
-function histDate(r) { return r['Delivery Date']||r['Pickup Date']||r['Delivery Date 2']||''; }
-function histYear(r) {
-  const d = histDate(r); if(!d) return null;
-  const p = String(d).split('/');
-  if(p.length===3){ const y=+p[2]; return y>100?y:2000+y; }
-  const dt=new Date(d); return isNaN(dt)?null:dt.getFullYear();
-}
-function histSvc(r) { return (r['Product Name']||'').split('[')[0].trim()||'—'; }
-
-function renderHistory(resetFilters) {
-  // Populate Sheet selector once
-  const sheetSel = document.getElementById('histSheet');
-  if (sheetSel && sheetSel.options.length <= 1 && D.xl) {
-    const sheetNames = Object.keys(D.xl).filter(n => n !== 'MAIN');
-    sheetNames.forEach(n => {
-      const o = document.createElement('option');
-      o.value = n; o.textContent = n;
-      sheetSel.appendChild(o);
-    });
-  }
-  const selSheet = sheetSel?.value || 'MAIN';
-  const rows = (D.xl && D.xl[selSheet]) ? D.xl[selSheet] : (D.main || []);
-
-  if(!rows.length) {
-    document.getElementById('histKPIs').innerHTML = '<div class="col-span-4 text-center py-8 text-xs" style="color:var(--t3);">ORDERS.xlsx loading… refresh in a moment.</div>';
-    return;
-  }
-
-  const ys = document.getElementById('histYear');
-  // Reset year/service dropdowns when sheet changes
-  if(resetFilters) {
-    ys.innerHTML = '<option value="all">All Years</option>';
-    const ss2 = document.getElementById('histService');
-    if(ss2) ss2.innerHTML = '<option value="">All Services</option>';
-  }
-  if(ys && ys.options.length <= 1) {
-    const years=[...new Set(rows.map(histYear).filter(Boolean))].sort((a,b)=>b-a);
-    years.forEach(y=>{const o=document.createElement('option');o.value=y;o.textContent=y;ys.appendChild(o);});
-    if([...ys.options].some(o=>o.value==='2025')) ys.value='2025';
-  }
-  const ss = document.getElementById('histService');
-  if(ss && ss.options.length <= 1) {
-    const svcs=[...new Set(rows.map(histSvc).filter(s=>s&&s!=='—'))].sort();
-    svcs.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;ss.appendChild(o);});
-  }
-
-  const selYear = ys?.value||'all';
-  const selSvc = ss?.value||'';
-  let filtered = rows;
-  if(selYear!=='all') filtered=filtered.filter(r=>histYear(r)===+selYear);
-  if(selSvc) filtered=filtered.filter(r=>histSvc(r)===selSvc);
-
-  const total = filtered.length;
-  const uniq = new Set(filtered.map(r=>(r['Student Name']||r['Shipping Name']||'').trim().toLowerCase()).filter(Boolean)).size;
-  const svcCts={}, bldgCts={};
-  filtered.forEach(r=>{
-    const s=histSvc(r); svcCts[s]=(svcCts[s]||0)+1;
-    const b=(r['Building']||'').trim(); if(b) bldgCts[b]=(bldgCts[b]||0)+1;
+// ── Render KPIs ──────────────────────────────────────────────────
+(function() {
+  const grid = document.getElementById('kpiGrid');
+  const cards = [
+    { v: KPIS.total_orders.toLocaleString(), l: 'Total Orders', c: '' },
+    { v: KPIS.vault_orders.toLocaleString(), l: 'Vault Orders', c: '' },
+    { v: KPIS.ship_orders.toLocaleString(), l: 'Shipping Orders', c: '' },
+    { v: KPIS.completion_rate + '%', l: 'Completion Rate', c: KPIS.completion_rate > 70 ? 'green' : 'orange' },
+    { v: KPIS.queued.toLocaleString(), l: 'Queued Orders', c: KPIS.queued > 100 ? 'red' : 'orange' },
+    { v: KPIS.avg_days + 'd', l: 'Avg Days in WH', c: KPIS.avg_days > 10 ? 'red' : '' },
+    { v: '$' + fmtNum(KPIS.total_billed), l: 'Total Billed', c: 'green' },
+    { v: KPIS.collection_rate + '%', l: 'Collection Rate', c: KPIS.collection_rate > 80 ? 'green' : 'red' },
+    { v: KPIS.audit_pass_rate + '%', l: 'Audit Pass Rate', c: KPIS.audit_pass_rate > 90 ? 'green' : 'orange' },
+    { v: KPIS.total_items.toLocaleString(), l: 'Items Tracked', c: 'purple' },
+    { v: KPIS.unique_buildings, l: 'Unique Buildings', c: '' },
+    { v: KPIS.total_forms.toLocaleString(), l: 'Form Submissions', c: '' },
+  ];
+  cards.forEach(c => {
+    grid.innerHTML += '<div class="kpi ' + c.c + '"><div class="value">' + c.v + '</div><div class="label">' + c.l + '</div></div>';
   });
-  const topSvc=Object.entries(svcCts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
-  const topBldg=Object.entries(bldgCts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
+})();
 
-  document.getElementById('histKPIs').innerHTML=[
-    {label:'Total Orders',val:fmtN(total),icon:'📦'},
-    {label:'Unique Students',val:fmtN(uniq),icon:'👤'},
-    {label:'Top Service',val:topSvc,icon:'⭐'},
-    {label:'Top Building',val:topBldg.length>18?topBldg.slice(0,18)+'…':topBldg,icon:'🏢'},
-  ].map(k=>`<div class="kpi card p-3"><div class="text-xs mb-1" style="color:var(--t3);">${k.icon} ${k.label}</div><div class="text-xl font-bold truncate" style="color:var(--t1);">${k.val}</div></div>`).join('');
+// ── Render Charts ────────────────────────────────────────────────
+doughnut('c_dispatch_status', CHARTS.dispatch_status);
+hbar('c_vault_buildings', CHARTS.vault_buildings, 'Orders', '#4e79a7');
+vbar('c_days_dist', CHARTS.days_distribution, 'Orders', '#76b7b2');
+hbar('c_vault_issues', CHARTS.vault_issues, 'Count', '#e15759');
+line('c_pickup_timeline', CHARTS.pickup_timeline, 'Pickups', '#59a14f');
 
-  // Service mix (horizontal bar)
-  const svcE=Object.entries(svcCts).sort((a,b)=>b[1]-a[1]);
-  mk('c-histService','bar',svcE.map(e=>e[0]),[{data:svcE.map(e=>e[1]),backgroundColor:P.slice(0,svcE.length),borderRadius:4,maxBarThickness:22}],{
-    indexAxis:'y',plugins:{legend:{display:false}},
-    scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
-  });
+doughnut('c_ship_status', CHARTS.ship_status);
+hbar('c_ship_buildings', CHARTS.ship_buildings, 'Shipments', '#f28e2b');
 
-  // Monthly volume
-  const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const mMap={};
-  filtered.forEach(r=>{
-    const d=histDate(r); if(!d) return;
-    const p=String(d).split('/'); if(p.length<3) return;
-    const mo=+p[0]-1, yr=+p[2].length===2?2000+ +p[2]: +p[2];
-    if(isNaN(mo)||isNaN(yr)) return;
-    const k=`${MN[mo]} ${yr}`; mMap[k]=(mMap[k]||0)+1;
-  });
-  const mE=Object.entries(mMap).sort((a,b)=>{
-    const [am,ay]=a[0].split(' '); const [bm,by]=b[0].split(' ');
-    return (+ay - +by)||(MN.indexOf(am)-MN.indexOf(bm));
-  });
-  mk('c-histMonthly','bar',mE.map(e=>e[0]),[{data:mE.map(e=>e[1]),backgroundColor:'#3b82f6',borderRadius:4,maxBarThickness:22}],{
-    plugins:{legend:{display:false}},
-    scales:{x:{grid:{color:'var(--bd)'}},y:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}}}
-  });
+vbar('c_item_types', CHARTS.item_types, 'Count', '#4e79a7');
+hbar('c_item_qty', CHARTS.item_qty, 'Quantity', '#76b7b2');
+hbar('c_item_rev', CHARTS.item_rev, 'Monthly $', '#59a14f');
 
-  // Top buildings
-  const topB=Object.entries(bldgCts).sort((a,b)=>b[1]-a[1]).slice(0,15);
-  mk('c-histBuildings','bar',topB.map(e=>e[0].trim()),[{data:topB.map(e=>e[1]),backgroundColor:'#2563eb',borderRadius:3,maxBarThickness:16}],{
-    indexAxis:'y',plugins:{legend:{display:false}},
-    scales:{x:{beginAtZero:true,grid:{color:'var(--bd)'},ticks:{callback:v=>fmtN(v)}},y:{grid:{display:false}}}
-  });
+doughnut('c_pay_status', CHARTS.pay_status);
+hbar('c_rev_service', CHARTS.rev_by_service, 'Revenue $', '#4e79a7');
+hbar('c_rev_building', CHARTS.rev_by_building, 'Revenue $', '#b07aa1');
 
-  renderHistTable();
-}
+doughnut('c_verdicts', CHARTS.verdicts);
+doughnut('c_qty_match', CHARTS.qty_match);
+doughnut('c_svc_match', CHARTS.svc_match);
 
-function renderHistTable() {
-  const selSheet = document.getElementById('histSheet')?.value || 'MAIN';
-  const rows = (D.xl && D.xl[selSheet]) ? D.xl[selSheet] : (D.main || []);
-  const q=(document.getElementById('histSearch')?.value||'').toLowerCase();
-  const selYear=document.getElementById('histYear')?.value||'all';
-  const selSvc=document.getElementById('histService')?.value||'';
-  let filtered=rows;
-  if(selYear!=='all') filtered=filtered.filter(r=>histYear(r)===+selYear);
-  if(selSvc) filtered=filtered.filter(r=>histSvc(r)===selSvc);
-  if(q) filtered=filtered.filter(r=>
-    (r['Student Name']||r['Shipping Name']||'').toLowerCase().includes(q)||
-    (r['Order Name']||'').toLowerCase().includes(q)||
-    (r['Building']||'').toLowerCase().includes(q)||
-    histSvc(r).toLowerCase().includes(q)
-  );
-  const show=filtered.slice(0,100);
-  document.getElementById('histTableWrap').innerHTML=show.length===0
-    ?'<div class="p-6 text-center text-xs" style="color:var(--t3);">No orders match.</div>'
-    :`<table class="w-full text-xs">
-        <thead style="background:var(--bg2);position:sticky;top:0;"><tr>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Order</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Student</th>
-          <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Service</th>
-          <th class="px-3 py-2 text-left hide-sm" style="color:var(--t2);">Building</th>
-          <th class="px-3 py-2 text-left" style="color:var(--t2);">Date</th>
-        </tr></thead>
-        <tbody class="divide-y" style="border-color:var(--bd);">
-          ${show.map(r=>`<tr>
-            <td class="px-3 py-2 font-medium" style="color:var(--acc);">${r['Order Name']||'—'}</td>
-            <td class="px-3 py-2" style="color:var(--t1);">${(r['Student Name']||r['Shipping Name']||'').trim()||'—'}</td>
-            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${histSvc(r)}</td>
-            <td class="px-3 py-2 hide-sm" style="color:var(--t2);">${(r['Building']||'').trim()||'—'}</td>
-            <td class="px-3 py-2" style="color:var(--t2);">${histDate(r)||'—'}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
-  initTableSort(document.querySelector('#histTableWrap table'));
-}
+doughnut('c_disp_status', CHARTS.disp_status);
+hbar('c_disp_services', CHARTS.disp_services, 'Count', '#edc948');
+hbar('c_disp_buildings', CHARTS.disp_buildings, 'Orders', '#4e79a7');
 
-// ── LOGIN ──────────────────────────────────────────────────────────
-function doLogin() {
-  const u = document.getElementById('loginUser').value.trim();
-  const p = document.getElementById('loginPass').value;
-  if (u === 'davidgeorge' && p === 'davidgeorge') {
-    sessionStorage.setItem('ut_auth', '1');
-    document.getElementById('loginGate').style.display = 'none';
-    loadAll();
-  } else {
-    document.getElementById('loginErr').classList.remove('hidden');
-    document.getElementById('loginPass').value = '';
-    document.getElementById('loginPass').focus();
+doughnut('c_form_services', CHARTS.form_services);
+line('c_form_timeline', CHARTS.form_timeline, 'Submissions', '#b07aa1');
+
+// ── Render Forecasts ─────────────────────────────────────────────
+(function() {
+  const fg = document.getElementById('forecastGrid');
+  if (FORECASTS.revenue) {
+    const r = FORECASTS.revenue;
+    fg.innerHTML += '<div class="forecast-card"><h3>Revenue Projections</h3>' +
+      '<div class="stat"><span class="k">Total Billed</span><span class="v">$' + r.total_billed.toLocaleString() + '</span></div>' +
+      '<div class="stat"><span class="k">Avg Order Value</span><span class="v">$' + r.avg_order_value.toFixed(2) + '</span></div>' +
+      '<div class="stat"><span class="k">Projected Monthly (Items)</span><span class="v">$' + r.projected_monthly.toLocaleString() + '</span></div>' +
+      '<div class="stat"><span class="k">Outstanding / Unpaid</span><span class="v trend-down">$' + r.unpaid.toLocaleString() + '</span></div>' +
+      '<div class="stat"><span class="k">Collection Rate</span><span class="v ' + (r.collection_rate > 80 ? 'trend-up' : 'trend-down') + '">' + r.collection_rate + '%</span></div>' +
+      '</div>';
   }
-}
+  if (FORECASTS.capacity) {
+    const c = FORECASTS.capacity;
+    fg.innerHTML += '<div class="forecast-card"><h3>Warehouse Capacity</h3>' +
+      '<div class="stat"><span class="k">Active (non-complete) Orders</span><span class="v">' + c.active_orders + '</span></div>' +
+      '<div class="stat"><span class="k">Avg Days in Warehouse</span><span class="v">' + c.avg_days + '</span></div>' +
+      '<div class="stat"><span class="k">Median Days</span><span class="v">' + c.median_days + '</span></div>' +
+      '<div class="stat"><span class="k">Items >14 Days</span><span class="v trend-down">' + c.stuck_14_plus + ' (' + c.stuck_pct + '%)</span></div>' +
+      '<div class="stat"><span class="k">Est. Weekly Throughput</span><span class="v">' + c.est_weekly_throughput + ' orders/wk</span></div>' +
+      '</div>';
+  }
+  if (FORECASTS.volume) {
+    const v = FORECASTS.volume;
+    const trendClass = v.trend === 'increasing' ? 'trend-up' : (v.trend === 'decreasing' ? 'trend-down' : 'trend-flat');
+    fg.innerHTML += '<div class="forecast-card"><h3>Volume Trend</h3>' +
+      '<div class="stat"><span class="k">Trend Direction</span><span class="v ' + trendClass + '">' + v.trend.toUpperCase() + '</span></div>' +
+      '<div class="stat"><span class="k">Change per Week</span><span class="v">' + (v.slope_per_week > 0 ? '+' : '') + v.slope_per_week + ' submissions</span></div>' +
+      '<div class="stat"><span class="k">Next 4-Week Forecast</span><span class="v">' + v.forecast_values.join(', ') + '</span></div>' +
+      '</div>';
+  }
 
-if (sessionStorage.getItem('ut_auth') === '1') {
-  document.getElementById('loginGate').style.display = 'none';
-  loadAll();
-} // else: loginGate stays visible, loadAll() called after successful login
+  if (FORECASTS.volume) forecastLine('c_forecast_volume', FORECASTS.volume);
+  if (FORECASTS.completions) forecastLine('c_forecast_completions', FORECASTS.completions);
+})();
+
+// ── Render Recommendations ───────────────────────────────────────
+(function() {
+  const rc = document.getElementById('recsContainer');
+  RECS.forEach(r => {
+    rc.innerHTML += '<div class="rec ' + r.severity + '">' +
+      '<div class="rec-header"><span class="badge">' + r.severity + '</span><h4>' + r.title + '</h4></div>' +
+      '<div class="detail">' + r.detail + '</div>' +
+      '<div class="action"><strong>Recommended Action:</strong> ' + r.action + '</div>' +
+      (r.metric ? '<div class="metric">' + r.metric + '</div>' : '') +
+      '</div>';
+  });
+})();
+
+// Smooth scroll nav
+document.querySelectorAll('.nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelector(a.getAttribute('href')).scrollIntoView({ behavior:'smooth' });
+    document.querySelectorAll('.nav a').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+  });
+});
 </script>
 </body>
 </html>
