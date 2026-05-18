@@ -90,7 +90,7 @@ async function callClaude(session, userMessage) {
   }
 
   const response = await anthropic.messages.create({
-    model: "claude-opus-4-20250514",
+    model: "claude-sonnet-4-20250514",
     max_tokens: 16000,
     system: SYSTEM_PROMPT,
     messages: session.history,
