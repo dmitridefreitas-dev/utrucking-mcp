@@ -15,13 +15,26 @@ _TOTAL_RE = re.compile(r'Total:\s*\$?\s*([\d,]+\.\d{2})')
 
 def _canon(name): return " ".join((name or "").strip().lower().split())
 
+# Common student items not always present in invoice history — priced to match the
+# existing tiers ($15 small · $18 med · $23 electronics · $27–33 furniture · $39 large).
+# Learned history ALWAYS wins on overlap, so real recorded prices are never overridden.
+EXTRA_PRICES = {
+    "monitor": 18.0, "printer": 18.0, "computer": 23.0, "fan": 15.0, "speaker": 18.0,
+    "nightstand": 27.0, "table": 33.0, "filing cabinet": 33.0, "cabinet": 33.0,
+    "futon": 39.0, "wardrobe": 39.0, "crate": 18.0, "toolbox": 18.0,
+}
+
 def build_price_book(service_rows, item_col="Summer Storage Item List"):
-    """Learn {item_name -> unit_price} as the most common price seen per item."""
+    """Learn {item_name -> unit_price} as the most common price seen per item, seeded with
+    EXTRA_PRICES for common items missing from history (recorded history wins on overlap)."""
     prices = defaultdict(Counter)
     for r in service_rows:
         for name, amt, qty in _ITEM_RE.findall(r.get(item_col, "") or ""):
             prices[_canon(name)][float(amt)] += 1
-    return {name: ctr.most_common(1)[0][0] for name, ctr in prices.items()}
+    learned = {name: ctr.most_common(1)[0][0] for name, ctr in prices.items()}
+    book = dict(EXTRA_PRICES)
+    book.update(learned)          # history overrides the seeds
+    return book
 
 # spoken / written aliases -> canonical item name (used only if the canonical exists in the learned book)
 ALIASES = {
@@ -48,6 +61,14 @@ ALIASES = {
     "trunk":"trunk","footlocker":"trunk","duffle":"camp duffel","duffle bag":"camp duffel",
     "poster":"framed art","painting":"framed art","art":"framed art","framed art":"framed art",
     "tote":"plastic container",
+    # electronics + extra furniture (seeded in EXTRA_PRICES)
+    "pc":"computer","desktop":"computer","computer tower":"computer","cpu":"computer","laptop":"computer",
+    "screen":"monitor","display":"monitor",
+    "speakers":"speaker","subwoofer":"speaker","amp":"speaker","amplifier":"speaker",
+    "box fan":"fan","standing fan":"fan",
+    "night stand":"nightstand","bedside table":"nightstand",
+    "coffee table":"table","end table":"table","side table":"table","dining table":"table",
+    "file cabinet":"filing cabinet","closet":"wardrobe","armoire":"wardrobe","tool box":"toolbox",
 }
 
 def resolve_item(name, price_book):
