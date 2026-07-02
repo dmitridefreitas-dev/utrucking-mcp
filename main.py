@@ -5,13 +5,15 @@ import asyncio
 import csv
 import io
 import difflib
+import re
+import base64
 from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse
 from starlette.requests import Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit
+from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan
 
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
 
@@ -369,8 +371,8 @@ async def availability_endpoint(request: Request):
     except Exception: body = {}
     args = _extract_args(body)
     date = args.get("date") or args.get("requested_date") or ""
-    try: cap = int(args.get("capacity", 100))
-    except Exception: cap = 100
+    capv = args.get("capacity")
+    cap = int(capv) if capv not in (None, "") else None   # None -> use the crew-based schedule
     dispatch_rows = await fetch_csv_rows(DISPATCH_CSV_URL)
     return JSONResponse(_availability(dispatch_rows, date, capacity_per_day=cap))
 
@@ -392,10 +394,92 @@ async def get_quote(items_text: str) -> str:
 
 
 @mcp.tool()
-async def check_availability(date: str, capacity: int = 100) -> str:
+async def check_availability(date: str, capacity: int = 0) -> str:
     """Check how busy a pickup date is and suggest open nearby days (steers callers off peak days)."""
     dispatch_rows = await fetch_csv_rows(DISPATCH_CSV_URL)
-    return json.dumps(_availability(dispatch_rows, date, capacity_per_day=capacity))
+    return json.dumps(_availability(dispatch_rows, date, capacity_per_day=(capacity or None)))
+
+
+@mcp.custom_route("/dispatch_plan", methods=["POST", "GET"])
+async def dispatch_plan_endpoint(request: Request):
+    """B-ops: cluster a day's pickups by building + suggested crew split (route optimizer)."""
+    if request.method == "GET":
+        return JSONResponse({"endpoint": "/dispatch_plan", "method": "POST",
+                             "expects": {"args": {"date": "5/7/2026"}}})
+    try: body = await request.json()
+    except Exception: body = {}
+    args = _extract_args(body)
+    dispatch_rows = await fetch_csv_rows(DISPATCH_CSV_URL)
+    return JSONResponse(_dispatch_plan(dispatch_rows, args.get("date") or ""))
+
+
+_VISION_PROMPT = (
+    'List every storage/moving item visible in this photo as STRICT JSON only: '
+    '{"items":[{"name":"UTrucking Box","qty":3}]}. Prefer these names when they fit: '
+    "UTrucking Box, Plastic Container, Mini Fridge, Camp Duffel, Luggage, Rolling Cart, "
+    "Bookshelf, Dresser, Headboard, Shoe Rack, Ottoman, Mattress. Output JSON only, no prose."
+)
+
+async def _vision_items(provider, key, img_b64):
+    async with httpx.AsyncClient(timeout=60.0) as c:
+        if provider == "groq":
+            r = await c.post("https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": "Bearer " + key},
+                json={"model": "llama-3.2-90b-vision-preview", "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": _VISION_PROMPT},
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + img_b64}}]}]})
+            r.raise_for_status(); txt = r.json()["choices"][0]["message"]["content"]
+        elif provider == "anthropic":
+            r = await c.post("https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 1024, "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": _VISION_PROMPT},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}}]}]})
+            r.raise_for_status(); txt = r.json()["content"][0]["text"]
+        else:  # gemini (free tier at aistudio.google.com)
+            r = await c.post(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + key,
+                json={"contents": [{"parts": [{"text": _VISION_PROMPT},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}]}]})
+            r.raise_for_status(); txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    m = re.search(r'\{.*\}', txt, re.S)
+    return (json.loads(m.group(0)).get("items", []) if m else [])
+
+
+@mcp.custom_route("/photo_quote", methods=["POST", "GET"])
+async def photo_quote_endpoint(request: Request):
+    """A) Photo -> vision item detection -> itemized quote. Uses a FREE vision provider via env key."""
+    if request.method == "GET":
+        return JSONResponse({"endpoint": "/photo_quote", "method": "POST",
+            "expects": {"args": {"image_url": "https://...", "image_base64": "...(alternative)"}},
+            "env": {"VISION_PROVIDER": "gemini | groq | anthropic  (default gemini)",
+                    "GEMINI_API_KEY": "free at aistudio.google.com"}})
+    try: body = await request.json()
+    except Exception: body = {}
+    args = _extract_args(body)
+    provider = os.getenv("VISION_PROVIDER", "gemini").lower()
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    if not key:
+        return JSONResponse({"status": "not_configured",
+            "message": "Photo quotes need a free vision key. Set GEMINI_API_KEY (free at aistudio.google.com)."})
+    img_b64 = args.get("image_base64")
+    if not img_b64 and args.get("image_url"):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as c:
+                resp = await c.get(args["image_url"]); img_b64 = base64.b64encode(resp.content).decode()
+        except Exception:
+            return JSONResponse({"status": "error", "message": "Could not fetch image_url."})
+    if not img_b64:
+        return JSONResponse({"status": "error", "message": "Provide image_url or image_base64."})
+    try:
+        detected = await _vision_items(provider, key, img_b64)
+    except Exception as e:
+        return JSONResponse({"status": "error", "message": "Vision call failed: " + str(e)[:200]})
+    service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
+    book = build_price_book(service_rows) if service_rows else {}
+    result = _quote_items([(d.get("name", ""), d.get("qty", 1)) for d in detected], book)
+    result["detected"] = detected
+    return JSONResponse(result)
 
 
 app = mcp.streamable_http_app()

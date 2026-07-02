@@ -109,14 +109,34 @@ def _slot(d, used, cap):
     return {"date": str(d), "booked": used, "capacity": cap,
             "open_slots": max(cap - used, 0), "status": status}
 
-def availability(dispatch_rows, requested_date, capacity_per_day=100, window=4):
-    """Return the requested day's load + the least-loaded, non-full nearby alternatives."""
+# Crews available per day (from ops: peak season ~6, high ~8, tapering to ~3 then ~2 late in the month).
+# Edit these ranges / JOBS_PER_CREW to match reality — the engine converts crews -> daily capacity.
+CREW_SCHEDULE = [
+    ("2026-05-01", "2026-05-13", 6),   # peak move-out week(s)
+    ("2026-05-14", "2026-05-20", 3),   # wind-down
+    ("2026-05-21", "2026-06-30", 2),   # late month / off-peak
+]
+JOBS_PER_CREW = 15   # pickups one crew can complete in a day (tune to your ops)
+
+def crews_for(d):
+    for s, e, c in CREW_SCHEDULE:
+        if _parse_date(s) <= d <= _parse_date(e):
+            return c
+    return 2
+
+def capacity_for(d):
+    return crews_for(d) * JOBS_PER_CREW
+
+def availability(dispatch_rows, requested_date, capacity_per_day=None, window=4):
+    """Requested day's load + least-loaded non-full alternatives. Capacity varies by
+    date via the crew schedule unless an explicit capacity_per_day is passed."""
     load = day_load(dispatch_rows)
     req = requested_date if isinstance(requested_date, datetime.date) else _parse_date(requested_date)
-    out = {"requested": _slot(req, load.get(req, 0), capacity_per_day) if req else None, "alternatives": []}
+    def capof(d): return capacity_per_day if capacity_per_day else capacity_for(d)
+    out = {"requested": _slot(req, load.get(req, 0), capof(req)) if req else None, "alternatives": []}
     if req:
         cands = [req + datetime.timedelta(days=k) for k in range(-window, window + 1) if k != 0]
-        alts = [_slot(d, load.get(d, 0), capacity_per_day) for d in cands]
+        alts = [_slot(d, load.get(d, 0), capof(d)) for d in cands]
         alts = [s for s in sorted(alts, key=lambda s: s["booked"]) if s["status"] != "full"]
         out["alternatives"] = alts[:3]
         if out["requested"]["status"] == "full":
@@ -128,6 +148,22 @@ def availability(dispatch_rows, requested_date, capacity_per_day=100, window=4):
         else:
             out["suggestion"] = "That day is available."
     return out
+
+def dispatch_plan(dispatch_rows, date):
+    """B-ops: cluster a day's pickups by building and suggest crew split (route optimizer core)."""
+    d = date if isinstance(date, datetime.date) else _parse_date(date)
+    stops = defaultdict(list)
+    for r in dispatch_rows:
+        if _parse_date(r.get("Date", "")) == d:
+            b = (r.get("Building", "") or "").strip() or "Unknown"
+            stops[b].append({"student": r.get("Student", ""), "room": r.get("Room", ""),
+                             "order_id": r.get("ID", ""), "service": r.get("Service", "")})
+    clusters = sorted(stops.items(), key=lambda kv: -len(kv[1]))
+    total = sum(len(v) for v in stops.values())
+    crews = crews_for(d) if d else 2
+    return {"date": str(d) if d else None, "total_stops": total, "buildings": len(stops),
+            "crews_available": crews, "avg_stops_per_crew": round(total / max(crews, 1), 1),
+            "route": [{"building": b, "stops": len(v), "orders": v} for b, v in clusters]}
 
 # ========================== C. BILLING GUARD =============================
 def _order_total(row):
