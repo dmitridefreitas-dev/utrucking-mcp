@@ -437,9 +437,11 @@ async def _vision_items(provider, key, img_b64):
                     {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}}]}]})
             r.raise_for_status(); txt = r.json()["content"][0]["text"]
         else:  # gemini (free tier at aistudio.google.com)
+            # gemini-2.5-flash: multimodal + a live free tier (2.0-flash's free quota 429s).
+            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
             # Key goes in a header, NOT the URL, so it can never leak into an error/log line.
             r = await c.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+                "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
                 headers={"x-goog-api-key": key},
                 json={"contents": [{"parts": [{"text": _VISION_PROMPT},
                     {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}]}]})
@@ -455,7 +457,8 @@ async def photo_quote_endpoint(request: Request):
         return JSONResponse({"endpoint": "/photo_quote", "method": "POST",
             "expects": {"args": {"image_url": "https://...", "image_base64": "...(alternative)"}},
             "env": {"VISION_PROVIDER": "gemini | groq | anthropic  (default gemini)",
-                    "GEMINI_API_KEY": "free at aistudio.google.com"}})
+                    "GEMINI_API_KEY": "free at aistudio.google.com",
+                    "GEMINI_MODEL": "default gemini-2.5-flash"}})
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -525,7 +528,7 @@ _ESTIMATE_HTML = """<!doctype html>
   <input id="photo" class="file" type="file" accept="image/*" capture="environment"></div>
  <div class="or">- or -</div>
  <div class="card"><h2>&#9000; Estimate from a description</h2>
-  <p class="hint">e.g. "five boxes, a mini fridge and two duffels"</p>
+  <p class="hint">e.g. "five boxes, a mini fridge and two duffels" &mdash; we price boxes, fridges, duffels, TVs, desks, couches, mattresses, dressers, bikes &amp; more.</p>
   <textarea id="items" placeholder="Tell us what you are storing..."></textarea>
   <button class="btn" onclick="quoteText()">Get my estimate</button></div>
  <div class="card" id="result"><h2>Your estimate</h2><div id="detected"></div><div id="body"></div></div>
@@ -539,17 +542,24 @@ _ESTIMATE_HTML = """<!doctype html>
  function render(data,fromPhoto){
   if(!data||data.status==='error'){show('<div class=err>Sorry - '+((data&&data.message)||'something went wrong')+'</div>');return;}
   if(data.status==='not_configured'){show('<div class=err>Photo estimates are not switched on yet. Try the text box above.</div>');return;}
+  const li=data.line_items||[]; const un=data.unmatched||[];
+  const ex='We price things like boxes, mini fridges, duffels, TVs, desks, couches, mattresses, dressers and bikes.';
   let det='';
   if(fromPhoto){const items=(data.detected||[]);
-   det=items.length?'<p class=hint>We spotted: '+items.map(d=>'<span class=tag>'+(d.qty||1)+"x "+(d.name||'item')+'</span>').join('')+'</p>'
-     :'<p class=hint>We could not clearly identify items in that photo - try the text box for an exact estimate.</p>';}
+   det=items.length?'<p class=hint>We spotted: '+items.map(d=>'<span class=tag>'+(d.qty||1)+"x "+(d.name||'item')+'</span>').join('')+'</p>':'';}
   $('detected').innerHTML=det;
-  const li=data.line_items||[];
-  if(!li.length&&!fromPhoto){show('<div class=err>No items recognized. Try rephrasing.</div>');return;}
+  if(!li.length){
+   if(un.length) show('<div class=err>We could not find a price for: '+un.join(', ')+'.</div><p class=note>'+ex+' Try naming those, or call (314) 266-8878.</p>');
+   else if(fromPhoto) show('<div class=err>We could not clearly identify items in that photo.</div><p class=note>Try a clearer, well-lit shot, or use the text box. '+ex+'</p>');
+   else show('<div class=err>Tell us what you are storing.</div><p class=note>'+ex+'</p>');
+   return;
+  }
   let rows=li.map(x=>'<tr><td>'+x.qty+"x "+x.item+'</td><td class=n>$'+Number(x.amount).toFixed(2)+'</td></tr>').join('');
+  let extra=un.length?'<p class=note>Not priced (call us for these): '+un.join(', ')+'.</p>':'';
   let html='<table><thead><tr><th>Item</th><th class=n>Est.</th></tr></thead><tbody>'+rows+'</tbody></table>'
    +'<div class=total><span class=lbl>Estimated total</span><span class=amt>$'+Number(data.total||0).toFixed(2)+'</span></div>'
-   +'<p class=note>Instant estimate based on typical UTrucking pricing. Final price is confirmed at pickup. Ready to book? Call us and mention your estimate.</p>';
+   +extra
+   +'<p class=note>Instant estimate based on typical UTrucking pricing. Final price is confirmed at pickup. Ready to book? Call (314) 266-8878 and mention your estimate.</p>';
   show(html);
  }
  async function quoteText(){const t=$('items').value.trim();if(!t)return;loading('Pricing your items...');

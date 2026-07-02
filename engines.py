@@ -32,9 +32,22 @@ ALIASES = {
     "plastic container":"plastic container",
     "suitcase":"luggage","luggage":"luggage",
     "cart":"rolling cart","rolling cart":"rolling cart",
-    "shelf":"bookshelf","bookshelf":"bookshelf","dresser":"dresser",
-    "hamper":"hamper/laundry basket","laundry basket":"hamper/laundry basket",
-    "mattress":"mattress","ottoman":"ottoman","shoe rack":"shoe rack","headboard":"headboard",
+    "shelf":"bookshelf","bookshelf":"bookshelf","bookcase":"bookshelf","dresser":"dresser","drawers":"dresser",
+    "hamper":"hamper/laundry basket","laundry basket":"hamper/laundry basket","laundry hamper":"hamper/laundry basket",
+    "mattress":"mattress","ottoman":"ottoman","footstool":"ottoman","foot stool":"ottoman",
+    "shoe rack":"shoe rack","headboard":"headboard",
+    # common synonyms that map onto items already in the learned price book
+    "couch":"couch","sofa":"couch","loveseat":"couch",
+    "desk":"desk","bike":"bike","bicycle":"bike",
+    "tv":"tv","television":"tv","flatscreen":"tv","flat screen":"tv",
+    "chair":"swivel/arm chair","armchair":"swivel/arm chair","office chair":"swivel/arm chair","desk chair":"swivel/arm chair",
+    "beanbag":"beanbag chair","bean bag":"beanbag chair","beanbag chair":"beanbag chair",
+    "microwave":"microwave","lamp":"lamp","rug":"rug","carpet":"rug","mirror":"mirror",
+    "vacuum":"vacuum cleaner","vacuum cleaner":"vacuum cleaner",
+    "guitar":"guitar","keyboard":"keyboard","skateboard":"skateboard",
+    "trunk":"trunk","footlocker":"trunk","duffle":"camp duffel","duffle bag":"camp duffel",
+    "poster":"framed art","painting":"framed art","art":"framed art","framed art":"framed art",
+    "tote":"plastic container",
 }
 
 def resolve_item(name, price_book):
@@ -84,9 +97,13 @@ _QTY = (r'\d+'
         r'|half a dozen|half dozen|a dozen|dozen'
         r'|an|a|couple|few|several')
 
-def parse_freetext(text, price_book):
-    """Best-effort '<qty> <item>' extraction for voice/chat. Longest phrases first, spans
-    consumed. Quantity is OPTIONAL — a bare item counts as 1 so nothing is ever dropped."""
+_STOP = set(("and or with plus the a an of for from i im we you my me our your his her their some couple few "
+             "several dozen half please thanks thank about also just around approximately roughly maybe more "
+             "things thing stuff item items lot lots bunch other others").split())
+
+def parse_freetext_ex(text, price_book):
+    """Returns (items, unmatched_words). Matched '<qty> <item>' spans are consumed; any leftover
+    '<qty> <noun>' is reported as unmatched so unknown items are surfaced, never silently hidden."""
     text = " " + (text or "").lower() + " "
     phrases = sorted(set(list(ALIASES.keys()) + list(price_book.keys())), key=len, reverse=True)
     agg = defaultdict(int)
@@ -98,11 +115,25 @@ def parse_freetext(text, price_book):
             agg[_key] += _word_to_int(m.group(1)) if m.group(1) else 1
             return "  "
         text = pat.sub(repl, text)
-    return [(k, q) for k, q in agg.items()]
+    leftovers = []
+    for m in re.finditer(r'(?:' + _QTY + r')\s+([a-z]{3,}?)s?\b', text):
+        w = m.group(1)
+        if w not in _STOP and resolve_item(w, price_book) is None:
+            leftovers.append(w)
+    return [(k, q) for k, q in agg.items()], leftovers
+
+def parse_freetext(text, price_book):
+    """Back-compat wrapper — returns the item list only."""
+    return parse_freetext_ex(text, price_book)[0]
 
 def quote(items_or_text, price_book):
-    items = items_or_text if isinstance(items_or_text, list) else parse_freetext(items_or_text, price_book)
-    return price_items(items, price_book)
+    if isinstance(items_or_text, list):
+        return price_items(items_or_text, price_book)
+    items, leftovers = parse_freetext_ex(items_or_text, price_book)
+    res = price_items(items, price_book)
+    if leftovers:
+        res["unmatched"] = sorted(set(leftovers))
+    return res
 
 def reprice_book(text, price_book):
     """Re-price a historical item list using the LEARNED book (estimate — ignores size variants)."""
