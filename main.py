@@ -9,7 +9,7 @@ import re
 import base64
 from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, HTMLResponse
 from starlette.requests import Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -437,8 +437,10 @@ async def _vision_items(provider, key, img_b64):
                     {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}}]}]})
             r.raise_for_status(); txt = r.json()["content"][0]["text"]
         else:  # gemini (free tier at aistudio.google.com)
+            # Key goes in a header, NOT the URL, so it can never leak into an error/log line.
             r = await c.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + key,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+                headers={"x-goog-api-key": key},
                 json={"contents": [{"parts": [{"text": _VISION_PROMPT},
                     {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}]}]})
             r.raise_for_status(); txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -474,12 +476,94 @@ async def photo_quote_endpoint(request: Request):
     try:
         detected = await _vision_items(provider, key, img_b64)
     except Exception as e:
-        return JSONResponse({"status": "error", "message": "Vision call failed: " + str(e)[:200]})
+        # Never echo the API key back to a (public) caller, even if a provider puts it in an error.
+        msg = str(e)[:200].replace(key, "***")
+        return JSONResponse({"status": "error", "message": "Vision call failed: " + msg})
     service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
     book = build_price_book(service_rows) if service_rows else {}
     result = _quote_items([(d.get("name", ""), d.get("qty", 1)) for d in detected], book)
     result["detected"] = detected
     return JSONResponse(result)
+
+
+# ── Customer-facing instant-estimate page (photo OR text) ───────────
+_ESTIMATE_HTML = """<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UTrucking - Instant Storage Estimate</title>
+<style>
+ :root{--navy:#14335f;--orange:#f5a623;--ink:#1f2933;--mut:#5b6b7f;--line:#e3e9f2}
+ *{box-sizing:border-box} body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;color:var(--ink);background:#f5f7fb}
+ .bar{height:6px;background:var(--orange)}
+ header{background:var(--navy);color:#fff;padding:22px 20px}
+ header .ey{text-transform:uppercase;letter-spacing:.16em;font-size:11px;font-weight:700;color:var(--orange)}
+ header h1{margin:4px 0 0;font-size:22px} header p{margin:6px 0 0;color:#cdd9ee;font-size:14px}
+ main{max-width:640px;margin:0 auto;padding:18px 16px 60px}
+ .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;margin:14px 0;box-shadow:0 1px 3px rgba(20,51,95,.06)}
+ .card h2{margin:0 0 4px;font-size:16px;color:var(--navy)} .card .hint{margin:0 0 12px;color:var(--mut);font-size:13px}
+ textarea{width:100%;min-height:72px;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;resize:vertical}
+ .btn{background:var(--navy);color:#fff;border:0;border-radius:10px;padding:12px 18px;font-weight:700;font-size:15px;cursor:pointer;margin-top:10px}
+ .btn:active{transform:translateY(1px)} .file{display:block;margin-top:6px;font:inherit}
+ .or{text-align:center;color:var(--mut);font-size:12px;margin:6px 0;text-transform:uppercase;letter-spacing:.12em}
+ table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+ th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+ th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+ td.n,th.n{text-align:right}
+ .total{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:2px solid var(--navy)}
+ .total .lbl{font-weight:700;color:var(--navy)} .total .amt{font-weight:800;font-size:22px;color:var(--navy)}
+ .note{color:var(--mut);font-size:12px;margin-top:10px} .err{color:#b23b3b;font-size:14px;margin-top:8px}
+ .spin{color:var(--mut);font-size:14px;margin-top:8px} #result{display:none}
+ .tag{display:inline-block;background:#eef3fb;color:var(--navy);border-radius:20px;padding:3px 10px;font-size:12px;margin:3px 4px 0 0}
+</style></head><body>
+<div class="bar"></div>
+<header><div class="ey">University Trucking</div>
+ <h1>Instant Storage &amp; Moving Estimate</h1>
+ <p>Snap a photo of your stuff or type what you have - get a price in seconds.</p></header>
+<main>
+ <div class="card"><h2>&#128247; Estimate from a photo</h2>
+  <p class="hint">Take or upload one photo of your items. We detect them and price it automatically.</p>
+  <input id="photo" class="file" type="file" accept="image/*" capture="environment"></div>
+ <div class="or">- or -</div>
+ <div class="card"><h2>&#9000; Estimate from a description</h2>
+  <p class="hint">e.g. "five boxes, a mini fridge and two duffels"</p>
+  <textarea id="items" placeholder="Tell us what you are storing..."></textarea>
+  <button class="btn" onclick="quoteText()">Get my estimate</button></div>
+ <div class="card" id="result"><h2>Your estimate</h2><div id="detected"></div><div id="body"></div></div>
+</main>
+<script>
+ const $=id=>document.getElementById(id);
+ async function postJSON(p,d){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});return r.json();}
+ function toB64(f){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]);fr.onerror=rej;fr.readAsDataURL(f);});}
+ function show(h){$('result').style.display='block';$('body').innerHTML=h;$('result').scrollIntoView({behavior:'smooth'});}
+ function loading(m){$('detected').innerHTML='';show('<div class=spin>'+m+'</div>');}
+ function render(data,fromPhoto){
+  if(!data||data.status==='error'){show('<div class=err>Sorry - '+((data&&data.message)||'something went wrong')+'</div>');return;}
+  if(data.status==='not_configured'){show('<div class=err>Photo estimates are not switched on yet. Try the text box above.</div>');return;}
+  let det='';
+  if(fromPhoto){const items=(data.detected||[]);
+   det=items.length?'<p class=hint>We spotted: '+items.map(d=>'<span class=tag>'+(d.qty||1)+"x "+(d.name||'item')+'</span>').join('')+'</p>'
+     :'<p class=hint>We could not clearly identify items in that photo - try the text box for an exact estimate.</p>';}
+  $('detected').innerHTML=det;
+  const li=data.line_items||[];
+  if(!li.length&&!fromPhoto){show('<div class=err>No items recognized. Try rephrasing.</div>');return;}
+  let rows=li.map(x=>'<tr><td>'+x.qty+"x "+x.item+'</td><td class=n>$'+Number(x.amount).toFixed(2)+'</td></tr>').join('');
+  let html='<table><thead><tr><th>Item</th><th class=n>Est.</th></tr></thead><tbody>'+rows+'</tbody></table>'
+   +'<div class=total><span class=lbl>Estimated total</span><span class=amt>$'+Number(data.total||0).toFixed(2)+'</span></div>'
+   +'<p class=note>Instant estimate based on typical UTrucking pricing. Final price is confirmed at pickup. Ready to book? Call us and mention your estimate.</p>';
+  show(html);
+ }
+ async function quoteText(){const t=$('items').value.trim();if(!t)return;loading('Pricing your items...');
+  try{render(await postJSON('/quote',{args:{text:t}}),false);}catch(e){show('<div class=err>Network error. Please try again.</div>');}}
+ $('photo').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;loading('Looking at your photo...');
+  try{const b=await toB64(f);render(await postJSON('/photo_quote',{args:{image_base64:b}}),true);}
+  catch(err){show('<div class=err>Could not process that photo. Try another or use the text box.</div>');}});
+</script></body></html>"""
+
+
+@mcp.custom_route("/estimate", methods=["GET"])
+async def estimate_page(request: Request):
+    """Customer-facing instant-estimate mini-app: upload a photo OR type items -> price."""
+    return HTMLResponse(_ESTIMATE_HTML)
 
 
 app = mcp.streamable_http_app()
