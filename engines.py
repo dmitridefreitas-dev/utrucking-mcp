@@ -59,20 +59,44 @@ def price_items(items, price_book):
     return {"line_items": lines, "total": round(total, 2), "unmatched": unmatched,
             "summary": "Estimated total ${:.2f} for {} item(s).".format(total, sum(l["qty"] for l in lines))}
 
-_NUM = {"a":1,"an":1,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9,"ten":10,
-        "couple":2,"few":3}
+_ONES  = {"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9}
+_TEENS = {"ten":10,"eleven":11,"twelve":12,"thirteen":13,"fourteen":14,"fifteen":15,
+          "sixteen":16,"seventeen":17,"eighteen":18,"nineteen":19}
+_TENS  = {"twenty":20,"thirty":30,"forty":40,"fifty":50,"sixty":60,"seventy":70,"eighty":80,"ninety":90}
+_WORDS = {"a":1,"an":1,"couple":2,"few":3,"several":3,"dozen":12,"a dozen":12,
+          "half dozen":6,"half a dozen":6, **_ONES, **_TEENS, **_TENS}
+
+def _word_to_int(q):
+    """'twenty' -> 20, 'twenty-five' -> 25, 'a dozen' -> 12, '7' -> 7. Falls back to 1."""
+    q = (q or "").strip().lower()
+    if q.isdigit(): return int(q)
+    if q in _WORDS: return _WORDS[q]
+    parts = re.split(r'[\s-]+', q)              # compound e.g. "twenty five"
+    if len(parts) == 2 and parts[0] in _TENS and parts[1] in _ONES:
+        return _TENS[parts[0]] + _ONES[parts[1]]
+    return 1
+
+# quantity phrase: digits, tens(+ones) compounds, teens, ones, dozen forms, or a/an/couple/few
+_QTY = (r'\d+'
+        r'|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[\s-](?:one|two|three|four|five|six|seven|eight|nine))?'
+        r'|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen'
+        r'|one|two|three|four|five|six|seven|eight|nine'
+        r'|half a dozen|half dozen|a dozen|dozen'
+        r'|an|a|couple|few|several')
+
 def parse_freetext(text, price_book):
-    """Best-effort '<qty> <item>' extraction for voice/chat. Longest phrases first, spans consumed."""
+    """Best-effort '<qty> <item>' extraction for voice/chat. Longest phrases first, spans
+    consumed. Quantity is OPTIONAL — a bare item counts as 1 so nothing is ever dropped."""
     text = " " + (text or "").lower() + " "
     phrases = sorted(set(list(ALIASES.keys()) + list(price_book.keys())), key=len, reverse=True)
     agg = defaultdict(int)
     for ph in phrases:
         key = resolve_item(ph, price_book)
         if not key: continue
-        pat = re.compile(r'(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|couple|few)\s+'
-                         + re.escape(ph) + r's?\b')
+        pat = re.compile(r'(?:(' + _QTY + r')\s+)?' + re.escape(ph) + r's?\b')
         def repl(m, _key=key):
-            q = m.group(1); agg[_key] += int(q) if q.isdigit() else _NUM.get(q, 1); return "  "
+            agg[_key] += _word_to_int(m.group(1)) if m.group(1) else 1
+            return "  "
         text = pat.sub(repl, text)
     return [(k, q) for k, q in agg.items()]
 
@@ -132,6 +156,9 @@ def availability(dispatch_rows, requested_date, capacity_per_day=None, window=4)
     date via the crew schedule unless an explicit capacity_per_day is passed."""
     load = day_load(dispatch_rows)
     req = requested_date if isinstance(requested_date, datetime.date) else _parse_date(requested_date)
+    if req is None:
+        return {"requested": None, "alternatives": [],
+                "suggestion": "I couldn't read that date — what day were you thinking? (e.g. May 12th)"}
     def capof(d): return capacity_per_day if capacity_per_day else capacity_for(d)
     out = {"requested": _slot(req, load.get(req, 0), capof(req)) if req else None, "alternatives": []}
     if req:
