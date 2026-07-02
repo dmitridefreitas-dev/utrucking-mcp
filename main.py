@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse
 from starlette.requests import Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit
 
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
 
@@ -329,6 +330,72 @@ async def lookup_student(name_heard: str) -> str:
     calling another function. Also returns available_fields listing what data exists.
     """
     return json.dumps(await do_lookup_student(name_heard))
+
+
+# ── Wave A/B/C engine endpoints ─────────────────────────────────────
+@mcp.custom_route("/quote", methods=["POST", "GET"])
+async def quote_endpoint(request: Request):
+    """A) Instant itemized quote from a structured list or free text."""
+    if request.method == "GET":
+        return JSONResponse({
+            "endpoint": "/quote", "method": "POST",
+            "expects": {"args": {"items": [["UTrucking Box", 5], ["Mini Fridge", 1]],
+                                 "text": "or free text e.g. 'five boxes and a mini fridge'"}},
+            "returns": {"line_items": [], "total": 0, "unmatched": [], "summary": "string"},
+        })
+    try: body = await request.json()
+    except Exception: body = {}
+    args = _extract_args(body)
+    service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
+    if not service_rows:
+        return JSONResponse({"status": "error", "message": "Pricing catalog is unavailable right now."})
+    book = build_price_book(service_rows)
+    items = args.get("items")
+    payload = ([(i[0], i[1]) for i in items] if isinstance(items, list)
+               else (args.get("text") or args.get("name_heard") or ""))
+    return JSONResponse(_quote_items(payload, book))
+
+
+@mcp.custom_route("/availability", methods=["POST", "GET"])
+async def availability_endpoint(request: Request):
+    """B) How busy a pickup date is + least-loaded nearby alternatives."""
+    if request.method == "GET":
+        return JSONResponse({
+            "endpoint": "/availability", "method": "POST",
+            "expects": {"args": {"date": "5/12/2026", "capacity": 100}},
+            "returns": {"requested": {}, "alternatives": [], "suggestion": "string"},
+        })
+    try: body = await request.json()
+    except Exception: body = {}
+    args = _extract_args(body)
+    date = args.get("date") or args.get("requested_date") or ""
+    try: cap = int(args.get("capacity", 100))
+    except Exception: cap = 100
+    dispatch_rows = await fetch_csv_rows(DISPATCH_CSV_URL)
+    return JSONResponse(_availability(dispatch_rows, date, capacity_per_day=cap))
+
+
+@mcp.custom_route("/billing_audit", methods=["GET", "POST"])
+async def billing_audit_endpoint(request: Request):
+    """C) Flag $0 / missing-invoice / missing-order-id leakage across the service sheet."""
+    service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
+    return JSONResponse(_billing_audit(service_rows))
+
+
+@mcp.tool()
+async def get_quote(items_text: str) -> str:
+    """Estimate a storage/moving quote from a free-text item description
+    (e.g. 'five boxes, a mini fridge and two duffels'). Returns itemized lines + total."""
+    service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
+    book = build_price_book(service_rows) if service_rows else {}
+    return json.dumps(_quote_items(items_text, book))
+
+
+@mcp.tool()
+async def check_availability(date: str, capacity: int = 100) -> str:
+    """Check how busy a pickup date is and suggest open nearby days (steers callers off peak days)."""
+    dispatch_rows = await fetch_csv_rows(DISPATCH_CSV_URL)
+    return json.dumps(_availability(dispatch_rows, date, capacity_per_day=capacity))
 
 
 app = mcp.streamable_http_app()
