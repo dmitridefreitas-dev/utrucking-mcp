@@ -420,21 +420,31 @@ _VISION_PROMPT = (
     "Bookshelf, Dresser, Headboard, Shoe Rack, Ottoman, Mattress. Output JSON only, no prose."
 )
 
-async def _vision_items(provider, key, img_b64):
+def _img_mime(b):
+    """Sniff the real image type from magic bytes so we never mislabel a PNG/HEIC as JPEG."""
+    if b[:3] == b"\xff\xd8\xff": return "image/jpeg"
+    if b[:8] == b"\x89PNG\r\n\x1a\n": return "image/png"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP": return "image/webp"
+    if b[:6] in (b"GIF87a", b"GIF89a"): return "image/gif"
+    if b[4:8] == b"ftyp": return "image/heic"   # iPhone HEIC/HEIF photos
+    return "image/jpeg"
+
+
+async def _vision_items(provider, key, img_b64, mime="image/jpeg"):
     async with httpx.AsyncClient(timeout=60.0) as c:
         if provider == "groq":
             r = await c.post("https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": "Bearer " + key},
                 json={"model": "llama-3.2-90b-vision-preview", "messages": [{"role": "user", "content": [
                     {"type": "text", "text": _VISION_PROMPT},
-                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + img_b64}}]}]})
+                    {"type": "image_url", "image_url": {"url": "data:" + mime + ";base64," + img_b64}}]}]})
             r.raise_for_status(); txt = r.json()["choices"][0]["message"]["content"]
         elif provider == "anthropic":
             r = await c.post("https://api.anthropic.com/v1/messages",
                 headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
                 json={"model": "claude-haiku-4-5-20251001", "max_tokens": 1024, "messages": [{"role": "user", "content": [
                     {"type": "text", "text": _VISION_PROMPT},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img_b64}}]}]})
+                    {"type": "image", "source": {"type": "base64", "media_type": mime, "data": img_b64}}]}]})
             r.raise_for_status(); txt = r.json()["content"][0]["text"]
         else:  # gemini (free tier at aistudio.google.com)
             # gemini-2.5-flash: multimodal + a live free tier (2.0-flash's free quota 429s).
@@ -444,7 +454,7 @@ async def _vision_items(provider, key, img_b64):
                 "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
                 headers={"x-goog-api-key": key},
                 json={"contents": [{"parts": [{"text": _VISION_PROMPT},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}]}]})
+                    {"inline_data": {"mime_type": mime, "data": img_b64}}]}]})
             r.raise_for_status(); txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     m = re.search(r'\{.*\}', txt, re.S)
     return (json.loads(m.group(0)).get("items", []) if m else [])
@@ -468,16 +478,27 @@ async def photo_quote_endpoint(request: Request):
         return JSONResponse({"status": "not_configured",
             "message": "Photo quotes need a free vision key. Set GEMINI_API_KEY (free at aistudio.google.com)."})
     img_b64 = args.get("image_base64")
+    raw = b""
     if not img_b64 and args.get("image_url"):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                resp = await c.get(args["image_url"]); img_b64 = base64.b64encode(resp.content).decode()
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+                # Some hosts (e.g. Wikimedia) 403 a request that has no browser User-Agent.
+                resp = await c.get(args["image_url"],
+                                   headers={"User-Agent": "Mozilla/5.0 (compatible; UTruckingBot/1.0)"})
+            if resp.status_code != 200:
+                return JSONResponse({"status": "error", "message": "Could not fetch image_url (HTTP %d)." % resp.status_code})
+            raw = resp.content
+            img_b64 = base64.b64encode(raw).decode()
         except Exception:
             return JSONResponse({"status": "error", "message": "Could not fetch image_url."})
     if not img_b64:
         return JSONResponse({"status": "error", "message": "Provide image_url or image_base64."})
+    if not raw:
+        try: raw = base64.b64decode(img_b64)
+        except Exception: raw = b""
+    mime = _img_mime(raw)
     try:
-        detected = await _vision_items(provider, key, img_b64)
+        detected = await _vision_items(provider, key, img_b64, mime)
     except Exception as e:
         # Never echo the API key back to a (public) caller, even if a provider puts it in an error.
         msg = str(e)[:200].replace(key, "***")
@@ -536,7 +557,13 @@ _ESTIMATE_HTML = """<!doctype html>
 <script>
  const $=id=>document.getElementById(id);
  async function postJSON(p,d){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});return r.json();}
- function toB64(f){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]);fr.onerror=rej;fr.readAsDataURL(f);});}
+ function toB64(f){return new Promise(res=>{const fr=new FileReader();
+  fr.onload=()=>{const url=String(fr.result);const img=new Image();
+   img.onload=()=>{try{let w=img.width,h=img.height;const s=Math.min(1,1600/Math.max(w,h));w=Math.round(w*s);h=Math.round(h*s);
+     const cv=document.createElement('canvas');cv.width=w;cv.height=h;cv.getContext('2d').drawImage(img,0,0,w,h);
+     res(cv.toDataURL('image/jpeg',0.85).split(',')[1]);}catch(e){res(url.split(',')[1]);}};
+   img.onerror=()=>res(url.split(',')[1]);img.src=url;};
+  fr.onerror=()=>res('');fr.readAsDataURL(f);});}
  function show(h){$('result').style.display='block';$('body').innerHTML=h;$('result').scrollIntoView({behavior:'smooth'});}
  function loading(m){$('detected').innerHTML='';show('<div class=spin>'+m+'</div>');}
  function render(data,fromPhoto){

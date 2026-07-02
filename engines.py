@@ -69,6 +69,11 @@ ALIASES = {
     "night stand":"nightstand","bedside table":"nightstand",
     "coffee table":"table","end table":"table","side table":"table","dining table":"table",
     "file cabinet":"filing cabinet","closet":"wardrobe","armoire":"wardrobe","tool box":"toolbox",
+    # generic names an AI vision model tends to return for a photo -> map onto the catalog
+    "cardboard box":"utrucking box","moving box":"utrucking box","packing box":"utrucking box",
+    "storage box":"utrucking box","shipping box":"utrucking box","carton":"utrucking box","u-haul box":"utrucking box",
+    "storage bin":"plastic container","tote bin":"plastic container","commercial bin":"plastic container",
+    "storage container":"plastic container","dorm fridge":"mini fridge","refrigerator":"mini fridge",
 }
 
 def resolve_item(name, price_book):
