@@ -430,32 +430,43 @@ def _img_mime(b):
     return "image/jpeg"
 
 
+async def _post_retry(c, url, headers, payload, tries=3):
+    """POST with a short backoff on transient 429/503 (providers occasionally rate-limit/overload)."""
+    r = None
+    for i in range(tries):
+        r = await c.post(url, headers=headers, json=payload)
+        if r.status_code in (429, 503) and i < tries - 1:
+            await asyncio.sleep(1.5 * (i + 1)); continue
+        break
+    r.raise_for_status(); return r
+
+
 async def _vision_items(provider, key, img_b64, mime="image/jpeg"):
     async with httpx.AsyncClient(timeout=60.0) as c:
         if provider == "groq":
-            r = await c.post("https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": "Bearer " + key},
-                json={"model": "llama-3.2-90b-vision-preview", "messages": [{"role": "user", "content": [
+            r = await _post_retry(c, "https://api.groq.com/openai/v1/chat/completions",
+                {"Authorization": "Bearer " + key},
+                {"model": "llama-3.2-90b-vision-preview", "messages": [{"role": "user", "content": [
                     {"type": "text", "text": _VISION_PROMPT},
                     {"type": "image_url", "image_url": {"url": "data:" + mime + ";base64," + img_b64}}]}]})
-            r.raise_for_status(); txt = r.json()["choices"][0]["message"]["content"]
+            txt = r.json()["choices"][0]["message"]["content"]
         elif provider == "anthropic":
-            r = await c.post("https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
-                json={"model": "claude-haiku-4-5-20251001", "max_tokens": 1024, "messages": [{"role": "user", "content": [
+            r = await _post_retry(c, "https://api.anthropic.com/v1/messages",
+                {"x-api-key": key, "anthropic-version": "2023-06-01"},
+                {"model": "claude-haiku-4-5-20251001", "max_tokens": 1024, "messages": [{"role": "user", "content": [
                     {"type": "text", "text": _VISION_PROMPT},
                     {"type": "image", "source": {"type": "base64", "media_type": mime, "data": img_b64}}]}]})
-            r.raise_for_status(); txt = r.json()["content"][0]["text"]
+            txt = r.json()["content"][0]["text"]
         else:  # gemini (free tier at aistudio.google.com)
             # gemini-2.5-flash: multimodal + a live free tier (2.0-flash's free quota 429s).
-            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
             # Key goes in a header, NOT the URL, so it can never leak into an error/log line.
-            r = await c.post(
+            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+            r = await _post_retry(c,
                 "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
-                headers={"x-goog-api-key": key},
-                json={"contents": [{"parts": [{"text": _VISION_PROMPT},
+                {"x-goog-api-key": key},
+                {"contents": [{"parts": [{"text": _VISION_PROMPT},
                     {"inline_data": {"mime_type": mime, "data": img_b64}}]}]})
-            r.raise_for_status(); txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
     m = re.search(r'\{.*\}', txt, re.S)
     return (json.loads(m.group(0)).get("items", []) if m else [])
 
