@@ -280,12 +280,13 @@ def parse_freetext_ex(text, price_book):
         if target is not None:
             qty_of[id(target)] = q[2]
     items = []
-    has_known = any(h[2] is not None for h in hits)
+    # quote context = the text names a known item OR attaches a quantity to anything;
+    # in that context bare unknown phrases are kept (qty 1) so "1 toaster, skis" keeps the skis.
+    # Outside it ("hello there") stray words are filler and are dropped.
+    has_context = any(h[2] is not None for h in hits) or bool(qty_of)
     for h in hits:
         qty = qty_of.get(id(h))
-        # an unknown phrase counts as an item if it carries a quantity, or if the text is
-        # clearly a quote (has known items) — otherwise it's likely filler and is dropped
-        if h[2] is None and qty is None and not has_known:
+        if h[2] is None and qty is None and not has_context:
             continue
         items.append((h[2] if h[2] is not None else h[3], qty if qty is not None else 1))
     return items
