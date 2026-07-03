@@ -8,6 +8,7 @@ import difflib
 import re
 import base64
 import datetime
+import time
 import analytics
 from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
@@ -819,8 +820,31 @@ def _reveal_order(rec):
     return "\n".join(out)
 
 
+# Brute-force guard on identity verification: a script shouldn't be able to loop building
+# names against a target. In-memory (resets on redeploy) — raises the bar, cheap, no deps.
+_VERIFY_FAILS = {}                 # canonical name -> [fail_count, first_fail_epoch]
+_VERIFY_MAX, _VERIFY_WINDOW = 5, 15 * 60
+
+
+def _verify_locked(name):
+    ent = _VERIFY_FAILS.get(name)
+    if not ent:
+        return False
+    if time.time() - ent[1] > _VERIFY_WINDOW:
+        _VERIFY_FAILS.pop(name, None); return False
+    return ent[0] >= _VERIFY_MAX
+
+
+def _verify_fail(name):
+    ent = _VERIFY_FAILS.setdefault(name, [0, time.time()])
+    ent[0] += 1
+
+
 def _lookup_flow(text, state, dispatch_rows, service_rows):
     if state.get("step") == "verify":
+        nm = " ".join((state.get("name") or "").lower().split())
+        if _verify_locked(nm):
+            return ("Too many verification attempts for that name. For security, please call the team at (314) 266-8878.", {})
         rec = _build_order_result(state.get("name", ""), dispatch_rows, service_rows)
         if rec.get("status") != "found":
             return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
@@ -829,7 +853,9 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
         if rec.get("phone") and _last4(text) and _last4(text) == _last4(rec["phone"]):
             ok = True
         if ok:
+            _VERIFY_FAILS.pop(nm, None)
             return (_reveal_order(rec), {})
+        _verify_fail(nm)
         return ("That doesn't match what we have, so I can't share the order details. Please call the team at (314) 266-8878.", {})
     rec = _build_order_result(text, dispatch_rows, service_rows)
     if rec.get("status") == "found":
@@ -849,6 +875,21 @@ _RE_HOURS = re.compile(r"\b(hours?|located|location|address|where are you|contac
 _RE_LOOKUP = re.compile(r"\b(my order|order status|status of|where.?s my|where is my|track|my stuff|my pickup|my booking|look ?up|account|invoice|balance|do i owe|did you (?:pick|get))\b", re.I)
 _RE_LIST = re.compile(r"\b(other|another|others|list|what days|which days|when are|any (?:other )?day|days? (?:are )?(?:open|available|free)|options|else)\b", re.I)
 _RE_AVAIL = re.compile(r"\b(available|availab|book|booking|pickup|pick up|schedul|slot|reschedul|move-?out)\b", re.I)
+
+
+def _quote_reply_text(q):
+    """Human-readable quote reply — shared by the chat brain and the AI-mapped re-render."""
+    def _fmt(l):
+        s = "• %dx %s — $%.2f" % (l["qty"], l["item"], l["amount"])
+        if l.get("matched_from"):
+            s += " (matched from \"%s\")" % l["matched_from"]
+        return s
+    lines = "\n".join(_fmt(l) for l in q["line_items"])
+    um = q.get("unmatched") or []
+    ums = ("\n(Couldn't price: %s — call us for those.)" % ", ".join(um)) if um else ""
+    if q.get("capped"):
+        ums += "\n(For more than %d of one item, call (314) 266-8878 for a bulk quote.)" % q["capped"]
+    return "Here's your estimate:\n%s\nTotal: about $%.2f.%s\nWant a pickup date?" % (lines, q["total"], ums)
 
 
 def _chat_reply(msg, state, dispatch_rows, service_rows, book):
@@ -891,17 +932,7 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
         return ("Those weeks are tight — tell me a date and I'll find the nearest opening.", {})
     q = _quote_items(text, book)
     if q.get("line_items"):
-        def _fmt(l):
-            s = "• %dx %s — $%.2f" % (l["qty"], l["item"], l["amount"])
-            if l.get("matched_from"):
-                s += " (matched from \"%s\")" % l["matched_from"]
-            return s
-        lines = "\n".join(_fmt(l) for l in q["line_items"])
-        um = q.get("unmatched") or []
-        ums = ("\n(Couldn't price: %s — call us for those.)" % ", ".join(um)) if um else ""
-        if q.get("capped"):
-            ums += "\n(For more than %d of one item, call (314) 266-8878 for a bulk quote.)" % q["capped"]
-        return ("Here's your estimate:\n%s\nTotal: about $%.2f.%s\nWant a pickup date?" % (lines, q["total"], ums), {})
+        return (_quote_reply_text(q), {})
     if q.get("unmatched"):
         return ("I couldn't find a price for: %s. I can price boxes, fridges, duffels, TVs, desks, couches, mattresses and more — what do you have?" % ", ".join(q["unmatched"]), {})
     return ("I can give you an instant quote, check pickup dates, or look up your order. Try \"quote 5 boxes and a mini fridge\", \"what days are open?\", or \"my order status\".", {})
@@ -918,6 +949,14 @@ async def chat_api(request: Request):
         fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
     book = build_price_book(service_rows) if service_rows else {}
     reply, new_state = _chat_reply(args.get("message", ""), state, dispatch_rows, service_rows, book)
+    # parity with /estimate and the phone line: if the quote had unpriceable items,
+    # give the AI mapper a shot and re-render the reply when it places something
+    if not new_state and ("Couldn't price:" in reply or "couldn't find a price for" in reply):
+        q = _quote_items(args.get("message", ""), book)
+        if q.get("unmatched_items"):
+            q = await _ai_map_unmatched(q, book)
+            if q.get("line_items") and any(l.get("ai_matched") for l in q["line_items"]):
+                reply = _quote_reply_text(q)
     return JSONResponse({"reply": reply, "state": new_state})
 
 
@@ -978,26 +1017,32 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
   .replace(/\$(\d+)\.00\b/g,'$$$1')
   .replace(/\n+/g,'. ')
   .replace(/\s{2,}/g,' ').trim();}
- function speak(t){try{if(!('speechSynthesis'in window))return;window.speechSynthesis.cancel();
-  var chunks=speechText(t).match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[];
-  chunks.forEach(function(s){s=s.trim();if(!s)return;
+ function speak(t,onDone){try{if(!('speechSynthesis'in window)){if(onDone)onDone();return;}
+  window.speechSynthesis.cancel();
+  var chunks=(speechText(t).match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[]).map(function(s){return s.trim();}).filter(Boolean);
+  if(!chunks.length){if(onDone)onDone();return;}
+  chunks.forEach(function(s,i){
    var u=new SpeechSynthesisUtterance(s);if(VOICEOBJ)u.voice=VOICEOBJ;u.rate=1.0;u.pitch=1.0;
-   window.speechSynthesis.speak(u);});}catch(e){}}
+   if(i===chunks.length-1&&onDone){u.onend=onDone;u.onerror=onDone;}
+   window.speechSynthesis.speak(u);});}catch(e){if(onDone)onDone();}}
  async function api(msg){const r=await fetch('/chat_api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({args:{message:msg,state:state}})});return r.json();}
+ var lastVoice=false, startMic=null;
  async function send(t){bubble('me',t);const wait=bubble('bot','...');
-  try{const r=await api(t);state=r.state||{};wait.remove();var rep=r.reply||'...';bubble('bot',rep);if(VOICE)speak(rep);}
+  try{const r=await api(t);state=r.state||{};wait.remove();var rep=r.reply||'...';bubble('bot',rep);
+   if(VOICE)speak(rep,function(){ if(lastVoice&&startMic)startMic(); });}
   catch(e){wait.remove();bubble('bot','Sorry, something went wrong - try again.');}}
- document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var inp=document.getElementById('t');var t=inp.value.trim();if(!t){return;}inp.value='';send(t);});
+ document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var inp=document.getElementById('t');var t=inp.value.trim();if(!t){return;}inp.value='';lastVoice=false;send(t);});
  (function(){var SR=window.SpeechRecognition||window.webkitSpeechRecognition;var mic=document.getElementById('mic');
    if(!SR){mic.style.display='none';return;}
    var rec=new SR();rec.lang='en-US';rec.interimResults=false;rec.maxAlternatives=1;
-   rec.onresult=function(e){var t=e.results[0][0].transcript;if(t)send(t);};
+   rec.onresult=function(e){var t=e.results[0][0].transcript;if(t){lastVoice=true;send(t);}};
    rec.onend=function(){mic.classList.remove('rec');};rec.onerror=function(){mic.classList.remove('rec');};
-   mic.addEventListener('click',function(){try{if(window.speechSynthesis)window.speechSynthesis.cancel();mic.classList.add('rec');rec.start();}catch(e){mic.classList.remove('rec');}});
+   startMic=function(){try{if(window.speechSynthesis)window.speechSynthesis.cancel();mic.classList.add('rec');rec.start();}catch(e){mic.classList.remove('rec');}};
+   mic.addEventListener('click',function(){if(mic.classList.contains('rec')){try{rec.stop();}catch(e){}lastVoice=false;mic.classList.remove('rec');}else{startMic();}});
  })();
  var GREET='Hi! I am the UTrucking assistant. I can quote items, check pickup dates, or look up your order. Try: "quote 5 boxes and a mini fridge", "what days are open?", or "where is my order?"';
  bubble('bot',GREET);
- if(VOICE){document.querySelector('header .s').textContent='Voice preview - tap the mic and talk';}
+ if(VOICE){document.querySelector('header .s').textContent='Voice mode - tap the mic once, then just talk (it keeps listening after each reply; tap again to stop)';}
 </script></body></html>"""
 
 
@@ -1166,6 +1211,7 @@ function render(m){var o=m.overview||{},dq=m.data_quality||{},fn=m.funnel||{},de
  h+=card('Revenue by building',bars(m.revenue_by_building||[],'building','revenue',money));
  h+=card('Top stored items',bars(m.top_items||[],'item','count'));
  h+=card('Frequently stored together (upsell signals)',(m.top_pairs||[]).map(function(x){return '<div class=row><div class=lab style="width:auto;flex:1">'+esc(x.a)+' + '+esc(x.b)+'</div><div class=val>'+x.count+' orders</div></div>';}).join(''));
+ h+=card('Pricing levers (+$1 on the item &asymp; extra $/season)',(m.pricing||[]).slice(0,8).map(function(x){return '<div class=row><div class=lab style="width:auto;flex:1">'+esc(x.item)+' &mdash; $'+x.unit_price+' &times; '+x.units_sold+' sold ('+x.revenue_share_pct+'% of revenue)</div><div class=val>+$'+x["extra_per_$1_increase"]+'</div></div>';}).join('')+'<div class=mut style="margin-top:6px">Rough sensitivity: +$1 on an item adds about its units-sold in season revenue, minus any demand drop. Price changes are a management call.</div>');
  h+=card('Demand by month',bars(dem.by_month||[],'month','orders'));
  h+=card('Completion funnel','<div class=mut>orders '+fn.orders+' &rarr; dispatched '+fn.dispatched+' &rarr; completed '+fn.completed+' &rarr; invoiced '+fn.invoiced+' &middot; '+fn.flagged_billing+' billing flags</div>');
  h+=card('Data-quality scorecard','<div class=row><div class=lab style="flex:1">Unknown building</div><div class=val>'+dq.unknown_building+' ('+dq.unknown_building_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing phone</div><div class=val>'+dq.missing_phone+' ('+dq.missing_phone_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing invoice</div><div class=val>'+dq.missing_invoice+'</div></div><div class=row><div class=lab style="flex:1">$0 / missing total</div><div class=val>'+dq.zero_or_missing_total+'</div></div>');

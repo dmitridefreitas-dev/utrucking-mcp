@@ -86,7 +86,7 @@ ALIASES = {
 # Things that show up in photos / descriptions but aren't stored items we price — never match these.
 NON_STORAGE = {
     "tape","packing tape","masking tape","duct tape","moving strap","strap","straps","dolly",
-    "hand truck","moving blanket","blanket","blankets","bubble wrap","stretch wrap","shrink wrap",
+    "hand truck","moving blanket","moving blankets","bubble wrap","stretch wrap","shrink wrap",
     "plastic wrap","label","labels","marker","sharpie","scissors","box cutter","rope","twine",
     "person","people","hand","wall","floor","ceiling","door","window","room","truck","van","car",
 }
