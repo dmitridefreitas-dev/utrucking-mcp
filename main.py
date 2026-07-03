@@ -7,13 +7,14 @@ import io
 import difflib
 import re
 import base64
+import datetime
 from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse, HTMLResponse
 from starlette.requests import Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan
+from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan, open_days as _open_days, season_bounds as _season_bounds, peak_date as _peak_date
 
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
 
@@ -125,7 +126,10 @@ async def do_lookup_student(name_heard: str) -> dict:
         )
     except Exception:
         return {"status": "error", "message": "I'm having trouble reaching our records right now."}
+    return _build_order_result(name_heard, dispatch_rows, service_rows)
 
+
+def _build_order_result(name_heard: str, dispatch_rows, service_rows) -> dict:
     def clean(s: str) -> str:
         return " ".join((s or "").split())
 
@@ -614,7 +618,174 @@ async def estimate_page(request: Request):
     return HTMLResponse(_ESTIMATE_HTML)
 
 
-# ── SMS-style web preview of the assistant (quote + availability; no PII, no real texts) ──
+# ── Conversational brain for the /chat SMS preview (reuses engines + identity-gated lookup) ──
+_CHAT_MENU = ("Hi! I'm the UTrucking assistant. I can:\n"
+              "• Quote items — \"quote 5 boxes and a mini fridge\"\n"
+              "• Check pickup dates — \"what days are open?\" or \"is 5/12 available?\"\n"
+              "• Look up your order — \"where's my order?\"\nWhat do you need?")
+_MON = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+_MONTH_NAMES = {"january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+                "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+                "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6, "jul": 7, "aug": 8,
+                "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12}
+
+
+def _fmt_day(dstr):
+    try:
+        y, m, d = map(int, str(dstr).split("-")); return "%s %d" % (_MON[m], d)
+    except Exception:
+        return str(dstr)
+
+
+def _find_date(text):
+    m = re.search(r"(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?", text)
+    if m:
+        try:
+            mo, da = int(m.group(1)), int(m.group(2))
+            y = int(m.group(3)) if m.group(3) else 2026
+            if y < 100: y += 2000
+            return datetime.date(y, mo, da)
+        except Exception:
+            return None
+    m = re.search(r"([a-zA-Z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?", text)
+    if m and m.group(1).lower() in _MONTH_NAMES:
+        try:
+            return datetime.date(2026, _MONTH_NAMES[m.group(1).lower()], int(m.group(2)))
+        except Exception:
+            return None
+    return None
+
+
+def _find_month(text):
+    for name, mo in _MONTH_NAMES.items():
+        if re.search(r"\b" + name + r"\b", text, re.I):
+            return mo
+    return None
+
+
+def _last4(s):
+    ds = re.sub(r"\D", "", s or "")
+    return ds[-4:] if len(ds) >= 4 else ""
+
+
+def _cv(x):
+    """Drop placeholder values so the reveal reads cleanly."""
+    x = (x or "").strip()
+    return "" if x.lower() in ("(no date)", "n/a", "na", "-", "tbd", "none", "null") else x
+
+
+def _reveal_order(rec):
+    out = ["You're verified. Here's your order:"]
+    st = _cv(rec.get("order_status")) or _cv(rec.get("dispatch_status"))
+    if st: out.append("• Status: " + st)
+    when = " ".join(x for x in [_cv(rec.get("date")), _cv(rec.get("time_slot"))] if x)
+    where = " ".join(x for x in [_cv(rec.get("building")), _cv(rec.get("room"))] if x)
+    if when or where:
+        out.append("• Pickup: " + (when or "date TBD") + (" at " + where if where else ""))
+    items = _cv(rec.get("items_list")) or _cv(rec.get("product")) or _cv(rec.get("boxes"))
+    if items: out.append("• Items: " + items[:160])
+    if _cv(rec.get("invoice_id")): out.append("• Invoice: " + rec["invoice_id"])
+    if _cv(rec.get("order_id")): out.append("• Order #: " + rec["order_id"])
+    out.append("Anything else?")
+    return "\n".join(out)
+
+
+def _lookup_flow(text, state, dispatch_rows, service_rows):
+    if state.get("step") == "verify":
+        rec = _build_order_result(state.get("name", ""), dispatch_rows, service_rows)
+        if rec.get("status") != "found":
+            return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
+        b = (rec.get("building") or "").lower(); low = text.lower().strip()
+        ok = bool(b) and len(low) >= 3 and (low in b or b in low)
+        if rec.get("phone") and _last4(text) and _last4(text) == _last4(rec["phone"]):
+            ok = True
+        if ok:
+            return (_reveal_order(rec), {})
+        return ("That doesn't match what we have, so I can't share the order details. Please call the team at (314) 266-8878.", {})
+    rec = _build_order_result(text, dispatch_rows, service_rows)
+    if rec.get("status") == "found":
+        ask = ("what building is your pickup at" if rec.get("building")
+               else ("the last 4 digits of your phone" if rec.get("phone") else "your order number"))
+        return ("I found an order under %s. To confirm it's you, %s?" % (rec["confirmed_name"], ask),
+                {"intent": "lookup", "step": "verify", "name": rec["confirmed_name"]})
+    if rec.get("status") == "confirm" and rec.get("suggestions"):
+        return ("I found a few possible matches: %s. Which name is exactly right?" % ", ".join(rec["suggestions"]),
+                {"intent": "lookup", "step": "name"})
+    return ("I couldn't find an order under that name. Want to try spelling the last name, or a different name?",
+            {"intent": "lookup", "step": "name"})
+
+
+_RE_GREET = re.compile(r"^(hi|hey|hello|help|menu|start|hola|yo|sup|good (morning|afternoon|evening))\b", re.I)
+_RE_HOURS = re.compile(r"\b(hours?|located|location|address|where are you|contact|human|representative|talk to|speak to|reach you|phone number)\b", re.I)
+_RE_LOOKUP = re.compile(r"\b(my order|order status|status of|where.?s my|where is my|track|my stuff|my pickup|my booking|look ?up|account|invoice|balance|do i owe|did you (?:pick|get))\b", re.I)
+_RE_LIST = re.compile(r"\b(other|another|others|list|what days|which days|when are|any (?:other )?day|days? (?:are )?(?:open|available|free)|options|else)\b", re.I)
+_RE_AVAIL = re.compile(r"\b(available|availab|book|booking|pickup|pick up|schedul|slot|reschedul|move-?out)\b", re.I)
+
+
+def _chat_reply(msg, state, dispatch_rows, service_rows, book):
+    state = state or {}
+    text = (msg or "").strip(); low = text.lower()
+    _RESET = ("cancel", "nevermind", "never mind", "stop", "menu", "start over", "quit", "exit", "reset")
+    if state.get("intent") == "lookup":
+        # let the user break out of the identity flow if they change the subject
+        if low in _RESET or _RE_GREET.match(low):
+            state = {}
+        elif state.get("step") == "name" and (_find_date(low) or _quote_items(text, book).get("line_items")):
+            state = {}
+        else:
+            return _lookup_flow(text, state, dispatch_rows, service_rows)
+    if not text or _RE_GREET.match(low):
+        return (_CHAT_MENU, {})
+    if _RE_LOOKUP.search(low):
+        return ("Sure — I can check your order. What's the name on the order?", {"intent": "lookup", "step": "name"})
+    if _RE_HOURS.search(low) and not _find_date(low) and not _find_month(low):
+        return ("You can reach the UTrucking team at (314) 266-8878. Summer storage pickups run May–June. Want a quote, a pickup date, or your order status?", {})
+    d = _find_date(low)
+    if d:
+        av = _availability(dispatch_rows, d)
+        return ((av.get("suggestion") or "Let me check that day.") + " Want me to note you down? (live booking coming soon.) Or ask \"what days are open?\"", {})
+    mo = _find_month(low)
+    if mo:
+        start = datetime.date(2026, mo, 1)
+        end = (datetime.date(2026, mo + 1, 1) - datetime.timedelta(days=1)) if mo < 12 else datetime.date(2026, 12, 31)
+        days = _open_days(dispatch_rows, start, end, limit=5)
+        if days:
+            return ("Open days in %s: %s. Which one works?" % (_MON[mo], ", ".join(_fmt_day(x["date"]) for x in days)), {})
+        return ("%s looks fully booked in our current schedule — want another month or a specific date?" % _MON[mo], {})
+    if _RE_LIST.search(low) or _RE_AVAIL.search(low):
+        peak = _peak_date(dispatch_rows)
+        if not peak:
+            return ("I can check pickup dates — what day were you thinking? (e.g. 5/12)", {})
+        days = _open_days(dispatch_rows, peak - datetime.timedelta(days=7), peak + datetime.timedelta(days=38), limit=6)
+        if days:
+            return ("These days have openings: %s. Want one of those, or give me a date like 5/12." % ", ".join(_fmt_day(x["date"]) for x in days), {})
+        return ("Those weeks are tight — tell me a date and I'll find the nearest opening.", {})
+    q = _quote_items(text, book)
+    if q.get("line_items"):
+        lines = "\n".join("• %dx %s — $%.2f" % (l["qty"], l["item"], l["amount"]) for l in q["line_items"])
+        um = q.get("unmatched") or []
+        ums = ("\n(Couldn't price: %s — call us for those.)" % ", ".join(um)) if um else ""
+        return ("Here's your estimate:\n%s\nTotal: about $%.2f.%s\nWant a pickup date?" % (lines, q["total"], ums), {})
+    if q.get("unmatched"):
+        return ("I couldn't find a price for: %s. I can price boxes, fridges, duffels, TVs, desks, couches, mattresses and more — what do you have?" % ", ".join(q["unmatched"]), {})
+    return ("I can give you an instant quote, check pickup dates, or look up your order. Try \"quote 5 boxes and a mini fridge\", \"what days are open?\", or \"my order status\".", {})
+
+
+@mcp.custom_route("/chat_api", methods=["POST"])
+async def chat_api(request: Request):
+    """Brain for the /chat SMS preview: quote + availability + identity-gated order lookup."""
+    try: body = await request.json()
+    except Exception: body = {}
+    args = _extract_args(body)
+    state = args.get("state") if isinstance(args.get("state"), dict) else {}
+    dispatch_rows, service_rows = await asyncio.gather(
+        fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
+    book = build_price_book(service_rows) if service_rows else {}
+    reply, new_state = _chat_reply(args.get("message", ""), state, dispatch_rows, service_rows, book)
+    return JSONResponse({"reply": reply, "state": new_state})
+
+
+# ── SMS-style web preview of the assistant (server-driven brain) ──
 _CHAT_HTML = r"""<!doctype html><html lang=en><head>
 <meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
 <title>UTrucking Assistant - SMS Preview</title>
@@ -626,7 +797,7 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  header b{font-size:16px} header .s{display:block;color:#cdd9ee;font-size:12px;margin-top:2px}
  .note{background:#fff7e6;color:#8a6d3b;font-size:12px;text-align:center;padding:6px 10px}
  #log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
- .b{max-width:82%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.38;word-wrap:break-word}
+ .b{max-width:82%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.4;white-space:pre-wrap;word-wrap:break-word}
  .bot{background:var(--bot);color:#1f2933;align-self:flex-start;border-bottom-left-radius:4px}
  .me{background:var(--me);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
  form{display:flex;gap:8px;padding:10px;background:#fff;border-top:1px solid #e3e9f2}
@@ -634,51 +805,18 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  button{background:var(--navy);color:#fff;border:0;border-radius:20px;padding:0 18px;font-weight:700;cursor:pointer}
 </style></head><body>
 <header><b>UTrucking Assistant</b><span class=s>SMS preview - test chat</span></header>
-<div class=note>Preview only - no real texts are sent. Runs on the live quote &amp; availability engine.</div>
+<div class=note>Preview only - no real texts are sent. Order lookups verify your identity, like the phone line.</div>
 <div id=log></div>
 <form id=f><input id=t autocomplete=off placeholder="Text a message..."><button>Send</button></form>
 <script>
- const log=document.getElementById('log');
- function bubble(cls,val,isText){const d=document.createElement('div');d.className='b '+cls;if(isText){d.textContent=val;}else{d.innerHTML=val;}log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
- const bot=h=>bubble('bot',h,false); const me=t=>bubble('me',t,true);
- async function post(p,d){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});return r.json();}
- function extractDate(t){let m=t.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
-  if(m){let y=m[3]||'2026';if(y.length===2){y='20'+y;}return m[1]+'/'+m[2]+'/'+y;}
-  const M={january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12,jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12};
-  m=t.toLowerCase().match(/([a-z]+)\s+(\d{1,2})/);if(m&&M[m[1]]){return M[m[1]]+'/'+m[2]+'/2026';}return '';}
- function money(n){return '$'+Number(n||0).toFixed(2);}
- async function reply(t){
-  const low=t.toLowerCase().trim();
-  if(low===''||/^(hi|hey|hello|help|menu|start|hola|yo)\b/.test(low)){
-    bot('Hi! I am the UTrucking assistant. Text me things like:<br>&bull; <i>quote 5 boxes and a mini fridge</i><br>&bull; <i>is 5/12 available?</i><br>&bull; <i>hours</i>'); return; }
-  if(/hour|open|close|where|location|address|contact|call|phone|human|agent|rep/.test(low)){
-    bot('You can reach the UTrucking team at <b>(314) 266-8878</b>. Summer storage pickups run through May and June. Want a quote or a pickup date?'); return; }
-  const wantsDate=/\b(available|availability|open|book|booking|pickup|pick up|schedule|slot|reschedule|move|move-out)\b/.test(low)||/\d{1,2}[\/\-]\d{1,2}/.test(low)||/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/.test(low);
-  if(wantsDate){
-    const d=extractDate(t);
-    if(!d){ bot('Sure - what day were you thinking? (e.g. 5/12)'); return; }
-    const av=await post('/availability',{args:{date:d}});
-    if(av&&av.suggestion){ bot(av.suggestion+' Want me to note you down? (live booking is coming soon.)'); }
-    else { bot('I could not read that date - try something like 5/12.'); }
-    return;
-  }
-  const q=await post('/quote',{args:{text:t}});
-  if(q&&q.line_items&&q.line_items.length){
-    const lines=q.line_items.map(l=>'&bull; '+l.qty+'x '+l.item+' - '+money(l.amount)).join('<br>');
-    const extra=(q.unmatched&&q.unmatched.length)?'<br><i>Could not price: '+q.unmatched.join(', ')+' - call us for those.</i>':'';
-    bot('Here is your estimate:<br>'+lines+'<br><b>Total: about '+money(q.total)+'</b>'+extra+'<br>Want a pickup date?');
-  } else if(q&&q.unmatched&&q.unmatched.length){
-    bot('I could not find a price for: '+q.unmatched.join(', ')+'. I can price boxes, fridges, duffels, TVs, desks, couches, mattresses and more - what do you have?');
-  } else {
-    bot('I can give you an instant quote or check pickup dates. Try <i>quote 5 boxes and a mini fridge</i> or <i>is 5/12 available?</i>');
-  }
- }
- document.getElementById('f').addEventListener('submit',async e=>{e.preventDefault();
-  const inp=document.getElementById('t');const t=inp.value.trim();if(!t){return;}
-  me(t);inp.value='';const wait=bot('<i>typing...</i>');
-  try{await reply(t);}catch(err){bot('Sorry, something went wrong - try again.');}
-  wait.remove();});
- bot('Hi! I am the UTrucking assistant (SMS preview). Text me: <i>quote 5 boxes and a mini fridge</i>, <i>is 5/12 available?</i>, or <i>hours</i>.');
+ const log=document.getElementById('log');let state={};
+ function bubble(cls,val){const d=document.createElement('div');d.className='b '+cls;d.textContent=val;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
+ async function api(msg){const r=await fetch('/chat_api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({args:{message:msg,state:state}})});return r.json();}
+ async function send(t){bubble('me',t);const wait=bubble('bot','...');
+  try{const r=await api(t);state=r.state||{};wait.remove();bubble('bot',r.reply||'...');}
+  catch(e){wait.remove();bubble('bot','Sorry, something went wrong - try again.');}}
+ document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var inp=document.getElementById('t');var t=inp.value.trim();if(!t){return;}inp.value='';send(t);});
+ bubble('bot','Hi! I am the UTrucking assistant (SMS preview). I can quote items, check pickup dates, or look up your order. Try: "quote 5 boxes and a mini fridge", "what days are open?", or "where is my order?"');
 </script></body></html>"""
 
 

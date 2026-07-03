@@ -233,6 +233,29 @@ def availability(dispatch_rows, requested_date, capacity_per_day=None, window=4)
             out["suggestion"] = "That day is available."
     return out
 
+def season_bounds(dispatch_rows):
+    """Earliest and latest booked pickup dates in the data."""
+    load = day_load(dispatch_rows)
+    return (min(load), max(load)) if load else (None, None)
+
+def peak_date(dispatch_rows):
+    """The single busiest booked date — anchors 'what days are open' near the real season
+    instead of a stray outlier date."""
+    load = day_load(dispatch_rows)
+    return max(load, key=load.get) if load else None
+
+def open_days(dispatch_rows, start, end, limit=6, capacity_per_day=None):
+    """Up to `limit` days in [start, end] that still have room (>20% free)."""
+    load = day_load(dispatch_rows)
+    out, d = [], start
+    while d <= end and len(out) < limit:
+        cap = capacity_per_day or capacity_for(d)
+        used = load.get(d, 0)
+        if used < cap * 0.8:
+            out.append(_slot(d, used, cap))
+        d += datetime.timedelta(days=1)
+    return out
+
 def dispatch_plan(dispatch_rows, date):
     """B-ops: cluster a day's pickups by building and suggest crew split (route optimizer core)."""
     d = date if isinstance(date, datetime.date) else _parse_date(date)
