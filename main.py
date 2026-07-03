@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse, HTMLResponse
 from starlette.requests import Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan, open_days as _open_days, season_bounds as _season_bounds, peak_date as _peak_date
+from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan, open_days as _open_days, season_bounds as _season_bounds, peak_date as _peak_date, merge_photo_text as _merge_photo_text
 
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
 
@@ -526,7 +526,19 @@ async def photo_quote_endpoint(request: Request):
         return JSONResponse({"status": "error", "message": "Vision call failed: " + msg})
     service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
     book = build_price_book(service_rows) if service_rows else {}
-    result = _quote_items([(d.get("name", ""), d.get("qty", 1)) for d in detected], book)
+    pairs = [(d.get("name", ""), d.get("qty", 1)) for d in detected]
+    extra_text = (args.get("text") or "").strip()
+    if extra_text:
+        # customer typed a clarification alongside the photo — their words win on overlap,
+        # text-only items are added, and each line is tagged with where it came from
+        merged, source_by_key = _merge_photo_text(pairs, extra_text, book)
+        result = _quote_items(merged, book)
+        for l in result.get("line_items", []):
+            src = source_by_key.get(l["item"].lower())
+            if src:
+                l["source"] = src
+    else:
+        result = _quote_items(pairs, book)
     result["detected"] = detected
     return JSONResponse(result)
 
@@ -565,14 +577,14 @@ _ESTIMATE_HTML = """<!doctype html>
  <h1>Instant Storage &amp; Moving Estimate</h1>
  <p>Snap a photo of your stuff or type what you have - get a price in seconds.</p></header>
 <main>
- <div class="card"><h2>&#128247; Estimate from a photo</h2>
-  <p class="hint">Take or upload one photo of your items. We detect them and price it automatically.</p>
-  <input id="photo" class="file" type="file" accept="image/*" capture="environment"></div>
- <div class="or">- or -</div>
- <div class="card"><h2>&#9000; Estimate from a description</h2>
-  <p class="hint">e.g. "five boxes, a mini fridge and two duffels" &mdash; we price boxes, fridges, duffels, TVs, desks, couches, mattresses, dressers, bikes &amp; more.</p>
-  <textarea id="items" placeholder="Tell us what you are storing..."></textarea>
-  <button class="btn" onclick="quoteText()">Get my estimate</button></div>
+ <div class="card"><h2>&#128247; Photo (optional)</h2>
+  <p class="hint">Take or upload one photo of your items &mdash; we detect and price them automatically.</p>
+  <input id="photo" class="file" type="file" accept="image/*" capture="environment">
+  <p class="hint" id="photostate" style="margin:8px 0 0"></p></div>
+ <div class="card"><h2>&#9000; Description (optional)</h2>
+  <p class="hint">e.g. "five boxes, a mini fridge and two duffels". <b>Using both?</b> We combine them &mdash; your typed counts override the photo, and anything you type that isn't in the photo gets added.</p>
+  <textarea id="items" placeholder="Tell us what you are storing, or add details the photo misses..."></textarea>
+  <button class="btn" onclick="quoteNow()">Get my estimate</button></div>
  <div class="card" id="result"><h2>Your estimate</h2><div id="detected"></div><div id="body"></div></div>
 </main>
 <script>
@@ -602,7 +614,11 @@ _ESTIMATE_HTML = """<!doctype html>
    else show('<div class=err>Tell us what you are storing.</div><p class=note>'+ex+'</p>');
    return;
   }
-  let rows=li.map(x=>'<tr><td>'+x.qty+"x "+x.item+'</td><td class=n>$'+Number(x.amount).toFixed(2)+'</td></tr>').join('');
+  const srcLbl={photo:'from photo',you:'you added','photo+you':'photo &middot; your count'};
+  let rows=li.map(x=>'<tr><td>'+x.qty+"x "+x.item
+   +(x.matched_from?' <span style="color:#5b6b7f;font-size:.82em">(you said &ldquo;'+x.matched_from+'&rdquo;)</span>':'')
+   +(x.source?' <span class=tag style="font-size:11px">'+srcLbl[x.source]+'</span>':'')
+   +'</td><td class=n>$'+Number(x.amount).toFixed(2)+'</td></tr>').join('');
   let extra=un.length?'<p class=note>Not priced (call us for these): '+un.join(', ')+'.</p>':'';
   if(data.capped) extra+='<p class=note>For more than '+data.capped+' of one item, call (314) 266-8878 for a bulk quote.</p>';
   let html='<table><thead><tr><th>Item</th><th class=n>Est.</th></tr></thead><tbody>'+rows+'</tbody></table>'
@@ -611,11 +627,20 @@ _ESTIMATE_HTML = """<!doctype html>
    +'<p class=note>Instant estimate based on typical UTrucking pricing. Final price is confirmed at pickup. Ready to book? Call (314) 266-8878 and mention your estimate.</p>';
   show(html);
  }
- async function quoteText(){const t=$('items').value.trim();if(!t)return;loading('Pricing your items...');
+ let photoB64=null;
+ async function quoteNow(){
+  const t=$('items').value.trim();
+  if(photoB64){loading(t?'Combining your photo and notes...':'Looking at your photo...');
+   try{const args={image_base64:photoB64};if(t)args.text=t;render(await postJSON('/photo_quote',{args:args}),true);}
+   catch(e){show('<div class=err>Network error. Please try again.</div>');}
+   return;}
+  if(!t){show('<div class=err>Add a photo or tell us what you are storing.</div>');return;}
+  loading('Pricing your items...');
   try{render(await postJSON('/quote',{args:{text:t}}),false);}catch(e){show('<div class=err>Network error. Please try again.</div>');}}
- $('photo').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;loading('Looking at your photo...');
-  try{const b=await toB64(f);render(await postJSON('/photo_quote',{args:{image_base64:b}}),true);}
-  catch(err){show('<div class=err>Could not process that photo. Try another or use the text box.</div>');}});
+ $('photo').addEventListener('change',async e=>{const f=e.target.files[0];if(!f){photoB64=null;$('photostate').textContent='';return;}
+  $('photostate').textContent='Reading photo...';
+  try{photoB64=await toB64(f);$('photostate').innerHTML='&#10003; Photo attached &mdash; add any notes below, then hit the button (or we quote it now).';quoteNow();}
+  catch(err){photoB64=null;show('<div class=err>Could not process that photo. Try another or use the text box.</div>');}});
 </script></body></html>"""
 
 
@@ -769,7 +794,12 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
         return ("Those weeks are tight — tell me a date and I'll find the nearest opening.", {})
     q = _quote_items(text, book)
     if q.get("line_items"):
-        lines = "\n".join("• %dx %s — $%.2f" % (l["qty"], l["item"], l["amount"]) for l in q["line_items"])
+        def _fmt(l):
+            s = "• %dx %s — $%.2f" % (l["qty"], l["item"], l["amount"])
+            if l.get("matched_from"):
+                s += " (matched from \"%s\")" % l["matched_from"]
+            return s
+        lines = "\n".join(_fmt(l) for l in q["line_items"])
         um = q.get("unmatched") or []
         ums = ("\n(Couldn't price: %s — call us for those.)" % ", ".join(um)) if um else ""
         if q.get("capped"):
@@ -860,11 +890,18 @@ async def insights_api(request: Request):
 def _metrics_brief(m):
     dem = m.get("demand", {})
     ov = m.get("overview", {})
+    pr = m.get("pricing", [])
+    price_lines = "; ".join(
+        "%s: $%s each, %s sold = $%s (%s%% of revenue); +$1/unit ≈ +$%s/season" % (
+            x["item"], x["unit_price"], x["units_sold"], x["revenue"], x["revenue_share_pct"], x["extra_per_$1_increase"])
+        for x in pr[:8])
     return "\n".join([
         "Revenue total: $%s across %s paid orders (avg $%s, median $%s). Dispatch orders: %s." % (
             ov.get("revenue"), ov.get("orders_with_revenue"), ov.get("avg_order"), ov.get("median_order"), ov.get("dispatch_orders")),
         "Revenue by building: " + "; ".join("%s $%s" % (x["building"], x["revenue"]) for x in m.get("revenue_by_building", [])[:10]),
         "Top items: " + ", ".join("%s x%s" % (x["item"], x["count"]) for x in m.get("top_items", [])[:10]),
+        "PRICING LEVERS (current price, units sold this season, revenue share, and the extra season revenue from a "
+        "+$1 price increase — a +$1 increase adds about 'units sold' dollars, minus any drop in demand): " + price_lines + ".",
         "Frequently stored together: " + ", ".join("%s+%s (%s)" % (x["a"], x["b"], x["count"]) for x in m.get("top_pairs", [])[:6]),
         "Average items per order: %s." % m.get("avg_items_per_order"),
         "Completion funnel: %s." % m.get("funnel"),
@@ -878,10 +915,20 @@ def _metrics_brief(m):
     ])
 
 
-_ASK_PROMPT = ("You are UTrucking's internal data analyst (a student storage & moving company). Answer the "
-    "staff question using ONLY the aggregate business data below. Be concise; lead with the number. If the "
-    "question is about a specific individual customer or any personal detail, refuse and say you only provide "
-    "aggregate business stats. If the data doesn't contain the answer, say so plainly.\n\nDATA:\n%s\n\nQUESTION: %s\n\nANSWER:")
+_ASK_PROMPT = (
+    "You are UTrucking's sharp, proactive data analyst (a student storage & moving company). Use the aggregate "
+    "business data below to give a DIRECT, QUANTIFIED, actionable answer — like a consultant, not a database.\n"
+    "Rules:\n"
+    "- Lead with the specific number or recommendation. Then one or two sentences of the 'why', grounded in the data.\n"
+    "- For PRICING questions, reason from the PRICING LEVERS: a +$1 increase on an item adds roughly its 'units sold' "
+    "in season revenue. Recommend concrete amounts (e.g. 'raise the box $22->$24: +~$X/season') and prioritise the "
+    "highest-volume / highest-revenue-share items where a small change compounds. Note it's a management decision and "
+    "that very large hikes risk demand.\n"
+    "- For strategy/marketing/ops questions, infer sensible recommendations FROM the data (peak days, top buildings, "
+    "upsell pairs, repeat rate, data-quality gaps) even if the data doesn't state the answer verbatim. Don't refuse "
+    "just because it isn't a single cell — that's your job. Only say you can't help if truly nothing in the data bears on it.\n"
+    "- NEVER reveal or speculate about an individual customer or any personal detail; for that, refuse and say you only "
+    "provide aggregate business stats.\n\nDATA:\n%s\n\nQUESTION: %s\n\nANSWER:")
 
 
 @mcp.custom_route("/ask_api", methods=["POST"])

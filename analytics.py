@@ -67,14 +67,20 @@ def compute_metrics(dispatch, service):
     m = {}
     # ---- revenue + baskets (from SERVICE item lists) ----
     totals, rev_by_building, item_counter, baskets = [], defaultdict(float), Counter(), []
+    unit_price_ctr, item_revenue = defaultdict(Counter), defaultdict(float)
     for r in service:
         t = engines._order_total(r)
         b = _norm_building(r.get("Building", ""))
         if t:
             totals.append(t); rev_by_building[b] += t
-        items = [(engines._canon(n), int(q)) for n, a, q in engines._ITEM_RE.findall(r.get("Summer Storage Item List", "") or "")]
+        parsed = engines._ITEM_RE.findall(r.get("Summer Storage Item List", "") or "")
+        items = [(engines._canon(n), int(q)) for n, a, q in parsed]
         for n, q in items:
             item_counter[n] += q
+        for n, a, q in parsed:                       # per-item unit price + revenue (pricing levers)
+            cn = engines._canon(n)
+            unit_price_ctr[cn][float(a)] += int(q)
+            item_revenue[cn] += float(a) * int(q)
         names = sorted({n for n, _ in items})
         if names:
             baskets.append(names)
@@ -97,6 +103,19 @@ def compute_metrics(dispatch, service):
                 pair[(names[i], names[j])] += 1
     m["top_items"] = [{"item": k.title(), "count": c} for k, c in item_counter.most_common(12)]
     m["top_pairs"] = [{"a": a.title(), "b": b.title(), "count": c} for (a, b), c in pair.most_common(8)]
+    # ---- pricing levers: current unit price, units sold, and $/season per +$1 (idea: price optimization) ----
+    pricing = []
+    for k, units in item_counter.most_common(10):
+        price = unit_price_ctr[k].most_common(1)[0][0] if unit_price_ctr[k] else 0.0
+        pricing.append({
+            "item": k.title(),
+            "unit_price": round(price, 2),
+            "units_sold": units,
+            "revenue": round(item_revenue[k], 2),
+            "extra_per_$1_increase": round(units, 2),      # +$1 on this item ≈ this much more per season
+            "revenue_share_pct": round(100 * item_revenue[k] / revenue, 1) if revenue else 0.0,
+        })
+    m["pricing"] = pricing
     m["avg_items_per_order"] = round(sum(sum(q for _, q in
         [(engines._canon(n), int(qq)) for n, a, qq in engines._ITEM_RE.findall(r.get("Summer Storage Item List", "") or "")])
         for r in service) / max(len(baskets), 1), 1)
