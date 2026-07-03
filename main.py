@@ -614,6 +614,80 @@ async def estimate_page(request: Request):
     return HTMLResponse(_ESTIMATE_HTML)
 
 
+# ── SMS-style web preview of the assistant (quote + availability; no PII, no real texts) ──
+_CHAT_HTML = r"""<!doctype html><html lang=en><head>
+<meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
+<title>UTrucking Assistant - SMS Preview</title>
+<style>
+ :root{--navy:#14335f;--orange:#f5a623;--bot:#eef1f6;--me:#1e5aa8}
+ *{box-sizing:border-box} html,body{height:100%}
+ body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;background:#f5f7fb;display:flex;flex-direction:column;height:100vh}
+ header{background:var(--navy);color:#fff;padding:14px 16px}
+ header b{font-size:16px} header .s{display:block;color:#cdd9ee;font-size:12px;margin-top:2px}
+ .note{background:#fff7e6;color:#8a6d3b;font-size:12px;text-align:center;padding:6px 10px}
+ #log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px}
+ .b{max-width:82%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.38;word-wrap:break-word}
+ .bot{background:var(--bot);color:#1f2933;align-self:flex-start;border-bottom-left-radius:4px}
+ .me{background:var(--me);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+ form{display:flex;gap:8px;padding:10px;background:#fff;border-top:1px solid #e3e9f2}
+ input{flex:1;border:1px solid #cdd6e4;border-radius:20px;padding:11px 14px;font:inherit}
+ button{background:var(--navy);color:#fff;border:0;border-radius:20px;padding:0 18px;font-weight:700;cursor:pointer}
+</style></head><body>
+<header><b>UTrucking Assistant</b><span class=s>SMS preview - test chat</span></header>
+<div class=note>Preview only - no real texts are sent. Runs on the live quote &amp; availability engine.</div>
+<div id=log></div>
+<form id=f><input id=t autocomplete=off placeholder="Text a message..."><button>Send</button></form>
+<script>
+ const log=document.getElementById('log');
+ function bubble(cls,val,isText){const d=document.createElement('div');d.className='b '+cls;if(isText){d.textContent=val;}else{d.innerHTML=val;}log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
+ const bot=h=>bubble('bot',h,false); const me=t=>bubble('me',t,true);
+ async function post(p,d){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});return r.json();}
+ function extractDate(t){let m=t.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+  if(m){let y=m[3]||'2026';if(y.length===2){y='20'+y;}return m[1]+'/'+m[2]+'/'+y;}
+  const M={january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12,jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12};
+  m=t.toLowerCase().match(/([a-z]+)\s+(\d{1,2})/);if(m&&M[m[1]]){return M[m[1]]+'/'+m[2]+'/2026';}return '';}
+ function money(n){return '$'+Number(n||0).toFixed(2);}
+ async function reply(t){
+  const low=t.toLowerCase().trim();
+  if(low===''||/^(hi|hey|hello|help|menu|start|hola|yo)\b/.test(low)){
+    bot('Hi! I am the UTrucking assistant. Text me things like:<br>&bull; <i>quote 5 boxes and a mini fridge</i><br>&bull; <i>is 5/12 available?</i><br>&bull; <i>hours</i>'); return; }
+  if(/hour|open|close|where|location|address|contact|call|phone|human|agent|rep/.test(low)){
+    bot('You can reach the UTrucking team at <b>(314) 266-8878</b>. Summer storage pickups run through May and June. Want a quote or a pickup date?'); return; }
+  const wantsDate=/\b(available|availability|open|book|booking|pickup|pick up|schedule|slot|reschedule|move|move-out)\b/.test(low)||/\d{1,2}[\/\-]\d{1,2}/.test(low)||/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/.test(low);
+  if(wantsDate){
+    const d=extractDate(t);
+    if(!d){ bot('Sure - what day were you thinking? (e.g. 5/12)'); return; }
+    const av=await post('/availability',{args:{date:d}});
+    if(av&&av.suggestion){ bot(av.suggestion+' Want me to note you down? (live booking is coming soon.)'); }
+    else { bot('I could not read that date - try something like 5/12.'); }
+    return;
+  }
+  const q=await post('/quote',{args:{text:t}});
+  if(q&&q.line_items&&q.line_items.length){
+    const lines=q.line_items.map(l=>'&bull; '+l.qty+'x '+l.item+' - '+money(l.amount)).join('<br>');
+    const extra=(q.unmatched&&q.unmatched.length)?'<br><i>Could not price: '+q.unmatched.join(', ')+' - call us for those.</i>':'';
+    bot('Here is your estimate:<br>'+lines+'<br><b>Total: about '+money(q.total)+'</b>'+extra+'<br>Want a pickup date?');
+  } else if(q&&q.unmatched&&q.unmatched.length){
+    bot('I could not find a price for: '+q.unmatched.join(', ')+'. I can price boxes, fridges, duffels, TVs, desks, couches, mattresses and more - what do you have?');
+  } else {
+    bot('I can give you an instant quote or check pickup dates. Try <i>quote 5 boxes and a mini fridge</i> or <i>is 5/12 available?</i>');
+  }
+ }
+ document.getElementById('f').addEventListener('submit',async e=>{e.preventDefault();
+  const inp=document.getElementById('t');const t=inp.value.trim();if(!t){return;}
+  me(t);inp.value='';const wait=bot('<i>typing...</i>');
+  try{await reply(t);}catch(err){bot('Sorry, something went wrong - try again.');}
+  wait.remove();});
+ bot('Hi! I am the UTrucking assistant (SMS preview). Text me: <i>quote 5 boxes and a mini fridge</i>, <i>is 5/12 available?</i>, or <i>hours</i>.');
+</script></body></html>"""
+
+
+@mcp.custom_route("/chat", methods=["GET"])
+async def chat_page(request: Request):
+    """SMS-style web preview of the assistant (quote + availability). No PII, no real texts."""
+    return HTMLResponse(_CHAT_HTML)
+
+
 app = mcp.streamable_http_app()
 _original_lifespan = app.router.lifespan_context
 
