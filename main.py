@@ -604,6 +604,7 @@ _ESTIMATE_HTML = """<!doctype html>
   }
   let rows=li.map(x=>'<tr><td>'+x.qty+"x "+x.item+'</td><td class=n>$'+Number(x.amount).toFixed(2)+'</td></tr>').join('');
   let extra=un.length?'<p class=note>Not priced (call us for these): '+un.join(', ')+'.</p>':'';
+  if(data.capped) extra+='<p class=note>For more than '+data.capped+' of one item, call (314) 266-8878 for a bulk quote.</p>';
   let html='<table><thead><tr><th>Item</th><th class=n>Est.</th></tr></thead><tbody>'+rows+'</tbody></table>'
    +'<div class=total><span class=lbl>Estimated total</span><span class=amt>$'+Number(data.total||0).toFixed(2)+'</span></div>'
    +extra
@@ -771,6 +772,8 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
         lines = "\n".join("• %dx %s — $%.2f" % (l["qty"], l["item"], l["amount"]) for l in q["line_items"])
         um = q.get("unmatched") or []
         ums = ("\n(Couldn't price: %s — call us for those.)" % ", ".join(um)) if um else ""
+        if q.get("capped"):
+            ums += "\n(For more than %d of one item, call (314) 266-8878 for a bulk quote.)" % q["capped"]
         return ("Here's your estimate:\n%s\nTotal: about $%.2f.%s\nWant a pickup date?" % (lines, q["total"], ums), {})
     if q.get("unmatched"):
         return ("I couldn't find a price for: %s. I can price boxes, fridges, duffels, TVs, desks, couches, mattresses and more — what do you have?" % ", ".join(q["unmatched"]), {})

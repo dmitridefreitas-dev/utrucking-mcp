@@ -85,18 +85,27 @@ def resolve_item(name, price_book):
     m = difflib.get_close_matches(key, list(price_book), n=1, cutoff=0.82)
     return m[0] if m else None
 
+MAX_QTY = 200  # per-line sanity cap: beyond a dorm-floor's worth, route to a human bulk quote
+
 def price_items(items, price_book):
-    """items: list of (name, qty). Resolves names via aliases + fuzzy match."""
-    lines, total, unmatched = [], 0.0, []
+    """items: list of (name, qty). Resolves names via aliases + fuzzy match.
+    Quantities are clamped to [1, MAX_QTY] so garbage/troll input can't produce a $22M estimate;
+    a `capped` flag is set when any line was clamped so the caller can add a bulk-quote note."""
+    lines, total, unmatched, capped = [], 0.0, [], False
     for name, qty in items:
         try: qty = int(qty)
         except Exception: qty = 1
+        if qty < 1: qty = 1
+        if qty > MAX_QTY: qty = MAX_QTY; capped = True
         key = resolve_item(name, price_book)
         if key is None: unmatched.append(name); continue
         price = price_book[key]; amt = price * qty; total += amt
         lines.append({"item": key.title(), "qty": qty, "unit_price": round(price, 2), "amount": round(amt, 2)})
-    return {"line_items": lines, "total": round(total, 2), "unmatched": unmatched,
-            "summary": "Estimated total ${:.2f} for {} item(s).".format(total, sum(l["qty"] for l in lines))}
+    res = {"line_items": lines, "total": round(total, 2), "unmatched": unmatched,
+           "summary": "Estimated total ${:.2f} for {} item(s).".format(total, sum(l["qty"] for l in lines))}
+    if capped:
+        res["capped"] = MAX_QTY
+    return res
 
 _ONES  = {"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,"eight":8,"nine":9}
 _TEENS = {"ten":10,"eleven":11,"twelve":12,"thirteen":13,"fourteen":14,"fifteen":15,
