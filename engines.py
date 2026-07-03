@@ -74,6 +74,13 @@ ALIASES = {
     "storage box":"utrucking box","shipping box":"utrucking box","carton":"utrucking box","u-haul box":"utrucking box",
     "storage bin":"plastic container","tote bin":"plastic container","commercial bin":"plastic container",
     "storage container":"plastic container","dorm fridge":"mini fridge","refrigerator":"mini fridge",
+    # common dorm items people say that map onto the closest catalog item
+    "bed":"mattress","bunk bed":"mattress","sofa bed":"futon","daybed":"futon",
+    "bed frame":"headboard","bedframe":"headboard",
+    "drawer":"dresser","chest of drawers":"dresser","recliner":"swivel/arm chair",
+    "garment rack":"rolling cart","clothes rack":"rolling cart","clothing rack":"rolling cart",
+    "tv stand":"table","console":"computer","xbox":"computer","playstation":"computer",
+    "ps5":"computer","ps4":"computer","wii":"computer","game console":"computer",
 }
 
 # Things that show up in photos / descriptions but aren't stored items we price — never match these.
@@ -84,7 +91,10 @@ NON_STORAGE = {
     "person","people","hand","wall","floor","ceiling","door","window","room","truck","van","car",
 }
 
-def resolve_item_ex(name, price_book, approx_floor=0.75):
+def resolve_item_ex(name, price_book, approx_floor=0.84):
+    # approx_floor 0.84: catches real spelling variants ("microwave oven" 0.87) but leaves
+    # semantically-different lookalikes ("toaster"~"poster" 0.77, "coffee maker"~"coffee table")
+    # to the AI mapping pass, which understands what the object actually is.
     """Resolve a spoken/typed item name to a catalog key.
     Returns (key, kind) with kind in {'exact','alias','approx','none'}:
       exact/alias — a confident match; approx — the nearest priced item (caller shows the mapping so
@@ -101,6 +111,15 @@ def resolve_item_ex(name, price_book, approx_floor=0.75):
     if m: return (m[0], "exact")
     ma = difflib.get_close_matches(key, list(ALIASES), n=1, cutoff=0.82)
     if ma and ALIASES[ma[0]] in price_book: return (ALIASES[ma[0]], "alias")
+    # word containment — the catalog item is literally named inside the phrase
+    # ("microwave oven" contains "microwave", "storage ottoman" contains "ottoman")
+    words = set(key.split())
+    best = None
+    for cand in list(price_book) + [a for a in ALIASES if ALIASES[a] in price_book]:
+        if all(w in words for w in cand.split()) and (best is None or len(cand) > len(best)):
+            best = cand
+    if best:
+        return (ALIASES.get(best, best), "approx")
     # loose fallback — nearest priced item, flagged approximate so the mapping is shown to the user
     pool = list(price_book) + [a for a in ALIASES if ALIASES[a] in price_book]
     m2 = difflib.get_close_matches(key, pool, n=1, cutoff=approx_floor)
@@ -119,7 +138,7 @@ def price_items(items, price_book):
     qty to [1, MAX_QTY], and aggregates by resolved item. A name that only matched approximately is
     flagged with `matched_from` and summarised in `matched` so the user sees the exact breakdown;
     names with nothing close land in `unmatched`."""
-    order, bykey, unmatched, capped = [], {}, [], False
+    order, bykey, unmatched, unmatched_items, capped = [], {}, [], [], False
     for name, qty in items:
         try: qty = int(qty)
         except Exception: qty = 1
@@ -127,7 +146,7 @@ def price_items(items, price_book):
         if qty > MAX_QTY: qty = MAX_QTY; capped = True
         key, kind = resolve_item_ex(name, price_book)
         if key is None:
-            unmatched.append(str(name)); continue
+            unmatched.append(str(name)); unmatched_items.append((str(name), qty)); continue
         if key not in bykey:
             price = price_book[key]
             line = {"item": key.title(), "qty": 0, "unit_price": round(price, 2), "amount": 0.0}
@@ -145,6 +164,7 @@ def price_items(items, price_book):
            "summary": "Estimated total ${:.2f} for {} item(s).".format(total, sum(l["qty"] for l in lines))}
     matched = [{"from": l["matched_from"], "to": l["item"]} for l in lines if l.get("matched_from")]
     if matched: res["matched"] = matched
+    if unmatched_items: res["unmatched_items"] = unmatched_items   # (name, qty) — lets an AI pass re-price them
     if capped: res["capped"] = MAX_QTY
     return res
 
@@ -215,6 +235,7 @@ def parse_freetext_ex(text, price_book):
     stays 3 desks + 1 lamp. Runs a domain spell-fix first so typos still resolve."""
     low = " " + _fix_spelling(text or "", price_book).lower() + " "
     occ = [False] * len(low)
+    seps = [m.start() for m in _SEPS_RE.finditer(low)]
     hits = []   # [start, end, key_or_None, original_text]
     for ph in sorted(set(list(ALIASES.keys()) + list(price_book.keys())), key=len, reverse=True):
         k = resolve_item(ph, price_book)
@@ -224,10 +245,17 @@ def parse_freetext_ex(text, price_book):
             if any(occ[s:e]): continue
             for i in range(s, e): occ[i] = True
             hits.append([s, e, k, ph])
-    # leftover nouns = possible unknown items (only if not already part of a known phrase)
-    for m in re.finditer(r'\b([a-z]{3,})\b', low):
+    # leftover nouns = possible unknown items; ADJACENT unknown words in the same segment
+    # merge into one phrase ("baseball bat" stays one item, never "baseball" + a dropped "bat")
+    runs = []
+    for m in re.finditer(r'\b([a-z][a-z0-9]{2,})\b', low):   # alphanumeric so "ps5"/"mp3 player" count
         s, e, w = m.start(), m.end(), m.group(1)
         if any(occ[s:e]) or w in _STOP or w in _WORDS: continue
+        if runs and s - runs[-1][1] <= 1 and not any(runs[-1][1] <= p < s for p in seps):
+            runs[-1][1] = e; runs[-1][2] += " " + w
+        else:
+            runs.append([s, e, w])
+    for s, e, w in runs:
         for i in range(s, e): occ[i] = True
         hits.append([s, e, None, w])
     hits.sort(key=lambda h: h[0])
@@ -238,7 +266,6 @@ def parse_freetext_ex(text, price_book):
             qtys.append([m.start(), m.end(), _word_to_int(m.group(1))])
     for m in re.finditer(r'\bx\s*(\d+)\b|\b(\d+)\s*x\b', low):
         qtys.append([m.start(), m.end(), int(m.group(1) or m.group(2))])
-    seps = [m.start() for m in _SEPS_RE.finditer(low)]
     def crosses(a, b):
         lo, hi = min(a, b), max(a, b)
         return any(lo <= p < hi for p in seps)
@@ -253,10 +280,13 @@ def parse_freetext_ex(text, price_book):
         if target is not None:
             qty_of[id(target)] = q[2]
     items = []
+    has_known = any(h[2] is not None for h in hits)
     for h in hits:
         qty = qty_of.get(id(h))
-        if h[2] is None and qty is None:
-            continue                       # unknown stray word with no quantity → drop (likely filler)
+        # an unknown phrase counts as an item if it carries a quantity, or if the text is
+        # clearly a quote (has known items) — otherwise it's likely filler and is dropped
+        if h[2] is None and qty is None and not has_known:
+            continue
         items.append((h[2] if h[2] is not None else h[3], qty if qty is not None else 1))
     return items
 

@@ -365,7 +365,8 @@ async def quote_endpoint(request: Request):
     items = args.get("items")
     payload = ([(i[0], i[1]) for i in items] if isinstance(items, list)
                else (args.get("text") or args.get("name_heard") or ""))
-    return JSONResponse(_quote_items(payload, book))
+    result = _quote_items(payload, book)
+    return JSONResponse(await _ai_map_unmatched(result, book))
 
 
 @mcp.custom_route("/availability", methods=["POST", "GET"])
@@ -451,6 +452,96 @@ async def _post_retry(c, url, headers, payload, tries=3):
     r.raise_for_status(); return r
 
 
+# Each Gemini model has its OWN free-tier quota bucket, so when one is rate-limited
+# the next usually isn't — a chain keeps /ask and /photo_quote alive through 429s.
+_GEMINI_FALLBACKS = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]
+
+
+def _gemini_models():
+    pref = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    return [pref] + [m for m in _GEMINI_FALLBACKS if m != pref]
+
+
+async def _gemini_generate(key, parts, temp=None, json_out=False):
+    """generateContent with retry + model fallback. Raises only if EVERY model fails.
+    temp: set low (e.g. 0.1) for classification tasks that must be consistent run-to-run.
+    json_out: force a pure-JSON response (no markdown fences / prose to strip)."""
+    payload = {"contents": [{"parts": parts}]}
+    cfg = {}
+    if temp is not None: cfg["temperature"] = temp
+    if json_out: cfg["responseMimeType"] = "application/json"
+    if cfg: payload["generationConfig"] = cfg
+    last = None
+    async with httpx.AsyncClient(timeout=60.0) as c:
+        for model in _gemini_models():
+            try:
+                r = await _post_retry(c,
+                    "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
+                    {"x-goog-api-key": key}, payload)
+                return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception as e:
+                last = e
+                continue
+    raise last
+
+
+_MAP_PROMPT = ("You price a student storage service. Map EVERY unknown item to the closest CATALOG item by kind "
+    "and size (a bed -> mattress; a baseball bat -> a skateboard-sized item; small/medium miscellaneous things like "
+    "weights, boards, kitchenware -> 'other box' or 'crate'). A physical household/dorm item MUST always map to "
+    "something — pick the nearest size/weight class even when imperfect. Map to null ONLY for things that are not "
+    "storable objects at all (a pet, a person, food, gibberish). "
+    "CATALOG: %s\nUNKNOWN: %s\nReply with STRICT JSON only, e.g. {\"baseball bat\": \"skateboard\", \"pet llama\": null}")
+
+
+async def _ai_map_unmatched(result, book):
+    """Second-chance matching: send still-unmatched items to the model, price whatever it can map,
+    and show the mapping on the line ('matched from ...'). Leaves truly unpriceable things unmatched.
+    Never raises — on any failure the result is simply returned as-is."""
+    import engines as _e
+    allu = result.get("unmatched_items") or []
+    todo = [(n, q) for n, q in allu if _e._canon(n) not in _e.NON_STORAGE]
+    key = os.getenv("GEMINI_API_KEY")
+    if not todo or not key:
+        return result
+
+    async def _map_batch(names):
+        txt = await _gemini_generate(key, [{"text": _MAP_PROMPT % (", ".join(sorted(book)), ", ".join(names))}],
+                                     temp=0.1, json_out=True)
+        m = re.search(r'\{.*\}', txt, re.S)
+        raw = json.loads(m.group(0)) if m else {}
+        return {str(k).strip().lower(): v for k, v in raw.items()}   # case/space-normalized keys
+
+    try:
+        mapping = await _map_batch([n for n, _ in todo])
+    except Exception:
+        return result
+    # anything the first pass missed gets ONE targeted retry (models occasionally skip entries)
+    missed = [n for n, _ in todo if not isinstance(mapping.get(n.lower()), str)]
+    if missed:
+        try:
+            mapping.update(await _map_batch(missed))
+        except Exception:
+            pass
+    # non-storage supplies skipped above stay listed as not-priced
+    still = [(n, q) for n, q in allu if _e._canon(n) in _e.NON_STORAGE]
+    still_names = [n for n, _ in still]
+    for name, qty in todo:
+        target = mapping.get(name.lower())
+        k = _e.resolve_item(target, book) if isinstance(target, str) else None
+        if k is None:
+            still.append((name, qty)); still_names.append(name); continue
+        price = book[k]
+        result["line_items"].append({"item": k.title(), "qty": qty, "unit_price": round(price, 2),
+                                     "amount": round(price * qty, 2), "matched_from": name, "ai_matched": True})
+        result["total"] = round(result["total"] + price * qty, 2)
+    result["unmatched"] = still_names
+    if still: result["unmatched_items"] = still
+    else: result.pop("unmatched_items", None)
+    result["matched"] = [{"from": l["matched_from"], "to": l["item"]} for l in result["line_items"] if l.get("matched_from")]
+    if not result["matched"]: result.pop("matched", None)
+    return result
+
+
 async def _vision_items(provider, key, img_b64, mime="image/jpeg"):
     async with httpx.AsyncClient(timeout=60.0) as c:
         if provider == "groq":
@@ -468,15 +559,10 @@ async def _vision_items(provider, key, img_b64, mime="image/jpeg"):
                     {"type": "image", "source": {"type": "base64", "media_type": mime, "data": img_b64}}]}]})
             txt = r.json()["content"][0]["text"]
         else:  # gemini (free tier at aistudio.google.com)
-            # gemini-2.5-flash: multimodal + a live free tier (2.0-flash's free quota 429s).
+            # Model fallback chain: each model has its own free-tier quota bucket.
             # Key goes in a header, NOT the URL, so it can never leak into an error/log line.
-            model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-            r = await _post_retry(c,
-                "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
-                {"x-goog-api-key": key},
-                {"contents": [{"parts": [{"text": _VISION_PROMPT},
-                    {"inline_data": {"mime_type": mime, "data": img_b64}}]}]})
-            txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            txt = await _gemini_generate(key, [{"text": _VISION_PROMPT},
+                {"inline_data": {"mime_type": mime, "data": img_b64}}])
     m = re.search(r'\{.*\}', txt, re.S)
     return (json.loads(m.group(0)).get("items", []) if m else [])
 
@@ -539,6 +625,7 @@ async def photo_quote_endpoint(request: Request):
                 l["source"] = src
     else:
         result = _quote_items(pairs, book)
+    result = await _ai_map_unmatched(result, book)
     result["detected"] = detected
     return JSONResponse(result)
 
@@ -874,7 +961,28 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  const log=document.getElementById('log');let state={};
  var VOICE=location.search.indexOf('voice=1')>=0;
  function bubble(cls,val){const d=document.createElement('div');d.className='b '+cls;d.textContent=val;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
- function speak(t){try{if('speechSynthesis'in window){window.speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(String(t).replace(/[*_#]/g,''));u.rate=1.03;window.speechSynthesis.speak(u);}}catch(e){}}
+ /* pick the most human voice on this device: neural/natural voices first, robotic defaults last */
+ var VOICEOBJ=null;
+ function pickVoice(){try{var vs=window.speechSynthesis.getVoices();if(!vs||!vs.length)return null;
+  var en=vs.filter(function(v){return /^en([-_]|$)/i.test(v.lang);});if(!en.length)en=vs;
+  var pref=[/natural/i,/neural/i,/aria|jenny|emma|ava|guy|andrew|brian/i,/google (us|uk) english/i,/google/i,/online/i];
+  for(var i=0;i<pref.length;i++){var m=en.filter(function(v){return pref[i].test(v.name);});if(m.length)return m[0];}
+  return en[0];}catch(e){return null;}}
+ if('speechSynthesis'in window){VOICEOBJ=pickVoice();window.speechSynthesis.onvoiceschanged=function(){if(!VOICEOBJ)VOICEOBJ=pickVoice();};}
+ /* rewrite text so it reads like a person, not a receipt: "5x" -> "5", bullets/dashes -> pauses */
+ function speechText(t){return String(t)
+  .replace(/[*_#]/g,'')
+  .replace(/^•\s*/gm,'')
+  .replace(/(\d+)x\s/gi,'$1 ')
+  .replace(/\s*—\s*/g,', ')
+  .replace(/\$(\d+)\.00\b/g,'$$$1')
+  .replace(/\n+/g,'. ')
+  .replace(/\s{2,}/g,' ').trim();}
+ function speak(t){try{if(!('speechSynthesis'in window))return;window.speechSynthesis.cancel();
+  var chunks=speechText(t).match(/[^.!?]+[.!?]+|[^.!?]+$/g)||[];
+  chunks.forEach(function(s){s=s.trim();if(!s)return;
+   var u=new SpeechSynthesisUtterance(s);if(VOICEOBJ)u.voice=VOICEOBJ;u.rate=1.0;u.pitch=1.0;
+   window.speechSynthesis.speak(u);});}catch(e){}}
  async function api(msg){const r=await fetch('/chat_api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({args:{message:msg,state:state}})});return r.json();}
  async function send(t){bubble('me',t);const wait=bubble('bot','...');
   try{const r=await api(t);state=r.state||{};wait.remove();var rep=r.reply||'...';bubble('bot',rep);if(VOICE)speak(rep);}
@@ -969,13 +1077,11 @@ async def ask_api(request: Request):
     if not key:
         return JSONResponse({"answer": "The analyst model needs GEMINI_API_KEY set. Here's the raw data brief:\n\n" + brief})
     try:
-        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        async with httpx.AsyncClient(timeout=60.0) as c:
-            r = await _post_retry(c, "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
-                {"x-goog-api-key": key}, {"contents": [{"parts": [{"text": _ASK_PROMPT % (brief, q)}]}]})
-        return JSONResponse({"answer": r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()})
+        txt = await _gemini_generate(key, [{"text": _ASK_PROMPT % (brief, q)}])
+        return JSONResponse({"answer": txt.strip()})
     except Exception as e:
-        return JSONResponse({"answer": "Couldn't reach the analyst model right now. Here's the data brief:\n\n" + brief,
+        return JSONResponse({"answer": ("The analyst model is briefly at its free-tier limit — ask again in a minute. "
+                                        "Meanwhile, here are the live numbers it works from:\n\n" + brief),
                              "error": str(e)[:120].replace(key, "***")})
 
 
@@ -1149,10 +1255,10 @@ h1{margin:10px 0 0;font-size:clamp(26px,5vw,38px);text-align:center;font-weight:
   <div class=cards>
    <button class=tool onclick="op('/chat','Assistant chat')">
     <span class=ic><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.7A8 8 0 1 1 21 12z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg></span>
-    <span><h2>Assistant chat</h2><p>Quotes, pickup dates &amp; identity-verified order lookup.</p></span><span class=go>&rsaquo;</span></button>
+    <span><h2>Assistant chat</h2><p>The live phone agent's brain, in text &mdash; quotes, pickups &amp; verified order lookup. Test it here free.</p></span><span class=go>&rsaquo;</span></button>
    <button class=tool onclick="op('/chat?voice=1','Voice assistant')">
     <span class=ic><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>
-    <span><h2>Voice assistant</h2><p>Talk to the same brain in your browser &mdash; hands-free.</p></span><span class=go>&rsaquo;</span></button>
+    <span><h2>Voice assistant</h2><p>Same as calling the live agent &mdash; test by voice with zero per-minute cost.</p></span><span class=go>&rsaquo;</span></button>
    <button class=tool onclick="op('/estimate','Instant estimate')">
     <span class=ic><svg viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.4"/></svg></span>
     <span><h2>Instant estimate</h2><p>Photo, description, or both &rarr; an itemized price in seconds.</p></span><span class=go>&rsaquo;</span></button>
@@ -1163,7 +1269,7 @@ h1{margin:10px 0 0;font-size:clamp(26px,5vw,38px);text-align:center;font-weight:
     <span class=ic><svg viewBox="0 0 24 24"><path d="M4 20V9M10 20V4M16 20v-8M21 20H3"/></svg></span>
     <span><h2>Business insights</h2><p>Live revenue, funnel, demand and data-quality board.</p></span><span class=go>&rsaquo;</span></button>
   </div>
-  <p class=foot><b>Live data.</b> Order details are only shared after identity verification &mdash; the same gate as the phone line.</p>
+  <p class=foot><b>Chat &amp; Voice are the live phone agent</b> &mdash; same brain, same data, here for free testing so no call minutes or tokens are burned. <b>Live data.</b> Order details are only shared after identity verification.</p>
  </div>
 </div>
 <div id=view>
