@@ -12,6 +12,20 @@ def _f(x):
     return " ".join((x or "").split())
 
 
+_UNKNOWN_BLD = {"", "unknown", "n/a", "na", "tbd", "none", "null", "xxx", "?", "-"}
+
+def _is_unknown_building(b):
+    """A building value that is really a placeholder (blank, 'unknown', 'DON'T KNOW YET…', 'xxx')."""
+    b = _f(b).lower()
+    if b in _UNKNOWN_BLD:
+        return True
+    return ("don't know" in b or "dont know" in b or "do not know" in b
+            or "unknown" in b or "xxx" in b or b.startswith("?"))
+
+def _norm_building(b):
+    return "Unknown" if _is_unknown_building(b) else _f(b)
+
+
 def _order_id(row, *keys):
     for k in keys:
         v = _f(row.get(k, ""))
@@ -55,7 +69,7 @@ def compute_metrics(dispatch, service):
     totals, rev_by_building, item_counter, baskets = [], defaultdict(float), Counter(), []
     for r in service:
         t = engines._order_total(r)
-        b = _f(r.get("Building", "")) or "Unknown"
+        b = _norm_building(r.get("Building", ""))
         if t:
             totals.append(t); rev_by_building[b] += t
         items = [(engines._canon(n), int(q)) for n, a, q in engines._ITEM_RE.findall(r.get("Summer Storage Item List", "") or "")]
@@ -108,7 +122,7 @@ def compute_metrics(dispatch, service):
     by_month = Counter()
     for d, c in load.items():
         by_month["%04d-%02d" % (d.year, d.month)] += c
-    bld = Counter(_f(r.get("Building", "")) or "Unknown" for r in dispatch)
+    bld = Counter(_norm_building(r.get("Building", "")) for r in dispatch)
     peak = engines.peak_date(dispatch)
     top_days = sorted(load.items(), key=lambda kv: -kv[1])[:5]
     m["demand"] = {
@@ -133,7 +147,7 @@ def compute_metrics(dispatch, service):
         "repeat_rate_pct": round(100 * len(repeats) / max(len(name_orders), 1), 1),
     }
     # ---- data-quality scorecard (idea #3) ----
-    unknown_b = sum(1 for r in dispatch if not _f(r.get("Building", "")) or _f(r.get("Building", "")).lower() == "unknown")
+    unknown_b = sum(1 for r in dispatch if _is_unknown_building(r.get("Building", "")))
     missing_phone = sum(1 for r in dispatch if not _f(r.get("Phone", "")))
     dup_names = sum(1 for n, c in Counter(engines._canon(r.get("Student", "")) for r in dispatch if _f(r.get("Student", ""))).items() if c > 1)
     nd = len(dispatch) or 1
