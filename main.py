@@ -8,6 +8,7 @@ import difflib
 import re
 import base64
 import datetime
+import analytics
 from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
 from starlette.responses import JSONResponse, HTMLResponse
@@ -320,10 +321,15 @@ async def health(request: Request):
 
 @mcp.custom_route("/", methods=["GET"])
 async def root(request: Request):
+    return HTMLResponse(_DASH_HTML)
+
+
+@mcp.custom_route("/status", methods=["GET"])
+async def status(request: Request):
     return JSONResponse({
         "service": "UTrucking MCP Server",
         "status": "running",
-        "endpoints": ["/lookup_student", "/health"]
+        "tools": ["/app", "/chat", "/estimate", "/ask", "/insights", "/lookup_student", "/health"],
     })
 
 
@@ -807,16 +813,27 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
 <header><b>UTrucking Assistant</b><span class=s>SMS preview - test chat</span></header>
 <div class=note>Preview only - no real texts are sent. Order lookups verify your identity, like the phone line.</div>
 <div id=log></div>
-<form id=f><input id=t autocomplete=off placeholder="Text a message..."><button>Send</button></form>
+<form id=f><button type=button id=mic title="Talk">&#127908;</button><input id=t autocomplete=off placeholder="Text a message..."><button>Send</button></form>
 <script>
  const log=document.getElementById('log');let state={};
+ var VOICE=location.search.indexOf('voice=1')>=0;
  function bubble(cls,val){const d=document.createElement('div');d.className='b '+cls;d.textContent=val;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
+ function speak(t){try{if('speechSynthesis'in window){window.speechSynthesis.cancel();var u=new SpeechSynthesisUtterance(String(t).replace(/[*_#]/g,''));u.rate=1.03;window.speechSynthesis.speak(u);}}catch(e){}}
  async function api(msg){const r=await fetch('/chat_api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({args:{message:msg,state:state}})});return r.json();}
  async function send(t){bubble('me',t);const wait=bubble('bot','...');
-  try{const r=await api(t);state=r.state||{};wait.remove();bubble('bot',r.reply||'...');}
+  try{const r=await api(t);state=r.state||{};wait.remove();var rep=r.reply||'...';bubble('bot',rep);if(VOICE)speak(rep);}
   catch(e){wait.remove();bubble('bot','Sorry, something went wrong - try again.');}}
  document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var inp=document.getElementById('t');var t=inp.value.trim();if(!t){return;}inp.value='';send(t);});
- bubble('bot','Hi! I am the UTrucking assistant (SMS preview). I can quote items, check pickup dates, or look up your order. Try: "quote 5 boxes and a mini fridge", "what days are open?", or "where is my order?"');
+ (function(){var SR=window.SpeechRecognition||window.webkitSpeechRecognition;var mic=document.getElementById('mic');
+   if(!SR){mic.style.display='none';return;}
+   var rec=new SR();rec.lang='en-US';rec.interimResults=false;rec.maxAlternatives=1;
+   rec.onresult=function(e){var t=e.results[0][0].transcript;if(t)send(t);};
+   rec.onend=function(){mic.textContent='🎤';};rec.onerror=function(){mic.textContent='🎤';};
+   mic.addEventListener('click',function(){try{if(window.speechSynthesis)window.speechSynthesis.cancel();mic.textContent='…';rec.start();}catch(e){mic.textContent='🎤';}});
+ })();
+ var GREET='Hi! I am the UTrucking assistant. I can quote items, check pickup dates, or look up your order. Try: "quote 5 boxes and a mini fridge", "what days are open?", or "where is my order?"';
+ bubble('bot',GREET);
+ if(VOICE){document.querySelector('header .s').textContent='Voice preview - tap the mic and talk';}
 </script></body></html>"""
 
 
@@ -824,6 +841,188 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
 async def chat_page(request: Request):
     """SMS-style web preview of the assistant (quote + availability). No PII, no real texts."""
     return HTMLResponse(_CHAT_HTML)
+
+
+# ── Ideas #1-#7: analytics, Ask-your-data copilot, insights dashboard ──
+async def _load_rows():
+    return await asyncio.gather(fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
+
+
+@mcp.custom_route("/insights_api", methods=["GET"])
+async def insights_api(request: Request):
+    d, s = await _load_rows()
+    return JSONResponse(analytics.compute_metrics(d, s) if (d or s) else {})
+
+
+def _metrics_brief(m):
+    dem = m.get("demand", {})
+    ov = m.get("overview", {})
+    return "\n".join([
+        "Revenue total: $%s across %s paid orders (avg $%s, median $%s). Dispatch orders: %s." % (
+            ov.get("revenue"), ov.get("orders_with_revenue"), ov.get("avg_order"), ov.get("median_order"), ov.get("dispatch_orders")),
+        "Revenue by building: " + "; ".join("%s $%s" % (x["building"], x["revenue"]) for x in m.get("revenue_by_building", [])[:10]),
+        "Top items: " + ", ".join("%s x%s" % (x["item"], x["count"]) for x in m.get("top_items", [])[:10]),
+        "Frequently stored together: " + ", ".join("%s+%s (%s)" % (x["a"], x["b"], x["count"]) for x in m.get("top_pairs", [])[:6]),
+        "Average items per order: %s." % m.get("avg_items_per_order"),
+        "Completion funnel: %s." % m.get("funnel"),
+        "Status breakdown: " + ", ".join("%s=%s" % (x["status"], x["count"]) for x in m.get("status_breakdown", [])[:6]),
+        "Orders by month: " + ", ".join("%s=%s" % (x["month"], x["orders"]) for x in dem.get("by_month", [])),
+        "Busiest days: " + ", ".join("%s=%s" % (x["date"], x["orders"]) for x in dem.get("busiest_days", [])),
+        "Top buildings by volume: " + ", ".join("%s=%s" % (x["building"], x["orders"]) for x in dem.get("top_buildings", [])[:8]),
+        "Repeat customers: %s of %s (%s%%)." % (m.get("repeat", {}).get("repeat_customers"),
+            m.get("repeat", {}).get("unique_customers"), m.get("repeat", {}).get("repeat_rate_pct")),
+        "Data quality: %s." % m.get("data_quality"),
+    ])
+
+
+_ASK_PROMPT = ("You are UTrucking's internal data analyst (a student storage & moving company). Answer the "
+    "staff question using ONLY the aggregate business data below. Be concise; lead with the number. If the "
+    "question is about a specific individual customer or any personal detail, refuse and say you only provide "
+    "aggregate business stats. If the data doesn't contain the answer, say so plainly.\n\nDATA:\n%s\n\nQUESTION: %s\n\nANSWER:")
+
+
+@mcp.custom_route("/ask_api", methods=["POST"])
+async def ask_api(request: Request):
+    try: body = await request.json()
+    except Exception: body = {}
+    args = _extract_args(body)
+    q = (args.get("question") or "").strip()
+    if not q:
+        return JSONResponse({"answer": "Ask a business question, e.g. \"which building brings the most revenue?\""})
+    d, s = await _load_rows()
+    m = analytics.compute_metrics(d, s) if (d or s) else {}
+    brief = _metrics_brief(m)
+    key = os.getenv("GEMINI_API_KEY")
+    if not key:
+        return JSONResponse({"answer": "The analyst model needs GEMINI_API_KEY set. Here's the raw data brief:\n\n" + brief})
+    try:
+        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await _post_retry(c, "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
+                {"x-goog-api-key": key}, {"contents": [{"parts": [{"text": _ASK_PROMPT % (brief, q)}]}]})
+        return JSONResponse({"answer": r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()})
+    except Exception as e:
+        return JSONResponse({"answer": "Couldn't reach the analyst model right now. Here's the data brief:\n\n" + brief,
+                             "error": str(e)[:120].replace(key, "***")})
+
+
+_ASK_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Ask Your Data - UTrucking</title><style>
+:root{--navy:#14335f;--orange:#f5a623;--line:#e3e9f2;--mut:#5b6b7f}
+*{box-sizing:border-box}body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;background:#f5f7fb;color:#1f2933}
+header{background:var(--navy);color:#fff;padding:16px 18px}header b{font-size:17px}header .s{display:block;color:#cdd9ee;font-size:12px}
+main{max-width:720px;margin:0 auto;padding:18px 16px 60px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.chip{background:#eef3fb;color:var(--navy);border:1px solid var(--line);border-radius:20px;padding:6px 12px;font-size:13px;cursor:pointer}
+form{display:flex;gap:8px;margin-top:10px}
+input{flex:1;border:1px solid #cdd6e4;border-radius:10px;padding:12px;font:inherit}
+button{background:var(--navy);color:#fff;border:0;border-radius:10px;padding:0 18px;font-weight:700;cursor:pointer}
+#ans{white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:14px;line-height:1.45;display:none}
+.mut{color:var(--mut);font-size:13px}
+</style></head><body>
+<header><b>Ask Your Data</b><span class=s>Internal analyst - aggregate business stats</span></header>
+<main>
+<p class=mut>Ask a plain-English question about the storage operation. Aggregate figures only - no individual customer data.</p>
+<div class=chips id=chips></div>
+<form id=f><input id=q autocomplete=off placeholder="e.g. which building brings the most revenue?"><button>Ask</button></form>
+<div id=ans></div>
+</main><script>
+var EX=["Which building brings the most revenue?","What are the 5 most stored items?","When is the busy season?","What is the average order value?","How many repeat customers do we have?","What data-quality issues should we fix?","What should we upsell with a mini fridge?"];
+var chips=document.getElementById('chips');EX.forEach(function(t){var s=document.createElement('span');s.className='chip';s.textContent=t;s.onclick=function(){document.getElementById('q').value=t;ask();};chips.appendChild(s);});
+var ans=document.getElementById('ans');
+async function ask(){var q=document.getElementById('q').value.trim();if(!q)return;ans.style.display='block';ans.textContent='Thinking...';
+ try{var r=await fetch('/ask_api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({args:{question:q}})});var j=await r.json();ans.textContent=j.answer||'(no answer)';}
+ catch(e){ans.textContent='Something went wrong - try again.';}}
+document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();ask();});
+</script></body></html>"""
+
+
+_INSIGHTS_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Business Insights - UTrucking</title><style>
+:root{--navy:#14335f;--orange:#f5a623;--line:#e3e9f2;--mut:#5b6b7f}
+*{box-sizing:border-box}body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;background:#f5f7fb;color:#1f2933}
+header{background:var(--navy);color:#fff;padding:16px 18px}header b{font-size:17px}header .s{display:block;color:#cdd9ee;font-size:12px}
+main{max-width:900px;margin:0 auto;padding:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0}
+.stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px}
+.stat .n{font-size:22px;font-weight:800;color:var(--navy)}.stat .l{color:var(--mut);font-size:12px;margin-top:2px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
+.card h3{margin:0 0 10px;color:var(--navy);font-size:15px}
+.row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:13px}
+.row .lab{width:130px;flex:none}.row .barwrap{flex:1;background:#eef3fb;border-radius:6px;height:16px;overflow:hidden}
+.row .bar{height:16px;background:var(--navy)}.row .val{width:78px;flex:none;text-align:right;color:var(--mut)}
+.mut{color:var(--mut);font-size:12px}
+</style></head><body>
+<header><b>Business Insights</b><span class=s>Live from the DISPATCH + SERVICE sheets</span></header>
+<main id=root><p class=mut>Loading live data...</p></main>
+<script>
+function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function stat(n,l){return '<div class=stat><div class=n>'+esc(n)+'</div><div class=l>'+esc(l)+'</div></div>';}
+function bars(items,labKey,valKey,fmt){var mx=Math.max.apply(null,items.map(function(x){return x[valKey];}).concat([1]));
+ return items.map(function(x){var w=Math.round(100*x[valKey]/mx);return '<div class=row><div class=lab>'+esc(x[labKey])+'</div><div class=barwrap><div class=bar style="width:'+w+'%"></div></div><div class=val>'+(fmt?fmt(x[valKey]):x[valKey])+'</div></div>';}).join('');}
+function money(n){return '$'+Number(n).toLocaleString();}
+function card(t,i){return '<div class=card><h3>'+t+'</h3>'+i+'</div>';}
+function render(m){var o=m.overview||{},dq=m.data_quality||{},fn=m.funnel||{},dem=m.demand||{},rp=m.repeat||{};var h='';
+ h+='<div class=grid>'+stat(money(o.revenue),'Revenue (season)')+stat(money(o.avg_order),'Avg order')+stat(o.dispatch_orders,'Dispatch orders')+stat(rp.repeat_rate_pct+'%','Repeat customers')+stat(m.avg_items_per_order,'Avg items/order')+stat(dq.unknown_building,'Unknown buildings')+'</div>';
+ h+=card('Revenue by building',bars(m.revenue_by_building||[],'building','revenue',money));
+ h+=card('Top stored items',bars(m.top_items||[],'item','count'));
+ h+=card('Frequently stored together (upsell signals)',(m.top_pairs||[]).map(function(x){return '<div class=row><div class=lab style="width:auto;flex:1">'+esc(x.a)+' + '+esc(x.b)+'</div><div class=val>'+x.count+' orders</div></div>';}).join(''));
+ h+=card('Demand by month',bars(dem.by_month||[],'month','orders'));
+ h+=card('Completion funnel','<div class=mut>orders '+fn.orders+' &rarr; dispatched '+fn.dispatched+' &rarr; completed '+fn.completed+' &rarr; invoiced '+fn.invoiced+' &middot; '+fn.flagged_billing+' billing flags</div>');
+ h+=card('Data-quality scorecard','<div class=row><div class=lab style="flex:1">Unknown building</div><div class=val>'+dq.unknown_building+' ('+dq.unknown_building_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing phone</div><div class=val>'+dq.missing_phone+' ('+dq.missing_phone_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing invoice</div><div class=val>'+dq.missing_invoice+'</div></div><div class=row><div class=lab style="flex:1">$0 / missing total</div><div class=val>'+dq.zero_or_missing_total+'</div></div>');
+ document.getElementById('root').innerHTML=h;}
+fetch('/insights_api').then(function(r){return r.json();}).then(render).catch(function(){document.getElementById('root').innerHTML='<p class=mut>Could not load insights.</p>';});
+</script></body></html>"""
+
+
+_DASH_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>UTrucking AI Toolkit</title><style>
+:root{--navy:#14335f;--orange:#f5a623;--line:#e3e9f2;--mut:#5b6b7f}
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;background:#f5f7fb;color:#1f2933;height:100vh;display:flex;flex-direction:column}
+#home{flex:1;overflow:auto}
+.hero{background:var(--navy);color:#fff;padding:26px 20px}.hero .ey{text-transform:uppercase;letter-spacing:.16em;font-size:11px;font-weight:700;color:var(--orange)}
+.hero h1{margin:4px 0 0;font-size:24px}.hero p{margin:6px 0 0;color:#cdd9ee;font-size:14px}
+.cards{max-width:820px;margin:0 auto;padding:18px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.tool{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;cursor:pointer;box-shadow:0 1px 3px rgba(20,51,95,.06)}
+.tool:active{transform:translateY(1px)}.tool .ic{font-size:26px}.tool h2{margin:8px 0 3px;font-size:17px;color:var(--navy)}.tool p{margin:0;color:var(--mut);font-size:13px}
+#view{display:none;flex:1;flex-direction:column;height:100vh}
+#bar{background:var(--navy);color:#fff;display:flex;align-items:center;gap:12px;padding:10px 14px}
+#bar button{background:rgba(255,255,255,.16);color:#fff;border:0;border-radius:8px;padding:8px 12px;font-weight:700;cursor:pointer;font-size:14px}
+#bar span{font-weight:600}#frame{flex:1;border:0;width:100%}
+.foot{max-width:820px;margin:0 auto;padding:0 16px 24px;color:var(--mut);font-size:12px}
+</style></head><body>
+<div id=home>
+ <div class=hero><div class=ey>University Trucking</div><h1>AI Toolkit</h1><p>Pick a tool. Press Esc or Back to return here.</p></div>
+ <div class=cards>
+  <div class=tool onclick="op('/chat','Assistant chat')"><div class=ic>&#128172;</div><h2>Assistant chat</h2><p>Quotes, pickup dates &amp; order lookup - the SMS/voice brain.</p></div>
+  <div class=tool onclick="op('/chat?voice=1','Voice assistant')"><div class=ic>&#127908;</div><h2>Voice assistant</h2><p>Talk to the assistant in your browser - free, no Retell minutes.</p></div>
+  <div class=tool onclick="op('/estimate','Instant estimate')"><div class=ic>&#128247;</div><h2>Instant estimate</h2><p>Photo or text &rarr; an itemized price in seconds.</p></div>
+  <div class=tool onclick="op('/ask','Ask your data')"><div class=ic>&#128269;</div><h2>Ask your data</h2><p>Plain-English questions about revenue, items &amp; demand.</p></div>
+  <div class=tool onclick="op('/insights','Business insights')"><div class=ic>&#128202;</div><h2>Business insights</h2><p>Live dashboard: revenue, funnel, demand, data quality.</p></div>
+ </div>
+ <div class=foot>All tools read live data. The assistant verifies identity before sharing any order details.</div>
+</div>
+<div id=view><div id=bar><button onclick=back()>&larr; Back</button><span id=vtitle></span></div><iframe id=frame></iframe></div>
+<script>
+function op(url,title){document.getElementById('frame').src=url;document.getElementById('vtitle').textContent=title;document.getElementById('home').style.display='none';document.getElementById('view').style.display='flex';}
+function back(){document.getElementById('view').style.display='none';document.getElementById('frame').src='about:blank';document.getElementById('home').style.display='';}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')back();});
+</script></body></html>"""
+
+
+@mcp.custom_route("/ask", methods=["GET"])
+async def ask_page(request: Request):
+    return HTMLResponse(_ASK_HTML)
+
+
+@mcp.custom_route("/insights", methods=["GET"])
+async def insights_page(request: Request):
+    return HTMLResponse(_INSIGHTS_HTML)
+
+
+@mcp.custom_route("/app", methods=["GET"])
+async def dashboard_page(request: Request):
+    return HTMLResponse(_DASH_HTML)
 
 
 app = mcp.streamable_http_app()
