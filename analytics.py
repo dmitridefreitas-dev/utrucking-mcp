@@ -150,6 +150,36 @@ def compute_metrics(dispatch, service):
         "peak_date": str(peak) if peak else None,
         "busiest_days": [{"date": str(d), "orders": c} for d, c in top_days],
     }
+    # ---- next-season forecast (Wave D): project demand from this season's shape ----
+    # Anchored on days-relative-to-peak so it transfers to any year's move-out calendar.
+    fc = {"basis": "this season's booking distribution", "season_total": len(dispatch)}
+    if load and peak:
+        offsets = []
+        for d, c in load.items():
+            off = (d - peak).days
+            if -14 <= off <= 21:                       # the move-out window around peak
+                offsets.append((off, c))
+        offsets.sort(key=lambda x: -x[1])
+        def _lbl(off):
+            if off == 0: return "peak day"
+            return ("%d day%s %s peak" % (abs(off), "s" if abs(off) != 1 else "",
+                                          "before" if off < 0 else "after"))
+        fc["peak_window"] = [{"offset": off, "label": _lbl(off), "orders": c,
+                              "crews_needed": -(-c // engines.JOBS_PER_CREW)}   # ceil
+                             for off, c in offsets[:8]]
+        window_total = sum(c for _, c in offsets)
+        fc["move_out_window_orders"] = window_total
+        fc["move_out_window_share_pct"] = round(100 * window_total / max(len(dispatch), 1), 1)
+        aug = sum(v for k, v in by_month.items() if k.endswith("-08"))
+        fc["return_season"] = {"orders": aug, "share_pct": round(100 * aug / max(len(dispatch), 1), 1)}
+        top_bldgs = [x for x in bld.most_common(9) if x[0] not in ("Unknown", "Off-Campus")][:8]
+        fc["building_shares"] = [{"building": b, "share_pct": round(100 * c / max(len(dispatch), 1), 1)}
+                                 for b, c in top_bldgs]
+        peak_orders = offsets[0][1] if offsets else 0
+        fc["note"] = ("At %d pickups per crew, the projected peak day needs %d crews — versus %d scheduled "
+                      "this season. Either add crews for peak week or keep steering bookings to open days."
+                      % (engines.JOBS_PER_CREW, -(-peak_orders // engines.JOBS_PER_CREW), engines.crews_for(peak)))
+    m["forecast"] = fc
     # ---- repeat customers / LTV (idea #7) ----
     name_orders, name_rev = Counter(), defaultdict(float)
     for r in service:

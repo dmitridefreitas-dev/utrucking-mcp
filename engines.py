@@ -438,8 +438,16 @@ def dispatch_plan(dispatch_rows, date):
     clusters = sorted(stops.items(), key=lambda kv: -len(kv[1]))
     total = sum(len(v) for v in stops.values())
     crews = crews_for(d) if d else 2
+    # greedy crew split: biggest building cluster goes to the least-loaded crew,
+    # so each crew works a compact set of buildings with a balanced stop count
+    bins = [{"crew": i + 1, "stops": 0, "buildings": []} for i in range(max(crews, 1))]
+    for b, v in clusters:
+        tgt = min(bins, key=lambda x: x["stops"])
+        tgt["buildings"].append(b)
+        tgt["stops"] += len(v)
     return {"date": str(d) if d else None, "total_stops": total, "buildings": len(stops),
             "crews_available": crews, "avg_stops_per_crew": round(total / max(crews, 1), 1),
+            "crew_plan": bins,
             "route": [{"building": b, "stops": len(v), "orders": v} for b, v in clusters]}
 
 # ========================== C. BILLING GUARD =============================

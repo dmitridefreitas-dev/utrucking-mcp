@@ -114,7 +114,7 @@ def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list
     return None, []
 
 
-async def do_lookup_student(name_heard: str) -> dict:
+async def do_lookup_student(name_heard: str, order_hint: str = "") -> dict:
     if not name_heard or not name_heard.strip():
         return {
             "status": "not_found",
@@ -128,10 +128,39 @@ async def do_lookup_student(name_heard: str) -> dict:
         )
     except Exception:
         return {"status": "error", "message": "I'm having trouble reaching our records right now."}
-    return _build_order_result(name_heard, dispatch_rows, service_rows)
+    return _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
 
 
-def _build_order_result(name_heard: str, dispatch_rows, service_rows) -> dict:
+def _order_label(row):
+    """Short human label for one order row: 'Summer Storage #13851 (5/6/2026)'."""
+    parts = [(row.get("Service") or "").strip() or "Order"]
+    oid = (row.get("ID") or "").strip()
+    if oid: parts.append(oid)
+    d = (row.get("Date") or "").strip()
+    return " ".join(parts) + ((" (%s)" % d) if d else "")
+
+
+def _pick_order_row(rows, hint):
+    """Choose the order row that best matches the caller's words (order #, service type, month)."""
+    hint = (hint or "").lower()
+    digits = re.sub(r"\D", "", hint)
+    best, best_score = None, -1
+    for r in rows:
+        score = 0
+        oid = re.sub(r"\D", "", r.get("ID") or "")
+        if digits and oid and (digits in oid or oid in digits): score += 4
+        svc = (r.get("Service") or "").lower()
+        for w in ("storage", "return", "move", "delivery", "rental", "summer"):
+            if w in hint and w in svc: score += 2
+        d = _find_date(r.get("Date") or "")
+        mo = _find_month(hint)
+        if d and mo and d.month == mo: score += 3
+        if score > best_score:
+            best, best_score = r, score
+    return best if best_score > 0 else rows[-1]      # no signal → most recent
+
+
+def _build_order_result(name_heard: str, dispatch_rows, service_rows, order_hint: str = "") -> dict:
     def clean(s: str) -> str:
         return " ".join((s or "").split())
 
@@ -171,15 +200,35 @@ def _build_order_result(name_heard: str, dispatch_rows, service_rows) -> dict:
     confirmed = best
     confirmed_lower = confirmed.lower()
 
-    dispatch_match = None
-    for row in dispatch_rows:
-        if clean(row.get("Student") or "").lower() == confirmed_lower:
-            dispatch_match = row  # keep iterating — last row = most recent order
+    d_rows = [r for r in dispatch_rows if clean(r.get("Student") or "").lower() == confirmed_lower]
+    # distinct orders = distinct non-blank order IDs (repeat customers: storage + return, etc.)
+    seen_ids, distinct = set(), []
+    for r in d_rows:
+        oid = clean(r.get("ID") or "")
+        k = oid or ("row%d" % len(distinct))
+        if oid and oid in seen_ids:
+            continue
+        seen_ids.add(k); distinct.append(r)
 
+    order_choices = None
+    if len(distinct) > 1:
+        order_choices = [{"order_id": clean(r.get("ID") or ""), "service": clean(r.get("Service") or ""),
+                          "date": clean(r.get("Date") or ""), "label": _order_label(r)} for r in distinct]
+        dispatch_match = _pick_order_row(distinct, order_hint) if order_hint else distinct[-1]
+    else:
+        dispatch_match = d_rows[-1] if d_rows else None
+
+    # pair the SERVICE row to the chosen order by Order# when possible, else most recent by name
     service_match = None
+    want_id = clean((dispatch_match or {}).get("ID") or "").lstrip("#").strip()
     for row in service_rows:
         if clean(row.get("Student Name") or "").lower() == confirmed_lower:
-            service_match = row  # keep iterating — last row = most recent order
+            service_match = service_match or row
+            sid = clean(row.get("Order#:") or row.get("Order #") or "").lstrip("#").strip()
+            if want_id and sid and sid == want_id:
+                service_match = row; break
+            if not want_id:
+                service_match = row   # keep iterating — last row = most recent
 
     # Pull all fields
     def val(row, *keys):
@@ -239,7 +288,7 @@ def _build_order_result(name_heard: str, dispatch_rows, service_rows) -> dict:
         summary_parts.append(service)
     message = ", ".join(summary_parts) + "."
 
-    return {
+    result = {
         "status": "found",
         "confirmed_name": confirmed,
         "message": message,
@@ -268,6 +317,15 @@ def _build_order_result(name_heard: str, dispatch_rows, service_rows) -> dict:
         "date_completed": date_completed,
         "pickup_completed": pickup_completed,
     }
+    if order_choices:
+        result["order_count"] = len(order_choices)
+        result["order_choices"] = order_choices
+        if not order_hint:
+            result["needs_order_choice"] = True
+            result["message"] = ("Got it — %s. I found %d orders: %s. Which one do you mean?"
+                                 % (confirmed, len(order_choices),
+                                    "; ".join(c["label"] for c in order_choices[:4])))
+    return result
 
 
 def _extract_args(body: dict) -> dict:
@@ -276,13 +334,30 @@ def _extract_args(body: dict) -> dict:
     return body
 
 
+# ── Staff-key gate for PII / ops endpoints ──────────────────────────
+# When API_SECRET is set in the environment, endpoints that return customer PII or
+# internal ops data require the x-utrucking-key header. Unset = open (safe rollout:
+# callers can start sending the header before enforcement is switched on).
+API_SECRET = os.getenv("API_SECRET", "")
+
+
+def _authorized(request) -> bool:
+    return (not API_SECRET) or request.headers.get("x-utrucking-key", "") == API_SECRET
+
+
+def _unauthorized():
+    return JSONResponse({"status": "unauthorized",
+                         "message": "This endpoint needs a valid staff key (x-utrucking-key header)."},
+                        status_code=401)
+
+
 @mcp.custom_route("/lookup_student", methods=["POST", "GET"])
 async def lookup_student_endpoint(request: Request):
     if request.method == "GET":
         return JSONResponse({
             "endpoint": "/lookup_student",
             "method": "POST",
-            "expects": {"args": {"name_heard": "string"}},
+            "expects": {"args": {"name_heard": "string", "order_hint": "optional - order #, service or month if the caller has multiple orders"}},
             "returns": {
                 "status": "found | confirm | not_found | error",
                 "confirmed_name": "exact name from records",
@@ -291,16 +366,20 @@ async def lookup_student_endpoint(request: Request):
                 "...": "all order fields for agent follow-up answers"
             }
         })
+    if not _authorized(request):
+        return _unauthorized()
     try:
         body = await request.json()
     except Exception:
         body = {}
     args = _extract_args(body)
-    return JSONResponse(await do_lookup_student(args.get("name_heard", "")))
+    return JSONResponse(await do_lookup_student(args.get("name_heard", ""), args.get("order_hint", "")))
 
 
 @mcp.custom_route("/debug_sheets", methods=["GET"])
 async def debug_sheets(request: Request):
+    if not _authorized(request):
+        return _unauthorized()
     dispatch_rows, service_rows = await asyncio.gather(
         fetch_csv_rows(DISPATCH_CSV_URL),
         fetch_csv_rows(SERVICE_CSV_URL),
@@ -335,14 +414,16 @@ async def status(request: Request):
 
 
 @mcp.tool()
-async def lookup_student(name_heard: str) -> str:
+async def lookup_student(name_heard: str, order_hint: str = "") -> str:
     """
     Look up a UTrucking student order by the name heard over the phone.
     Handles fuzzy/misspelled names. Returns a short message (name, order ID, service)
     plus all order fields so the agent can answer any follow-up question without
     calling another function. Also returns available_fields listing what data exists.
+    If the student has multiple orders the result lists order_choices — pass the
+    caller's answer (order #, service type, or month) back as order_hint.
     """
-    return json.dumps(await do_lookup_student(name_heard))
+    return json.dumps(await do_lookup_student(name_heard, order_hint))
 
 
 # ── Wave A/B/C engine endpoints ─────────────────────────────────────
@@ -392,6 +473,8 @@ async def availability_endpoint(request: Request):
 @mcp.custom_route("/billing_audit", methods=["GET", "POST"])
 async def billing_audit_endpoint(request: Request):
     """C) Flag $0 / missing-invoice / missing-order-id leakage across the service sheet."""
+    if not _authorized(request):
+        return _unauthorized()
     service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
     return JSONResponse(_billing_audit(service_rows))
 
@@ -418,6 +501,8 @@ async def dispatch_plan_endpoint(request: Request):
     if request.method == "GET":
         return JSONResponse({"endpoint": "/dispatch_plan", "method": "POST",
                              "expects": {"args": {"date": "5/7/2026"}}})
+    if not _authorized(request):
+        return _unauthorized()
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -804,6 +889,27 @@ def _cv(x):
     return "" if x.lower() in ("(no date)", "n/a", "na", "-", "tbd", "none", "null") else x
 
 
+def _pretty_items(s):
+    """Turn the sheet's machine item string
+    'UTrucking Box (Amount: 22.00 USD, Quantity: 4); Mattress (Amount: 33.00 USD, Quantity: 1)'
+    into a human 'UTrucking Box x4, Mattress x1'. Falls back to the raw text if nothing parses."""
+    s = (s or "").strip()
+    if not s:
+        return ""
+    try:
+        import engines as _e
+        parts = _e._ITEM_RE.findall(s)
+    except Exception:
+        parts = []
+    if not parts:
+        return s
+    out = []
+    for name, _amt, qty in parts:
+        nm = " ".join(name.split())
+        out.append("%s x%s" % (nm, qty) if qty and qty != "1" else nm)
+    return ", ".join(out)
+
+
 def _reveal_order(rec):
     out = ["You're verified. Here's your order:"]
     st = _cv(rec.get("order_status")) or _cv(rec.get("dispatch_status"))
@@ -812,8 +918,8 @@ def _reveal_order(rec):
     where = " ".join(x for x in [_cv(rec.get("building")), _cv(rec.get("room"))] if x)
     if when or where:
         out.append("• Pickup: " + (when or "date TBD") + (" at " + where if where else ""))
-    items = _cv(rec.get("items_list")) or _cv(rec.get("product")) or _cv(rec.get("boxes"))
-    if items: out.append("• Items: " + items[:160])
+    items = _pretty_items(_cv(rec.get("items_list"))) or _cv(rec.get("product")) or _cv(rec.get("boxes"))
+    if items: out.append("• Items: " + items[:200])
     if _cv(rec.get("invoice_id")): out.append("• Invoice: " + rec["invoice_id"])
     if _cv(rec.get("order_id")): out.append("• Order #: " + rec["order_id"])
     out.append("Anything else?")
@@ -824,6 +930,24 @@ def _reveal_order(rec):
 # names against a target. In-memory (resets on redeploy) — raises the bar, cheap, no deps.
 _VERIFY_FAILS = {}                 # canonical name -> [fail_count, first_fail_epoch]
 _VERIFY_MAX, _VERIFY_WINDOW = 5, 15 * 60
+
+# Second layer: per-IP. Stops one machine from rotating through MANY names.
+_IP_FAILS = {}                     # ip -> [fail_count, first_fail_epoch]
+_IP_MAX, _IP_WINDOW = 15, 60 * 60
+
+
+def _ip_locked(ip):
+    ent = _IP_FAILS.get(ip)
+    if not ent:
+        return False
+    if time.time() - ent[1] > _IP_WINDOW:
+        _IP_FAILS.pop(ip, None); return False
+    return ent[0] >= _IP_MAX
+
+
+def _ip_fail(ip):
+    ent = _IP_FAILS.setdefault(ip, [0, time.time()])
+    ent[0] += 1
 
 
 def _verify_locked(name):
@@ -845,7 +969,7 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
         nm = " ".join((state.get("name") or "").lower().split())
         if _verify_locked(nm):
             return ("Too many verification attempts for that name. For security, please call the team at (314) 266-8878.", {})
-        rec = _build_order_result(state.get("name", ""), dispatch_rows, service_rows)
+        rec = _build_order_result(state.get("name", ""), dispatch_rows, service_rows, state.get("hint", ""))
         if rec.get("status") != "found":
             return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
         b = (rec.get("building") or "").lower(); low = text.lower().strip()
@@ -857,8 +981,22 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
             return (_reveal_order(rec), {})
         _verify_fail(nm)
         return ("That doesn't match what we have, so I can't share the order details. Please call the team at (314) 266-8878.", {})
+    if state.get("step") == "order":
+        # repeat customer picked which order ("the storage one", "the August return", an order #)
+        rec = _build_order_result(state.get("name", ""), dispatch_rows, service_rows, text)
+        if rec.get("status") != "found":
+            return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
+        ask = ("what building is your pickup at" if rec.get("building")
+               else ("the last 4 digits of your phone" if rec.get("phone") else "your order number"))
+        return ("Got it — %s. To confirm it's you, %s?" % (_cv(rec.get("service")) or "that order", ask),
+                {"intent": "lookup", "step": "verify", "name": rec["confirmed_name"], "hint": text})
     rec = _build_order_result(text, dispatch_rows, service_rows)
     if rec.get("status") == "found":
+        if rec.get("needs_order_choice"):
+            return ("I found %d orders under %s: %s. Which one do you mean?"
+                    % (rec["order_count"], rec["confirmed_name"],
+                       "; ".join(c["label"] for c in rec["order_choices"][:4])),
+                    {"intent": "lookup", "step": "order", "name": rec["confirmed_name"]})
         ask = ("what building is your pickup at" if rec.get("building")
                else ("the last 4 digits of your phone" if rec.get("phone") else "your order number"))
         return ("I found an order under %s. To confirm it's you, %s?" % (rec["confirmed_name"], ask),
@@ -948,7 +1086,13 @@ async def chat_api(request: Request):
     dispatch_rows, service_rows = await asyncio.gather(
         fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
     book = build_price_book(service_rows) if service_rows else {}
+    ip = (request.client.host if request.client else "") or "?"
+    if state.get("step") == "verify" and _ip_locked(ip):
+        return JSONResponse({"reply": "Too many verification attempts from this connection. "
+                                      "Please call the team at (314) 266-8878.", "state": {}})
     reply, new_state = _chat_reply(args.get("message", ""), state, dispatch_rows, service_rows, book)
+    if state.get("step") == "verify" and reply.startswith("That doesn't match"):
+        _ip_fail(ip)
     # parity with /estimate and the phone line: if the quote had unpriceable items,
     # give the AI mapper a shot and re-render the reply when it places something
     if not new_state and ("Couldn't price:" in reply or "couldn't find a price for" in reply):
@@ -1213,6 +1357,10 @@ function render(m){var o=m.overview||{},dq=m.data_quality||{},fn=m.funnel||{},de
  h+=card('Frequently stored together (upsell signals)',(m.top_pairs||[]).map(function(x){return '<div class=row><div class=lab style="width:auto;flex:1">'+esc(x.a)+' + '+esc(x.b)+'</div><div class=val>'+x.count+' orders</div></div>';}).join(''));
  h+=card('Pricing levers (+$1 on the item &asymp; extra $/season)',(m.pricing||[]).slice(0,8).map(function(x){return '<div class=row><div class=lab style="width:auto;flex:1">'+esc(x.item)+' &mdash; $'+x.unit_price+' &times; '+x.units_sold+' sold ('+x.revenue_share_pct+'% of revenue)</div><div class=val>+$'+x["extra_per_$1_increase"]+'</div></div>';}).join('')+'<div class=mut style="margin-top:6px">Rough sensitivity: +$1 on an item adds about its units-sold in season revenue, minus any demand drop. Price changes are a management call.</div>');
  h+=card('Demand by month',bars(dem.by_month||[],'month','orders'));
+ var fc=m.forecast||{};
+ if(fc.peak_window){h+=card('Next-season planner (projected from this season)',
+  (fc.peak_window||[]).map(function(x){return '<div class=row><div class=lab style="width:150px">'+esc(x.label)+'</div><div class=barwrap><div class=bar style="width:'+Math.round(100*x.orders/fc.peak_window[0].orders)+'%"></div></div><div class=val>'+x.orders+' &middot; '+x.crews_needed+' crews</div></div>';}).join('')
+  +'<div class=mut style="margin-top:6px">'+esc(fc.note||'')+' Return season (Aug): '+((fc.return_season||{}).orders||0)+' orders ('+((fc.return_season||{}).share_pct||0)+'% of the year).</div>');}
  h+=card('Completion funnel','<div class=mut>orders '+fn.orders+' &rarr; dispatched '+fn.dispatched+' &rarr; completed '+fn.completed+' &rarr; invoiced '+fn.invoiced+' &middot; '+fn.flagged_billing+' billing flags</div>');
  h+=card('Data-quality scorecard','<div class=row><div class=lab style="flex:1">Unknown building</div><div class=val>'+dq.unknown_building+' ('+dq.unknown_building_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing phone</div><div class=val>'+dq.missing_phone+' ('+dq.missing_phone_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing invoice</div><div class=val>'+dq.missing_invoice+'</div></div><div class=row><div class=lab style="flex:1">$0 / missing total</div><div class=val>'+dq.zero_or_missing_total+'</div></div>');
  document.getElementById('root').innerHTML=h;}
@@ -1257,7 +1405,7 @@ h1{margin:10px 0 0;font-size:clamp(26px,5vw,38px);text-align:center;font-weight:
  transition:transform .25s ease,border-color .25s ease,box-shadow .25s ease;
  opacity:0;transform:translateY(16px);animation:rise .6s cubic-bezier(.2,.7,.3,1) forwards;will-change:transform}
 .tool:nth-child(1){animation-delay:.05s}.tool:nth-child(2){animation-delay:.12s}.tool:nth-child(3){animation-delay:.19s}
-.tool:nth-child(4){animation-delay:.26s}.tool:nth-child(5){animation-delay:.33s}
+.tool:nth-child(4){animation-delay:.26s}.tool:nth-child(5){animation-delay:.33s}.tool:nth-child(6){animation-delay:.4s}
 @keyframes rise{to{opacity:1;transform:translateY(0)}}
 .tool:hover,.tool:focus-visible{border-color:var(--ring);box-shadow:0 6px 30px rgba(0,0,0,.35),0 0 0 1px var(--ring) inset;outline:none}
 .tool:active{transform:translateY(1px) !important}
@@ -1292,7 +1440,7 @@ h1{margin:10px 0 0;font-size:clamp(26px,5vw,38px);text-align:center;font-weight:
  <div class=wrap>
   <div class=ey>University Trucking</div>
   <h1>AI Toolkit</h1>
-  <p class=sub>Five tools, one place &mdash; quotes, pickups, order lookup and live business intelligence.</p>
+  <p class=sub>Six tools, one place &mdash; quotes, pickups, order lookup, live business intelligence and crew dispatch.</p>
   <div class=hubwrap><div class=hub aria-hidden=true>
    <div class=ring></div><div class=ring2></div>
    <div class=orb><i></i></div>
@@ -1313,7 +1461,10 @@ h1{margin:10px 0 0;font-size:clamp(26px,5vw,38px);text-align:center;font-weight:
     <span><h2>Ask your data</h2><p>Plain-English questions on revenue, demand &amp; pricing.</p></span><span class=go>&rsaquo;</span></button>
    <button class=tool onclick="op('/insights','Business insights')">
     <span class=ic><svg viewBox="0 0 24 24"><path d="M4 20V9M10 20V4M16 20v-8M21 20H3"/></svg></span>
-    <span><h2>Business insights</h2><p>Live revenue, funnel, demand and data-quality board.</p></span><span class=go>&rsaquo;</span></button>
+    <span><h2>Business insights</h2><p>Live revenue, funnel, demand forecast and data quality.</p></span><span class=go>&rsaquo;</span></button>
+   <button class=tool onclick="op('/ops','Ops command center')">
+    <span class=ic><svg viewBox="0 0 24 24"><rect x="2.5" y="8" width="12" height="9"/><path d="M14.5 10h4L21 13v4h-2M2.5 17h12M7 20.5a1.8 1.8 0 1 0 .01 0M17 20.5a1.8 1.8 0 1 0 .01 0"/></svg></span>
+    <span><h2>Ops command center</h2><p>Staff: daily crew plan, building routes &amp; printable run sheets.</p></span><span class=go>&rsaquo;</span></button>
   </div>
   <p class=foot><b>Chat &amp; Voice are the live phone agent</b> &mdash; same brain, same data, here for free testing so no call minutes or tokens are burned. <b>Live data.</b> Order details are only shared after identity verification.</p>
  </div>
@@ -1357,6 +1508,99 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')back();});
   c.addEventListener('pointerleave',function(){c.style.transform='';});});
 })();
 </script></body></html>"""
+
+
+_OPS_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Ops Command Center - UTrucking</title><style>
+:root{--navy:#14335f;--orange:#f5a623;--line:#e3e9f2;--mut:#5b6b7f;--space0:#070d1a;--space1:#16305c}
+*{box-sizing:border-box}body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;background:#f5f7fb;color:#1f2933}
+header{background:linear-gradient(150deg,var(--space0) 0%,#122a52 65%,var(--space1) 100%);color:#fff;padding:16px 18px;position:relative;overflow:hidden}
+header:after{content:"";position:absolute;inset:0;pointer-events:none;background-image:
+ radial-gradient(1.2px 1.2px at 12% 30%,rgba(255,255,255,.7),transparent 60%),
+ radial-gradient(1px 1px at 30% 72%,rgba(255,255,255,.5),transparent 60%),
+ radial-gradient(1.4px 1.4px at 47% 22%,rgba(255,217,149,.8),transparent 60%),
+ radial-gradient(1px 1px at 64% 62%,rgba(255,255,255,.45),transparent 60%),
+ radial-gradient(1.2px 1.2px at 80% 32%,rgba(255,255,255,.6),transparent 60%)}
+header>*{position:relative}header b{font-size:17px}header .s{display:block;color:#aebfda;font-size:12px}
+header .ey{display:block;text-transform:uppercase;letter-spacing:.28em;font-size:10px;font-weight:700;color:var(--orange);margin-bottom:2px}
+main{max-width:960px;margin:0 auto;padding:16px}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+.controls label{font-size:13px;color:var(--mut)}
+input[type=date],input[type=password]{border:1px solid #cdd6e4;border-radius:8px;padding:9px 10px;font:inherit;font-size:15px}
+button{background:var(--navy);color:#fff;border:0;border-radius:9px;padding:10px 16px;font-weight:700;cursor:pointer;font-family:inherit}
+button.ghost{background:#eef3fb;color:var(--navy)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:12px 0}
+.stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+.stat .n{font-size:21px;font-weight:800;color:var(--navy)}.stat .l{color:var(--mut);font-size:12px;margin-top:2px}
+.crew{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin:10px 0;break-inside:avoid}
+.crew h3{margin:0 0 6px;color:var(--navy);font-size:15px;display:flex;justify-content:space-between}
+.crew h3 .ct{color:var(--mut);font-weight:600;font-size:13px}
+.bld{margin:8px 0 2px;font-weight:650;font-size:14px;color:#1e5aa8;cursor:pointer}
+.bld .n{color:var(--mut);font-weight:500;font-size:12.5px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin:4px 0 8px}
+th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.mut{color:var(--mut);font-size:12.5px}.err{color:#b23b3b;font-size:14px;margin:10px 0}
+#keybox{display:none}
+@media print{header,.controls,#keybox{display:none}body{background:#fff}.crew{border:0;page-break-inside:avoid}
+ .crew h3{border-bottom:2px solid #000}main{max-width:none;padding:0}}
+</style></head><body>
+<header><span class=ey>University Trucking</span><b>Ops Command Center</b><span class=s>Daily dispatch plan - crews, buildings, run sheets (staff only)</span></header>
+<main>
+ <div class=controls>
+  <label>Pickup day</label><input type=date id=day>
+  <button onclick=load()>Build plan</button>
+  <button class=ghost onclick=window.print()>Print run sheets</button>
+  <span class=mut id=msg></span>
+ </div>
+ <div class=controls id=keybox>
+  <label>Staff key</label><input type=password id=key placeholder="x-utrucking-key">
+  <button onclick="saveKey()">Unlock</button>
+  <span class=mut>Ask the admin for the ops key.</span>
+ </div>
+ <div id=out></div>
+</main><script>
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function hdrs(){var h={'Content-Type':'application/json'};var k=localStorage.getItem('utk');if(k)h['x-utrucking-key']=k;return h;}
+function saveKey(){localStorage.setItem('utk',document.getElementById('key').value.trim());document.getElementById('keybox').style.display='none';load();}
+async function load(){
+ var d=document.getElementById('day').value;if(!d)return;
+ var m=document.getElementById('msg');m.textContent='Building plan...';
+ try{
+  var r=await fetch('/dispatch_plan',{method:'POST',headers:hdrs(),body:JSON.stringify({args:{date:d}})});
+  if(r.status===401){document.getElementById('keybox').style.display='flex';m.textContent='Staff key required.';return;}
+  var p=await r.json();m.textContent='';render(p,d);
+ }catch(e){m.textContent='Could not load the plan - try again.';}}
+function render(p,d){
+ var h='';
+ h+='<div class=grid>'
+  +'<div class=stat><div class=n>'+(p.total_stops||0)+'</div><div class=l>Stops</div></div>'
+  +'<div class=stat><div class=n>'+(p.buildings||0)+'</div><div class=l>Buildings</div></div>'
+  +'<div class=stat><div class=n>'+(p.crews_available||0)+'</div><div class=l>Crews scheduled</div></div>'
+  +'<div class=stat><div class=n>'+(p.avg_stops_per_crew||0)+'</div><div class=l>Stops per crew</div></div>'
+  +'</div>';
+ if(!p.total_stops){h+='<p class=mut>No pickups booked on '+esc(d)+'.</p>';document.getElementById('out').innerHTML=h;return;}
+ var byB={};(p.route||[]).forEach(function(x){byB[x.building]=x;});
+ (p.crew_plan||[]).forEach(function(c){
+  if(!c.buildings.length)return;
+  h+='<div class=crew><h3>Crew '+c.crew+'<span class=ct>'+c.stops+' stop'+(c.stops==1?'':'s')+' &middot; '+c.buildings.length+' building'+(c.buildings.length>1?'s':'')+'</span></h3>';
+  c.buildings.forEach(function(b){
+   var x=byB[b]||{orders:[]};
+   h+='<div class=bld>'+esc(b)+' <span class=n>('+x.stops+' stop'+(x.stops==1?'':'s')+')</span></div>';
+   h+='<table><thead><tr><th>Student</th><th>Room</th><th>Order</th><th>Service</th></tr></thead><tbody>';
+   (x.orders||[]).forEach(function(o){h+='<tr><td>'+esc(o.student)+'</td><td>'+esc(o.room)+'</td><td>'+esc(o.order_id)+'</td><td>'+esc(o.service)+'</td></tr>';});
+   h+='</tbody></table>';
+  });
+  h+='</div>';});
+ document.getElementById('out').innerHTML=h;}
+(function(){var d=document.getElementById('day');d.value='2026-05-07';})();
+</script></body></html>"""
+
+
+@mcp.custom_route("/ops", methods=["GET"])
+async def ops_page(request: Request):
+    """Staff-only ops view over /dispatch_plan (that endpoint enforces the staff key when set)."""
+    return HTMLResponse(_OPS_HTML)
 
 
 @mcp.custom_route("/ask", methods=["GET"])
