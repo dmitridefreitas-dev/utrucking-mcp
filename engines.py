@@ -22,6 +22,16 @@ EXTRA_PRICES = {
     "monitor": 18.0, "printer": 18.0, "computer": 23.0, "fan": 15.0, "speaker": 18.0,
     "nightstand": 27.0, "table": 33.0, "filing cabinet": 33.0, "cabinet": 33.0,
     "futon": 39.0, "wardrobe": 39.0, "crate": 18.0, "toolbox": 18.0,
+    # bedding / soft goods (small tier)
+    "pillow": 15.0, "bedding": 15.0,
+    # counter-top small appliances (routes toaster/blender/kettle/air-fryer to the nearest size, not a spelling lookalike)
+    "small appliance": 15.0,
+    # sports & fitness — priced by storage footprint so the match is close on cost
+    "sports equipment": 15.0, "golf clubs": 18.0, "skis": 18.0, "snowboard": 18.0,
+    "surfboard": 23.0, "dumbbells": 18.0, "weight bench": 33.0,
+    "exercise bike": 39.0, "treadmill": 39.0,
+    # larger dorm / household items
+    "bed frame": 39.0, "ironing board": 15.0, "step stool": 15.0,
 }
 
 def build_price_book(service_rows, item_col="Summer Storage Item List"):
@@ -89,11 +99,82 @@ ALIASES = {
     "storage container":"plastic container","dorm fridge":"mini fridge","refrigerator":"mini fridge",
     # common dorm items people say that map onto the closest catalog item
     "bed":"mattress","bunk bed":"mattress","sofa bed":"futon","daybed":"futon",
-    "bed frame":"headboard","bedframe":"headboard",
+    "footboard":"headboard",
     "drawer":"dresser","chest of drawers":"dresser","recliner":"swivel/arm chair",
     "garment rack":"rolling cart","clothes rack":"rolling cart","clothing rack":"rolling cart",
     "tv stand":"table","console":"computer","xbox":"computer","playstation":"computer",
     "ps5":"computer","ps4":"computer","wii":"computer","game console":"computer",
+    "gaming console":"computer","nintendo switch":"computer","gaming chair":"swivel/arm chair",
+    "kitchen cart":"rolling cart","utility cart":"rolling cart",
+    # bedding / soft goods
+    "pillow":"pillow","pillows":"pillow","throw pillow":"pillow","body pillow":"pillow",
+    "bedding":"bedding","comforter":"bedding","comforter set":"bedding","duvet":"bedding",
+    "quilt":"bedding","blanket":"bedding","blankets":"bedding","throw blanket":"bedding",
+    "sheets":"bedding","bed sheets":"bedding","linens":"bedding","bed linens":"bedding",
+    "mattress topper":"bedding","mattress pad":"bedding","sleeping bag":"bedding",
+    "books":"utrucking box","box of books":"utrucking box",
+    # counter-top small appliances
+    "small appliance":"small appliance","toaster":"small appliance","toaster oven":"small appliance",
+    "blender":"small appliance","kettle":"small appliance","electric kettle":"small appliance",
+    "coffee maker":"small appliance","coffee machine":"small appliance","keurig":"small appliance",
+    "espresso machine":"small appliance","air fryer":"small appliance","rice cooker":"small appliance",
+    "instant pot":"small appliance","crock pot":"small appliance","slow cooker":"small appliance",
+    "hot plate":"small appliance","griddle":"small appliance","waffle maker":"small appliance",
+    "iron":"small appliance","humidifier":"small appliance","air purifier":"small appliance",
+    "dehumidifier":"small appliance","space heater":"small appliance","heater":"small appliance",
+    # sports & fitness
+    "sports equipment":"sports equipment","sporting goods":"sports equipment","sports gear":"sports equipment",
+    "baseball bat":"sports equipment","bat":"sports equipment","tennis racket":"sports equipment",
+    "tennis racquet":"sports equipment","racket":"sports equipment","racquet":"sports equipment",
+    "hockey stick":"sports equipment","lacrosse stick":"sports equipment","field hockey stick":"sports equipment",
+    "basketball":"sports equipment","soccer ball":"sports equipment","football":"sports equipment",
+    "volleyball":"sports equipment","baseball":"sports equipment","softball":"sports equipment",
+    "baseball glove":"sports equipment","baseball mitt":"sports equipment","boxing gloves":"sports equipment",
+    "helmet":"sports equipment","cleats":"sports equipment","shin guards":"sports equipment",
+    "yoga mat":"sports equipment","exercise mat":"sports equipment","jump rope":"sports equipment",
+    "frisbee":"sports equipment","roller blades":"sports equipment","rollerblades":"sports equipment",
+    "ice skates":"sports equipment","skates":"sports equipment","roller skates":"sports equipment",
+    "badminton racket":"sports equipment","ping pong paddle":"sports equipment","scooter":"sports equipment",
+    "golf clubs":"golf clubs","golf bag":"golf clubs","golf set":"golf clubs","clubs":"golf clubs","golf":"golf clubs",
+    "skis":"skis","ski":"skis","ski poles":"skis","cross country skis":"skis",
+    "snowboard":"snowboard","snow board":"snowboard",
+    "surfboard":"surfboard","paddleboard":"surfboard","paddle board":"surfboard","longboard surfboard":"surfboard",
+    "dumbbells":"dumbbells","dumbbell":"dumbbells","weights":"dumbbells","weight set":"dumbbells",
+    "free weights":"dumbbells","hand weights":"dumbbells","kettlebell":"dumbbells","kettle bell":"dumbbells",
+    "barbell":"dumbbells","weight plates":"dumbbells",
+    "weight bench":"weight bench","workout bench":"weight bench","bench press":"weight bench","gym bench":"weight bench",
+    "exercise bike":"exercise bike","stationary bike":"exercise bike","spin bike":"exercise bike",
+    "peloton":"exercise bike","recumbent bike":"exercise bike",
+    "treadmill":"treadmill","elliptical":"treadmill","rowing machine":"treadmill","rower":"treadmill",
+    "home gym":"treadmill","punching bag":"treadmill","heavy bag":"treadmill","stair climber":"treadmill",
+    # larger dorm / household extras
+    "bed frame":"bed frame","bedframe":"bed frame","bed frames":"bed frame","metal bed frame":"bed frame",
+    "wooden bed frame":"bed frame","bed rails":"bed frame","platform bed":"bed frame",
+    "ironing board":"ironing board","step stool":"step stool","stepstool":"step stool",
+    "step ladder":"step stool","ladder":"step stool","stool":"ottoman","bar stool":"swivel/arm chair",
+    "barstool":"swivel/arm chair","drying rack":"rolling cart","milk crate":"crate","storage cube":"plastic container",
+    # kitchen — packed into a box/bin for the summer
+    "cooler":"plastic container","dishes":"utrucking box","dish set":"utrucking box",
+    "pots and pans":"utrucking box","pots":"utrucking box","pans":"utrucking box",
+    "cookware":"utrucking box","kitchenware":"utrucking box","dish rack":"plastic container",
+    # clothing / soft goods — boxed
+    "clothes":"utrucking box","clothing":"utrucking box","winter clothes":"utrucking box",
+    "coats":"utrucking box","jackets":"utrucking box","shoes":"utrucking box","boots":"utrucking box",
+    "wardrobe box":"utrucking box","garment bag":"camp duffel","laundry bag":"hamper/laundry basket",
+    "towels":"bedding","curtains":"bedding",
+    # decor / wall items
+    "tapestry":"rug","whiteboard":"framed art","cork board":"framed art","corkboard":"framed art",
+    "bulletin board":"framed art","picture frame":"framed art","picture frames":"framed art",
+    "floor lamp":"lamp","desk lamp":"lamp",
+    # storage / organization & folding furniture
+    "shelving unit":"bookshelf","shelving":"bookshelf","shelf unit":"bookshelf",
+    "closet organizer":"wardrobe","shoe organizer":"shoe rack","under bed storage":"plastic container",
+    "under-bed storage":"plastic container","folding chair":"swivel/arm chair","folding table":"table",
+    "card table":"table","storage bench":"ottoman","papasan chair":"swivel/arm chair",
+    # small electricals / appliances a student boxes up
+    "sewing machine":"small appliance","clothes steamer":"small appliance","steamer":"small appliance",
+    "paper shredder":"small appliance","shredder":"small appliance","lockbox":"toolbox","file box":"filing cabinet",
+    "router":"small appliance","modem":"small appliance","wifi router":"small appliance","power strip":"small appliance",
 }
 
 # Things that show up in photos / descriptions but aren't stored items we price — never match these.
