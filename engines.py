@@ -59,6 +59,78 @@ def upsell_pairs(service_rows, item_col="Summer Storage Item List"):
                     co[names[i]][names[j]] += 1
     return {k: v.most_common() for k, v in co.items()}
 
+
+def upsell_value(service_rows, item_col="Summer Storage Item List", min_orders=8):
+    """Avg basket $ when an item is present — powers *value-weighted* upsell: steer the suggestion
+    toward the add-on that grows the order most (e.g. the rolling cart, +$126 vs a mini fridge +$46),
+    not merely the most frequent one. Returns item_key -> avg_order_value. Items appearing in fewer
+    than min_orders baskets are dropped so a one-off big order can't distort the signal."""
+    tot = defaultdict(float); cnt = defaultdict(int)
+    for r in service_rows:
+        parts = _ITEM_RE.findall(r.get(item_col, "") or "")
+        if not parts:
+            continue
+        val = sum(float(a) * int(q) for n, a, q in parts)
+        for k in {_canon(n) for n, a, q in parts}:
+            tot[k] += val; cnt[k] += 1
+    return {k: round(tot[k] / cnt[k], 2) for k in tot if cnt[k] >= min_orders}
+
+
+# ---- volume / truck-space model (STAFF planning only — never shown on the customer estimate) ----
+# Rough stored footprint in cubic feet per catalog item, by tier. A 15-ft box truck holds ~800 cu ft
+# usable. Used to answer "how much of a truck is this / how many boxes' worth" for crew planning.
+TRUCK_CUFT = 800.0
+_BOX_CUFT = 3.0                     # a UTrucking box ≈ 3 cu ft — the unit we express volume in
+_VOL_TIER = {                       # fallbacks by unit price when an item isn't explicitly sized
+    15.0: 2.0, 18.0: 3.0, 20.0: 4.0, 23.0: 5.0, 27.0: 8.0, 33.0: 14.0, 39.0: 22.0, 60.0: 30.0}
+ITEM_VOLUME = {
+    "utrucking box": 3.0, "plastic container": 4.0, "crate": 3.0, "toolbox": 2.0,
+    "mini fridge": 6.0, "microwave": 2.5, "monitor": 2.0, "printer": 2.0, "computer": 2.0,
+    "fan": 2.0, "speaker": 2.0, "lamp": 2.0, "pillow": 1.5, "bedding": 2.0,
+    "small appliance": 1.5, "ironing board": 2.0, "step stool": 2.0,
+    "hamper/laundry basket": 3.0, "luggage": 4.0, "duffel": 3.0, "camp duffel": 3.0,
+    "nightstand": 6.0, "ottoman": 5.0, "chair": 10.0, "swivel/arm chair": 12.0,
+    "beanbag chair": 8.0, "mirror": 4.0, "bike": 12.0,
+    "table": 14.0, "desk": 18.0, "filing cabinet": 10.0, "cabinet": 12.0, "bookshelf": 14.0,
+    "dresser": 18.0,
+    "mattress": 22.0, "bed frame": 16.0, "futon": 26.0, "wardrobe": 24.0, "couch": 35.0, "sofa": 35.0,
+    "golf clubs": 4.0, "skis": 5.0, "snowboard": 4.0, "surfboard": 8.0, "sports equipment": 3.0,
+    "dumbbells": 2.0, "weight bench": 10.0, "exercise bike": 14.0, "treadmill": 26.0,
+}
+
+def _item_cuft(key, unit_price=None):
+    """Cubic-ft estimate for one unit of a catalog item: explicit size if known, else the nearest
+    price tier, else the box unit. Always positive so a quote never estimates zero space."""
+    k = _canon(key)
+    if k in ITEM_VOLUME:
+        return ITEM_VOLUME[k]
+    try:
+        p = float(unit_price)
+        return min(_VOL_TIER.items(), key=lambda kv: abs(kv[0] - p))[1]
+    except (TypeError, ValueError):
+        return _BOX_CUFT
+
+def space_estimate(line_items):
+    """STAFF truck-planning estimate for a priced quote. Given [{item, qty, unit_price}], returns
+    {cubic_ft, box_equiv, truck_pct, trucks, breakdown} — how much space the load takes, in cu ft,
+    box-equivalents, and fraction of a 15-ft truck. Not for customer display; drives crew/truck load
+    planning. Missing sizes fall back to the item's price tier so the total is never understated."""
+    total = 0.0; breakdown = []
+    for l in (line_items or []):
+        qty = int(l.get("qty", 1) or 1)
+        cu = _item_cuft(l.get("item", ""), l.get("unit_price"))
+        sub = round(cu * qty, 1)
+        total += sub
+        breakdown.append({"item": l.get("item"), "qty": qty, "cuft_each": round(cu, 1), "cuft": sub})
+    total = round(total, 1)
+    return {
+        "cubic_ft": total,
+        "box_equiv": int(round(total / _BOX_CUFT)) if total else 0,
+        "truck_pct": int(round(100 * total / TRUCK_CUFT)) if total else 0,
+        "trucks": round(total / TRUCK_CUFT, 2) if total else 0.0,
+        "breakdown": breakdown,
+    }
+
 # spoken / written aliases -> canonical item name (used only if the canonical exists in the learned book)
 ALIASES = {
     "box":"utrucking box","boxes":"utrucking box","utrucking box":"utrucking box",
@@ -267,13 +339,17 @@ def price_items(items, price_book):
             unmatched.append(str(name)); unmatched_items.append((str(name), qty)); continue
         if key not in bykey:
             price = price_book[key]
-            line = {"item": key.title(), "qty": 0, "unit_price": round(price, 2), "amount": 0.0}
+            # confidence: 'exact' = name/alias/typo hit we trust; 'approx' = nearest priced item
+            # (staff should eyeball it). An AI-mapped line is tagged 'ai' later in main.
+            line = {"item": key.title(), "qty": 0, "unit_price": round(price, 2), "amount": 0.0,
+                    "confidence": "approx" if kind == "approx" else "exact"}
             if kind == "approx":
                 line["matched_from"] = str(name)
             bykey[key] = line; order.append(key)
         line = bykey[key]
         if kind != "approx":
             line.pop("matched_from", None)     # an exact/alias hit for the same item wins
+            line["confidence"] = "exact"
         line["qty"] += qty
         line["amount"] = round(line["unit_price"] * line["qty"], 2)
     lines = [bykey[k] for k in order]
@@ -282,6 +358,8 @@ def price_items(items, price_book):
            "summary": "Estimated total ${:.2f} for {} item(s).".format(total, sum(l["qty"] for l in lines))}
     matched = [{"from": l["matched_from"], "to": l["item"]} for l in lines if l.get("matched_from")]
     if matched: res["matched"] = matched
+    review = sum(1 for l in lines if l.get("confidence") != "exact")
+    if review: res["review_count"] = review
     if unmatched_items: res["unmatched_items"] = unmatched_items   # (name, qty) — lets an AI pass re-price them
     if capped: res["capped"] = MAX_QTY
     return res

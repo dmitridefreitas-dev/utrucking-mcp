@@ -116,6 +116,21 @@ def compute_metrics(dispatch, service):
             "revenue_share_pct": round(100 * item_revenue[k] / revenue, 1) if revenue else 0.0,
         })
     m["pricing"] = pricing
+    # ---- discovery cards: boxes-only share + value-weighted upsell lift ----
+    box_keys = {"utrucking box"}
+    boxes_only = sum(1 for names in baskets if names and set(names) <= box_keys)
+    m["boxes_only"] = {"count": boxes_only, "orders": len(baskets),
+                       "pct": round(100 * boxes_only / len(baskets), 1) if baskets else 0.0}
+    basket_vals = []
+    for r in service:
+        parts = engines._ITEM_RE.findall(r.get("Summer Storage Item List", "") or "")
+        if parts:
+            basket_vals.append(sum(float(a) * int(q) for n, a, q in parts))
+    avg_basket_all = round(sum(basket_vals) / len(basket_vals), 2) if basket_vals else 0.0
+    lift = engines.upsell_value(service)
+    m["avg_basket"] = avg_basket_all
+    m["upsell_lift"] = [{"item": k.title(), "avg_basket": v, "lift_vs_avg": round(v - avg_basket_all, 2)}
+                        for k, v in sorted(lift.items(), key=lambda kv: -kv[1])[:8]]
     m["avg_items_per_order"] = round(sum(sum(q for _, q in
         [(engines._canon(n), int(qq)) for n, a, qq in engines._ITEM_RE.findall(r.get("Summer Storage Item List", "") or "")])
         for r in service) / max(len(baskets), 1), 1)

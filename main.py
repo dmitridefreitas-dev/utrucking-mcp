@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse, HTMLResponse
 from starlette.requests import Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan, open_days as _open_days, season_bounds as _season_bounds, peak_date as _peak_date, merge_photo_text as _merge_photo_text, upsell_pairs as _upsell_pairs
+from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan, open_days as _open_days, season_bounds as _season_bounds, peak_date as _peak_date, merge_photo_text as _merge_photo_text, upsell_pairs as _upsell_pairs, upsell_value as _upsell_value, space_estimate as _space_estimate
 
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
 
@@ -388,6 +388,12 @@ def _extract_args(body: dict) -> dict:
     return body
 
 
+def _staff_flag(request, args) -> bool:
+    """True when a quote is being run in STAFF mode (?staff=1 or args.staff). Gates the truck-space
+    estimate so it's attached only for staff, never on the customer-facing estimate."""
+    return bool(args.get("staff")) or request.query_params.get("staff") == "1"
+
+
 # ── Staff-key gate for PII / ops endpoints ──────────────────────────
 # When API_SECRET is set in the environment, endpoints that return customer PII or
 # internal ops data require the x-utrucking-key header. Unset = open (safe rollout:
@@ -505,7 +511,9 @@ async def quote_endpoint(request: Request):
                else (args.get("text") or args.get("name_heard") or ""))
     result = _quote_items(payload, book)
     result = await _ai_map_unmatched(result, book)
-    _attach_upsell(result, _upsell_pairs(service_rows), book)
+    _attach_upsell(result, _upsell_pairs(service_rows), book, _upsell_value(service_rows))
+    if _staff_flag(request, args):        # staff-only truck-space estimate (never on the customer view)
+        result["space"] = _space_estimate(result.get("line_items") or [])
     return JSONResponse(result)
 
 
@@ -545,7 +553,7 @@ async def get_quote(items_text: str) -> str:
     book = build_price_book(service_rows) if service_rows else {}
     result = _quote_items(items_text, book)
     if service_rows:
-        _attach_upsell(result, _upsell_pairs(service_rows), book)
+        _attach_upsell(result, _upsell_pairs(service_rows), book, _upsell_value(service_rows))
     return json.dumps(result)
 
 
@@ -649,42 +657,73 @@ _MAP_PROMPT = ("You price a student storage service. Map EVERY unknown item to t
     "CATALOG: %s\nUNKNOWN: %s\nReply with STRICT JSON only, e.g. {\"baseball bat\": \"skateboard\", \"pet llama\": null}")
 
 
+# Learned AI item-mappings, kept in-process so a repeat unknown resolves instantly and free
+# (no second Gemini call). canon(unknown) -> catalog key. Warms up over the life of the worker;
+# resets on redeploy/restart, like the sheet cache. Bounded so it can't grow without limit.
+_AI_MAP_CACHE = {}
+_AI_MAP_CACHE_MAX = 2000
+
+def _ai_cache_recount(result):
+    """Refresh the 'needs staff review' count after AI/approx lines settle (drives the #6 badge)."""
+    review = sum(1 for l in result.get("line_items", []) if l.get("confidence") and l["confidence"] != "exact")
+    if review:
+        result["review_count"] = review
+    else:
+        result.pop("review_count", None)
+
+
 async def _ai_map_unmatched(result, book):
-    """Second-chance matching: send still-unmatched items to the model, price whatever it can map,
-    and show the mapping on the line ('matched from ...'). Leaves truly unpriceable things unmatched.
-    Never raises — on any failure the result is simply returned as-is."""
+    """Second-chance matching: map still-unmatched items to the catalog, price whatever we can, and
+    show the mapping on the line ('matched from ...'). Repeat unknowns are served from a learned cache
+    so they cost no model call; only genuinely-new unknowns hit Gemini. Never raises — on any failure
+    the result is simply returned as-is."""
     import engines as _e
     allu = result.get("unmatched_items") or []
     todo = [(n, q) for n, q in allu if _e._canon(n) not in _e.NON_STORAGE]
+    if not todo:
+        return result
     key = os.getenv("GEMINI_API_KEY")
-    if not todo or not key:
-        return result
 
-    async def _map_batch(names):
-        txt = await _gemini_generate(key, [{"text": _MAP_PROMPT % (", ".join(sorted(book)), ", ".join(names))}],
-                                     temp=0.1, json_out=True)
-        m = re.search(r'\{.*\}', txt, re.S)
-        raw = json.loads(m.group(0)) if m else {}
-        return {str(k).strip().lower(): v for k, v in raw.items()}   # case/space-normalized keys
+    # 1) serve anything we've mapped before straight from the cache — no model call for repeats
+    resolved = {}                                        # name.lower() -> catalog key
+    for n, _ in todo:
+        ck = _AI_MAP_CACHE.get(_e._canon(n))
+        if ck and ck in book:
+            resolved[n.lower()] = ck
+    need = [(n, q) for n, q in todo if n.lower() not in resolved]
 
-    try:
-        mapping = await _map_batch([n for n, _ in todo])
-    except Exception:
-        return result
-    # anything the first pass missed gets ONE targeted retry (models occasionally skip entries)
-    missed = [n for n, _ in todo if not isinstance(mapping.get(n.lower()), str)]
-    if missed:
+    # 2) only the genuinely-new unknowns hit the model (skipped entirely if all cached, or no key)
+    if need and key:
+        async def _map_batch(names):
+            txt = await _gemini_generate(key, [{"text": _MAP_PROMPT % (", ".join(sorted(book)), ", ".join(names))}],
+                                         temp=0.1, json_out=True)
+            m = re.search(r'\{.*\}', txt, re.S)
+            raw = json.loads(m.group(0)) if m else {}
+            return {str(k).strip().lower(): v for k, v in raw.items()}   # case/space-normalized keys
         try:
-            mapping.update(await _map_batch(missed))
+            mapping = await _map_batch([n for n, _ in need])
         except Exception:
-            pass
-    # non-storage supplies skipped above stay listed as not-priced
+            mapping = None
+        if mapping is not None:
+            # anything the first pass missed gets ONE targeted retry (models occasionally skip entries)
+            missed = [n for n, _ in need if not isinstance(mapping.get(n.lower()), str)]
+            if missed:
+                try: mapping.update(await _map_batch(missed))
+                except Exception: pass
+            for n, _ in need:
+                target = mapping.get(n.lower())
+                k = _e.resolve_item(target, book) if isinstance(target, str) else None
+                if k is not None:
+                    resolved[n.lower()] = k
+                    if len(_AI_MAP_CACHE) < _AI_MAP_CACHE_MAX:
+                        _AI_MAP_CACHE[_e._canon(n)] = k          # learn it once, reuse free next time
+
+    # 3) apply everything resolved (cache hits + fresh maps); leave the rest listed as not-priced
     still = [(n, q) for n, q in allu if _e._canon(n) in _e.NON_STORAGE]
     still_names = [n for n, _ in still]
     ai_pairs = []
     for name, qty in todo:
-        target = mapping.get(name.lower())
-        k = _e.resolve_item(target, book) if isinstance(target, str) else None
+        k = resolved.get(name.lower())
         if k is None:
             still.append((name, qty)); still_names.append(name); continue
         price = book[k]; title = k.title()
@@ -694,7 +733,8 @@ async def _ai_map_unmatched(result, book):
             existing["amount"] = round(existing["unit_price"] * existing["qty"], 2)
         else:
             result["line_items"].append({"item": title, "qty": qty, "unit_price": round(price, 2),
-                                         "amount": round(price * qty, 2), "matched_from": name, "ai_matched": True})
+                                         "amount": round(price * qty, 2), "matched_from": name,
+                                         "ai_matched": True, "confidence": "ai"})
         result["total"] = round(result["total"] + price * qty, 2)
         ai_pairs.append({"from": name, "to": title})
     result["unmatched"] = still_names
@@ -706,6 +746,7 @@ async def _ai_map_unmatched(result, book):
             matched.append(mp)
     if matched: result["matched"] = matched
     else: result.pop("matched", None)
+    _ai_cache_recount(result)
     return result
 
 
@@ -803,7 +844,9 @@ async def photo_quote_endpoint(request: Request):
         result = _quote_items(pairs, book)
     result = await _ai_map_unmatched(result, book)
     if service_rows:
-        _attach_upsell(result, _upsell_pairs(service_rows), book)
+        _attach_upsell(result, _upsell_pairs(service_rows), book, _upsell_value(service_rows))
+    if _staff_flag(request, args):        # staff-only truck-space estimate (never on the customer view)
+        result["space"] = _space_estimate(result.get("line_items") or [])
     result["detected"] = detected
     return JSONResponse(result)
 
@@ -960,6 +1003,13 @@ _ESTIMATE_HTML = """<!doctype html>
  .tag{display:inline-block;background:#eef1f5;color:var(--navy);border-radius:20px;padding:3px 10px;font-size:12px;margin:3px 4px 0 0}
  .upsell{margin-top:12px;padding:10px 12px;background:#faf4e8;border:1px solid #ecdcbf;border-radius:10px}
  .upsell .uplbl{font-weight:600;color:#8a6a1f;font-size:12.5px;margin-right:4px}
+ .staffchip{display:inline-block;margin-top:10px;background:#0f2544;color:#fff;border-radius:20px;padding:4px 11px;font-size:11.5px;font-weight:600;letter-spacing:.02em}
+ .staffbox{margin-top:12px;padding:13px 14px;background:#0f2544;color:#fff;border-radius:10px}
+ .staffbox .sh{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#e0a559;font-weight:600}
+ .staffbox .big{font-size:17px;font-weight:700;margin-top:5px}
+ .staffbox .sub{font-size:12px;color:#c6d2e2;margin-top:5px;line-height:1.5}
+ .rev{display:inline-block;background:#fef0c7;color:#8a6a1f;border:1px solid #f0d48a;border-radius:6px;padding:1px 6px;font-size:10.5px;font-weight:600;margin-left:6px;vertical-align:middle}
+ .revsum{margin-top:10px;padding:8px 11px;background:#fffaf0;border:1px solid #f0d48a;border-radius:8px;color:#8a6a1f;font-size:12.5px}
 </style></head><body>
 <div class="bar"></div>
 <header><div class="ey">University Trucking</div>
@@ -978,6 +1028,8 @@ _ESTIMATE_HTML = """<!doctype html>
 </main>
 <script>
  const $=id=>document.getElementById(id);
+ var STAFF=location.search.indexOf('staff=1')>=0;   /* /estimate?staff=1 -> show truck-space planning */
+ if(STAFF){document.querySelector('header').insertAdjacentHTML('beforeend','<div class=staffchip>Staff mode &middot; truck-space estimate on</div>');}
  async function postJSON(p,d){const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});return r.json();}
  function toB64(f){return new Promise(res=>{const fr=new FileReader();
   fr.onload=()=>{const url=String(fr.result);const img=new Image();
@@ -1007,7 +1059,9 @@ _ESTIMATE_HTML = """<!doctype html>
   let rows=li.map(x=>'<tr><td>'+x.qty+"x "+x.item
    +(x.matched_from?' <span style="color:#5b6b7f;font-size:.82em">(you said &ldquo;'+x.matched_from+'&rdquo;)</span>':'')
    +(x.source?' <span class=tag style="font-size:11px">'+srcLbl[x.source]+'</span>':'')
+   +((STAFF&&x.confidence&&x.confidence!=='exact')?' <span class=rev title="lower-confidence match — check it">'+(x.confidence==='ai'?'AI match':'approx')+'</span>':'')
    +'</td><td class=n>$'+Number(x.amount).toFixed(2)+'</td></tr>').join('');
+  let revsum=(STAFF&&data.review_count)?'<div class=revsum>&#9888; '+data.review_count+' line'+(data.review_count>1?'s':'')+' matched approximately or by AI &mdash; worth a quick check before you quote it.</div>':'';
   let extra=un.length?'<p class=note>Not priced (call us for these): '+un.join(', ')+'.</p>':'';
   if(data.capped) extra+='<p class=note>For more than '+data.capped+' of one item, call (314) 266-8878 for a bulk quote.</p>';
   let up='';
@@ -1015,9 +1069,15 @@ _ESTIMATE_HTML = """<!doctype html>
    up='<div class=upsell><span class=uplbl>Most people also add</span> '
      +data.upsell.items.map(function(it){return '<span class=tag>'+it.item+' &middot; $'+Number(it.unit_price).toFixed(0)+'</span>';}).join(' ')+'</div>';
   }
+  let sp='';
+  if(STAFF&&data.space){var s=data.space;
+   var sl='&#8776; '+s.cubic_ft+' cu ft &middot; &#8776; '+s.box_equiv+" boxes&rsquo; worth &middot; &#8776; "+s.truck_pct+'% of a 15-ft truck'+(s.trucks>=1?' ('+s.trucks+' trucks)':'');
+   sp='<div class=staffbox><div class=sh>Staff &middot; space &amp; truck estimate</div><div class=big>'+sl+'</div><div class=sub>Planning figure for crew &amp; truck load &mdash; not shown to customers.</div></div>';
+  }
   let html='<table><thead><tr><th>Item</th><th class=n>Est.</th></tr></thead><tbody>'+rows+'</tbody></table>'
+   +revsum
    +'<div class=total><span class=lbl>Estimated total</span><span class=amt>$'+Number(data.total||0).toFixed(2)+'</span></div>'
-   +up+extra
+   +up+sp+extra
    +'<p class=note>Instant estimate based on typical UTrucking pricing. Final price is confirmed at pickup. Ready to book? Call (314) 266-8878 and mention your estimate.</p>';
   show(html);
  }
@@ -1025,12 +1085,12 @@ _ESTIMATE_HTML = """<!doctype html>
  async function quoteNow(){
   const t=$('items').value.trim();
   if(photoB64){loading(t?'Combining your photo and notes...':'Looking at your photo...');
-   try{const args={image_base64:photoB64};if(t)args.text=t;render(await postJSON('/photo_quote',{args:args}),true);}
+   try{const args={image_base64:photoB64};if(t)args.text=t;if(STAFF)args.staff=true;render(await postJSON('/photo_quote',{args:args}),true);}
    catch(e){show('<div class=err>Network error. Please try again.</div>');}
    return;}
   if(!t){show('<div class=err>Add a photo or tell us what you are storing.</div>');return;}
   loading('Pricing your items...');
-  try{render(await postJSON('/quote',{args:{text:t}}),false);}catch(e){show('<div class=err>Network error. Please try again.</div>');}}
+  try{render(await postJSON('/quote',{args:{text:t,staff:STAFF}}),false);}catch(e){show('<div class=err>Network error. Please try again.</div>');}}
  $('photo').addEventListener('change',async e=>{const f=e.target.files[0];if(!f){photoB64=null;$('photostate').textContent='';return;}
   $('photostate').textContent='Reading photo...';
   try{photoB64=await toB64(f);$('photostate').innerHTML='&#10003; Photo attached &mdash; add any notes below, then hit the button (or we quote it now).';quoteNow();}
@@ -1226,21 +1286,26 @@ _RE_LIST = re.compile(r"\b(other|another|others|list|what days|which days|when a
 _RE_AVAIL = re.compile(r"\b(available|availab|book|booking|pickup|pick up|schedul|slot|reschedul|move-?out)\b", re.I)
 
 
-def _attach_upsell(result, upsell, book, max_items=2):
+def _attach_upsell(result, upsell, book, lift=None, max_items=2):
     """Attach a data-driven upsell to a quote result: the priced items most often stored
     alongside what's already in the cart (and not already in it), learned from real baskets.
-    Sets result['upsell'] = {items:[{item,unit_price}], line:'...'} — used by the phone JSON,
-    the estimate page, and the chat/voice reply. No-op when nothing strong or new to suggest."""
+    When `lift` (item -> avg basket $) is supplied the ranking is VALUE-WEIGHTED — co-occurrence
+    stays the relevance filter but each candidate is scored by how much it grows a typical order,
+    so a high-lift add-on (the rolling cart) beats a merely-frequent one (a mini fridge). Falls back
+    to pure co-occurrence when no lift is given. Sets result['upsell'] = {items:[{item,unit_price}],
+    line:'...'} — used by the phone JSON, the estimate page, and the chat/voice reply."""
     if not upsell or not result.get("line_items"):
         return result
     import engines as _e
     have = {_e._canon(l["item"]) for l in result["line_items"]}
+    default_w = (sum(lift.values()) / len(lift)) if lift else 1.0   # avg basket $ for partners we can't size
     score = {}
     for l in result["line_items"]:
         for partner, cnt in (upsell.get(_e._canon(l["item"])) or [])[:8]:
             if partner in have or partner in _e.NON_STORAGE or partner not in book:
                 continue
-            score[partner] = score.get(partner, 0) + cnt
+            w = lift.get(partner, default_w) if lift else 1.0
+            score[partner] = score.get(partner, 0) + cnt * w
     if not score:
         return result
     top = sorted(score, key=lambda p: (-score[p], p))[:max_items]
@@ -1311,16 +1376,48 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
     q = _quote_items(text, book)
     if q.get("line_items"):
         if service_rows:
-            _attach_upsell(q, _upsell_pairs(service_rows), book)
+            _attach_upsell(q, _upsell_pairs(service_rows), book, _upsell_value(service_rows))
         return (_quote_reply_text(q), {})
     if q.get("unmatched"):
         return ("I couldn't find a price for: %s. I can price boxes, fridges, duffels, TVs, desks, couches, mattresses and more — what do you have?" % ", ".join(q["unmatched"]), {})
     return ("I can give you an instant quote, check pickup dates, or look up your order. Try \"quote 5 boxes and a mini fridge\", \"what days are open?\", or \"my order status\".", {})
 
 
+# ── bilingual (Spanish) chat: detect + translate in/out; English brain stays the single source ──
+_ES_MARK = re.compile(r'[¿¡áéíóúñ]', re.I)
+# words distinctive enough that one is a strong Spanish signal (kept out of English item lists)
+_ES_STRONG = {"hola", "gracias", "cuanto", "cuánto", "cuesta", "cuestan", "nevera", "refrigerador",
+              "almacenamiento", "almacenaje", "mudanza", "recoger", "recogida", "disponible", "disponibles",
+              "necesito", "quiero", "dónde", "donde", "caja", "cajas", "días", "dias", "precio", "pedido",
+              "cómo", "qué", "buenas", "español", "hablas", "nombre", "almacenar"}
+
+def _looks_spanish(text):
+    """Lightweight Spanish detector: an accent/¿¡ mark or a single distinctive Spanish word is enough."""
+    t = (text or "").lower()
+    if _ES_MARK.search(t):
+        return True
+    if "por favor" in t:
+        return True
+    toks = set(re.findall(r"[a-záéíóúñ]+", t))
+    return bool(toks & _ES_STRONG)
+
+
+async def _translate(text, target, key):
+    """Translate to 'es'/'en' via the free Gemini model, preserving prices, numbers, dates, phone
+    numbers and item names. Returns the original text on an empty result (caller catches failures)."""
+    lang = "Spanish" if target == "es" else "English"
+    prompt = ("Translate the message below to %s. Keep it natural and concise. Preserve all prices, "
+              "numbers, dates, phone numbers, bullet characters and product/item names exactly. "
+              "Return ONLY the translation with no preamble or quotes.\n\nMESSAGE:\n%s" % (lang, text))
+    out = await _gemini_generate(key, [{"text": prompt}], temp=0.1)
+    return (out or "").strip() or text
+
+
 @mcp.custom_route("/chat_api", methods=["POST"])
 async def chat_api(request: Request):
-    """Brain for the /chat SMS preview: quote + availability + identity-gated order lookup."""
+    """Brain for the /chat SMS preview: quote + availability + identity-gated order lookup.
+    Bilingual: Spanish input is translated in and the reply translated back, so a Spanish speaker
+    gets the same features in their language. The English brain stays the single source of truth."""
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -1332,19 +1429,41 @@ async def chat_api(request: Request):
     if state.get("step") == "verify" and _ip_locked(ip):
         return JSONResponse({"reply": "Too many verification attempts from this connection. "
                                       "Please call the team at (314) 266-8878.", "state": {}})
-    reply, new_state = _chat_reply(args.get("message", ""), state, dispatch_rows, service_rows, book)
+    msg_in = args.get("message", "")
+    gkey = os.getenv("GEMINI_API_KEY")
+    # language: sticky once Spanish is seen this session; typing "english" switches back
+    if re.search(r'\benglish\b', msg_in.lower()):
+        lang = "en"
+    elif state.get("lang") == "es" or _looks_spanish(msg_in):
+        lang = "es"
+    else:
+        lang = "en"
+    # translate Spanish input to English for the brain — but NEVER during the identity flow, where a
+    # name / verification answer must reach the matcher untouched
+    in_lookup = state.get("intent") == "lookup"
+    brain_msg = msg_in
+    if lang == "es" and gkey and not in_lookup:
+        try: brain_msg = await _translate(msg_in, "en", gkey)
+        except Exception: brain_msg = msg_in
+    reply, new_state = _chat_reply(brain_msg, state, dispatch_rows, service_rows, book)
     if state.get("step") == "verify" and reply.startswith("That doesn't match"):
         _ip_fail(ip)
     # parity with /estimate and the phone line: if the quote had unpriceable items,
     # give the AI mapper a shot and re-render the reply when it places something
     if not new_state and ("Couldn't price:" in reply or "couldn't find a price for" in reply):
-        q = _quote_items(args.get("message", ""), book)
+        q = _quote_items(brain_msg, book)
         if q.get("unmatched_items"):
             q = await _ai_map_unmatched(q, book)
             if q.get("line_items") and any(l.get("ai_matched") for l in q["line_items"]):
                 if service_rows:
-                    _attach_upsell(q, _upsell_pairs(service_rows), book)
+                    _attach_upsell(q, _upsell_pairs(service_rows), book, _upsell_value(service_rows))
                 reply = _quote_reply_text(q)
+    # keep the conversation in the caller's language, and translate the reply out
+    if lang == "es":
+        new_state = dict(new_state or {}); new_state["lang"] = "es"
+        if gkey and reply:
+            try: reply = await _translate(reply, "es", gkey)
+            except Exception: pass
     return JSONResponse({"reply": reply, "state": new_state})
 
 
@@ -1355,7 +1474,7 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
 <style>
  :root{--navy:#0f2544;--orange:#c07d2a;--bot:#eef1f5;--me:#173252;--ink:#111827;--head:#0b1a33;--mut:#667085;--line:#e5e7eb;--bg:#f4f5f7}
  *{box-sizing:border-box} html,body{height:100%}
- body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);display:flex;flex-direction:column;height:100vh;height:100dvh;-webkit-font-smoothing:antialiased}
+ body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);display:flex;flex-direction:column;height:100vh;height:100dvh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
  header{background:#fff;border-bottom:1px solid var(--line);color:var(--head);padding:14px 16px}
  header .ey{text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600;color:var(--orange)}
  header b{font-size:16px;display:block;margin-top:2px;color:var(--head)} header .s{display:block;color:var(--mut);font-size:12px;margin-top:2px}
@@ -1375,9 +1494,26 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  #mic svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
  #mic.rec{background:var(--orange);border-color:var(--orange);color:#fff;animation:recpulse 1.2s ease-in-out infinite}
  @keyframes recpulse{0%,100%{box-shadow:0 0 0 0 rgba(192,125,42,.5)}50%{box-shadow:0 0 0 8px rgba(192,125,42,0)}}
+ /* live test-ID panel (upper right) — real names from the sheet so you can test lookups without it */
+ #ids{position:fixed;top:8px;right:8px;z-index:20;width:214px;max-width:62vw;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 22px rgba(16,24,40,.14);font-size:12px;overflow:hidden}
+ #ids .h{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:7px 10px;background:var(--navy);color:#fff;cursor:pointer;user-select:none}
+ #ids .h b{font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase}
+ #ids .h .rt{display:flex;align-items:center;gap:4px}
+ #ids .rf{background:none;border:0;color:#c6d2e2;font-size:14px;line-height:1;cursor:pointer;padding:0 2px}
+ #ids .rf:hover{color:#fff}
+ #ids .bd{max-height:48vh;overflow-y:auto}
+ #ids.collapsed .bd{display:none}
+ #ids.collapsed{width:auto}                 /* collapsed = compact chip, never overflows */
+ #ids.collapsed .rf{display:none}
+ #ids .it{padding:7px 10px;border-top:1px solid var(--line);cursor:pointer}
+ #ids .it:hover{background:#f6f8fb}
+ #ids .it .nm{font-weight:600;color:var(--navy)}
+ #ids .it .mt{color:var(--mut);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ @media (max-width:620px){#ids{width:172px}}
 </style></head><body>
 <header><span class=ey>University Trucking</span><b>Assistant</b><span class=s>SMS preview - test chat</span></header>
 <div class=note>Preview only - no real texts are sent. Order lookups verify your identity, like the phone line.</div>
+<div id=ids><div class=h id=idsh><b>Test IDs · live</b><span class=rt><button class=rf id=idsrf title="Shuffle" type=button>&#8635;</button><span id=idst>&#9662;</span></span></div><div class=bd id=idsbd><div class=it>Loading…</div></div></div>
 <div id=log></div>
 <form id=f><button type=button id=mic title="Talk" aria-label="Talk"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button><input id=t autocomplete=off placeholder="Text a message..."><button>Send</button></form>
 <script>
@@ -1424,7 +1560,21 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
    startMic=function(){try{if(window.speechSynthesis)window.speechSynthesis.cancel();mic.classList.add('rec');rec.start();}catch(e){mic.classList.remove('rec');}};
    mic.addEventListener('click',function(){if(mic.classList.contains('rec')){try{rec.stop();}catch(e){}lastVoice=false;mic.classList.remove('rec');}else{startMic();}});
  })();
- var GREET='Hi! I am the UTrucking assistant. I can quote items, check pickup dates, or look up your order. Try: "quote 5 boxes and a mini fridge", "what days are open?", or "where is my order?"';
+ /* live test-ID panel: pull real names/buildings from the sheet; click one to drop it in the box */
+ (function(){var box=document.getElementById('ids'),bd=document.getElementById('idsbd'),tog=document.getElementById('idst'),DATA=[];
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function set(open){box.classList.toggle('collapsed',!open);tog.innerHTML=open?'&#9662;':'&#9656;';}
+  function render(){bd.innerHTML=DATA.map(function(x,i){return '<div class=it data-i="'+i+'" title="tap to fill the box"><div class=nm>'+esc(x.name)+'</div><div class=mt>'+esc(x.building)+(x.room?' &middot; Rm '+esc(x.room):'')+'</div></div>';}).join('');
+   Array.prototype.forEach.call(bd.querySelectorAll('.it'),function(el){el.addEventListener('click',function(){var x=DATA[+el.getAttribute('data-i')];var inp=document.getElementById('t');inp.value=x.name;inp.focus();});});}
+  function load(sh){bd.innerHTML='<div class=it>Loading…</div>';
+   fetch('/sample_ids?n=8'+(sh?'&shuffle=1':'')).then(function(r){return r.json();}).then(function(j){
+    if(j&&j.status==='unauthorized'){bd.innerHTML='<div class=it>Staff key required</div>';return;}
+    DATA=(j&&j.sample)||[];if(!DATA.length){bd.innerHTML='<div class=it>No records</div>';return;}render();})
+   .catch(function(){bd.innerHTML='<div class=it>Could not load</div>';});}
+  document.getElementById('idsh').addEventListener('click',function(){set(box.classList.contains('collapsed'));});
+  document.getElementById('idsrf').addEventListener('click',function(e){e.stopPropagation();load(true);});
+  set(window.innerWidth>=620);load(false);})();   /* desktop: open; mobile: compact chip, tap to reveal */
+ var GREET='Hi! I am the UTrucking assistant. I can quote items, check pickup dates, or look up your order. Try: "quote 5 boxes and a mini fridge", "what days are open?", or "where is my order?"  ·  También hablo español — escríbeme en español.';
  bubble('bot',GREET);
  if(VOICE){document.querySelector('header .s').textContent='Voice mode - tap the mic once, then just talk (it keeps listening after each reply; tap again to stop)';}
 </script></body></html>"""
@@ -1434,6 +1584,36 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
 async def chat_page(request: Request):
     """SMS-style web preview of the assistant (quote + availability). No PII, no real texts."""
     return HTMLResponse(_CHAT_HTML)
+
+
+@mcp.custom_route("/sample_ids", methods=["GET"])
+async def sample_ids(request: Request):
+    """Testing aid: a handful of REAL {name, building, room, id} pulled live from the DISPATCH sheet,
+    so a tester can exercise the identity gate + order lookups without opening the spreadsheet. These
+    are customer names (PII), so this rides the SAME staff-key gate as /lookup_student — it locks the
+    moment API_SECRET is set. Names live only in the sheet, never in source. Params: n (1-15, default
+    8), shuffle=1 for a fresh random draw."""
+    if not _authorized(request):
+        return _unauthorized()
+    import random
+    try:
+        n = max(1, min(15, int(request.query_params.get("n", "8"))))
+    except Exception:
+        n = 8
+    rows = await fetch_csv_rows(DISPATCH_CSV_URL)
+    seen, pool = set(), []
+    for r in rows:
+        nm = (r.get("Student") or "").strip()
+        if not nm or nm.lower() in seen:
+            continue
+        seen.add(nm.lower())
+        pool.append({"name": nm, "building": (r.get("Building") or "").strip() or "—",
+                     "room": (r.get("Room") or "").strip(),
+                     "id": (r.get("ID") or "").strip(),
+                     "service": (r.get("Service") or "").strip()})
+    if request.query_params.get("shuffle") == "1":
+        random.shuffle(pool)
+    return JSONResponse({"count": min(n, len(pool)), "total": len(pool), "sample": pool[:n]})
 
 
 # ── Ideas #1-#7: analytics, Ask-your-data copilot, insights dashboard ──
@@ -1493,6 +1673,11 @@ def _metrics_brief(m):
         "PRICING LEVERS (current price, units sold this season, revenue share, and the extra season revenue from a "
         "+$1 price increase — a +$1 increase adds about 'units sold' dollars, minus any drop in demand): " + price_lines + ".",
         "Frequently stored together: " + ", ".join("%s+%s (%s)" % (x["a"], x["b"], x["count"]) for x in m.get("top_pairs", [])[:6]),
+        "Boxes-only orders: %s%% (%s of %s) store nothing but boxes — a prime upsell segment." % (
+            m.get("boxes_only", {}).get("pct"), m.get("boxes_only", {}).get("count"), m.get("boxes_only", {}).get("orders")),
+        "Value-weighted upsell (avg basket $ when the item is present vs the $%s overall-avg basket — suggest high-lift "
+        "add-ons, not just frequent ones): " % m.get("avg_basket") + ", ".join(
+            "%s $%s (+$%s)" % (x["item"], x["avg_basket"], x["lift_vs_avg"]) for x in m.get("upsell_lift", [])[:6]),
         "Average items per order: %s." % m.get("avg_items_per_order"),
         "Completion funnel: %s." % m.get("funnel"),
         "Status breakdown: " + ", ".join("%s=%s" % (x["status"], x["count"]) for x in m.get("status_breakdown", [])[:6]),
@@ -1628,10 +1813,17 @@ function render(m){
  if(rmsg)rmsg.textContent=(m&&m.date_range)?'Showing '+(m.date_range.from||'start')+' to '+(m.date_range.to||'now'):'';
  if(!m||!m.overview){document.getElementById('root').innerHTML='<p class=mut>No orders'+((m&&m.date_range)?' in that date range':'')+'. Try a wider range or "All season".</p>';return;}
  var o=m.overview||{},dq=m.data_quality||{},fn=m.funnel||{},dem=m.demand||{},rp=m.repeat||{};var h='';
- h+='<div class=grid>'+stat(money(o.revenue),'Revenue (season)')+stat(money(o.avg_order),'Avg order')+stat(o.dispatch_orders,'Dispatch orders')+stat(rp.repeat_rate_pct+'%','Repeat customers')+stat(m.avg_items_per_order,'Avg items/order')+stat(dq.unknown_building,'Unknown buildings')+'</div>';
+ var bo=m.boxes_only||{};
+ h+='<div class=grid>'+stat(money(o.revenue),'Revenue (season)')+stat(money(o.avg_order),'Avg order')+stat(o.dispatch_orders,'Dispatch orders')+stat(rp.repeat_rate_pct+'%','Repeat customers')+stat(m.avg_items_per_order,'Avg items/order')+stat((bo.pct||0)+'%','Boxes-only orders')+'</div>';
  h+=card('Revenue by building',bars(m.revenue_by_building||[],'building','revenue',money));
  h+=card('Top stored items',bars(m.top_items||[],'item','count'));
  h+=card('Frequently stored together (upsell signals)',(m.top_pairs||[]).map(function(x){return '<div class=row><div class=lab style="width:auto;flex:1">'+esc(x.a)+' + '+esc(x.b)+'</div><div class=val>'+x.count+' orders</div></div>';}).join(''));
+ var ul=m.upsell_lift||[];
+ if(ul.length){h+=card('Value-weighted upsell &mdash; biggest basket lift',
+  bars(ul,'item','avg_basket',money)
+  +'<div class=mut style="margin-top:8px">Avg order value when each item is on the order, vs the $'+(m.avg_basket||0)+' typical basket. '
+  +'The quote now suggests the highest-<b>lift</b> add-on (e.g. '+esc((ul[0]||{}).item||'')+', +'+money((ul[0]||{}).lift_vs_avg||0)+'), not just the most frequent. '
+  +(bo.pct?('<b>'+bo.pct+'%</b> of orders ('+bo.count+' of '+bo.orders+') are boxes-only &mdash; the prime segment to grow.'):'')+'</div>');}
  h+=card('Pricing levers (+$1 on the item &asymp; extra $/season)',(m.pricing||[]).slice(0,8).map(function(x){return '<div class=row><div class=lab style="width:auto;flex:1">'+esc(x.item)+' &mdash; $'+x.unit_price+' &times; '+x.units_sold+' sold ('+x.revenue_share_pct+'% of revenue)</div><div class=val>+$'+x["extra_per_$1_increase"]+'</div></div>';}).join('')+'<div class=mut style="margin-top:6px">Rough sensitivity: +$1 on an item adds about its units-sold in season revenue, minus any demand drop. Price changes are a management call.</div>');
  h+=card('Demand by month',bars(dem.by_month||[],'month','orders'));
  var fc=m.forecast||{};

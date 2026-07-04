@@ -5,5 +5,7 @@ __pycache__/
 _*.py
 _*.html
 _*.png
+_*.csv
+_*.json
 _preview/
 .pytest_cache/

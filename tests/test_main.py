@@ -1,9 +1,18 @@
 """Offline unit tests for main.py helpers — upsell attach, phone match, multi-order, pretty items."""
+import pytest
 import engines
 import main
 
 BOOK = {"utrucking box": 22.0, "mini fridge": 23.0, "plastic container": 18.0,
         "rolling cart": 23.0, "mattress": 33.0, "bike": 39.0}
+
+
+@pytest.fixture(autouse=True)
+def _clear_ai_cache():
+    # the AI-map cache is process-global by design; reset it so tests stay independent
+    main._AI_MAP_CACHE.clear()
+    yield
+    main._AI_MAP_CACHE.clear()
 
 
 # ---------- upsell attach ----------
@@ -41,6 +50,21 @@ def test_upsell_reply_line_appended():
     main._attach_upsell(q, up, BOOK)
     txt = main._quote_reply_text(q)
     assert "Most people also add" in txt
+
+
+def test_value_weighted_upsell_prefers_high_lift_partner():
+    # Rolling cart and mini fridge co-occur with boxes EQUALLY often, but the rolling-cart basket is
+    # far more valuable. Value-weighting must surface the rolling cart first; raw co-occurrence (no lift)
+    # ties and falls to alpha order (mini fridge) — so the flip proves the $ weighting took effect.
+    rows  = [_svc([("UTrucking Box", 22, 3), ("Rolling Cart", 23, 1), ("Desk", 39, 1)]) for _ in range(20)]
+    rows += [_svc([("UTrucking Box", 22, 3), ("Mini Fridge", 23, 1)]) for _ in range(20)]
+    up, lift = engines.upsell_pairs(rows), engines.upsell_value(rows)
+    q = engines.quote("5 boxes", BOOK)
+    main._attach_upsell(q, up, BOOK, lift)
+    assert q["upsell"]["items"][0]["item"].lower() == "rolling cart", q["upsell"]["items"]
+    q2 = engines.quote("5 boxes", BOOK)
+    main._attach_upsell(q2, up, BOOK)                 # no lift -> co-occurrence tie -> alpha
+    assert q2["upsell"]["items"][0]["item"].lower() == "mini fridge", q2["upsell"]["items"]
 
 
 # ---------- phone matching ----------
@@ -148,4 +172,79 @@ def test_ai_map_new_item_gets_its_own_line(monkeypatch):
     q = asyncio.run(main._ai_map_unmatched(q, BOOK))
     mat = [l for l in q["line_items"] if l["item"] == "Mattress"]
     assert len(mat) == 1 and mat[0].get("matched_from") == "kayak" and mat[0].get("ai_matched")
+    assert mat[0].get("confidence") == "ai" and q.get("review_count") == 1     # #6: flagged for review
     assert "kayak" not in (q.get("unmatched") or [])
+
+
+def test_ai_map_cache_serves_repeat_without_second_model_call(monkeypatch):
+    import asyncio
+    calls = {"n": 0}
+    async def fake_gen(key, parts, temp=None, json_out=False):
+        calls["n"] += 1
+        return '{"kayak": "mattress"}'
+    monkeypatch.setattr(main, "_gemini_generate", fake_gen)
+    monkeypatch.setenv("GEMINI_API_KEY", "stub")
+    q1 = asyncio.run(main._ai_map_unmatched(engines.quote("1 kayak", BOOK), BOOK))
+    assert calls["n"] == 1 and any(l["item"] == "Mattress" for l in q1["line_items"])
+    # a repeat of the same unknown is served from the learned cache — the model is NOT called again
+    q2 = asyncio.run(main._ai_map_unmatched(engines.quote("1 kayak", BOOK), BOOK))
+    assert calls["n"] == 1                                  # no second Gemini call
+    assert any(l["item"] == "Mattress" and l.get("confidence") == "ai" for l in q2["line_items"])
+
+
+def test_ai_map_cache_hit_works_without_api_key(monkeypatch):
+    import asyncio
+    async def fake_gen(key, parts, temp=None, json_out=False):
+        return '{"kayak": "mattress"}'
+    monkeypatch.setattr(main, "_gemini_generate", fake_gen)
+    monkeypatch.setenv("GEMINI_API_KEY", "stub")
+    asyncio.run(main._ai_map_unmatched(engines.quote("1 kayak", BOOK), BOOK))   # warm the cache
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)                          # key now gone
+    q = asyncio.run(main._ai_map_unmatched(engines.quote("1 kayak", BOOK), BOOK))
+    assert any(l["item"] == "Mattress" for l in q["line_items"])                 # still resolved, free
+
+
+# ---------- bilingual (Spanish) chat ----------
+def test_looks_spanish_detects_spanish_and_not_english():
+    for es in ["¿cuánto cuesta?", "hola, necesito almacenamiento", "quiero cinco cajas",
+               "dónde está mi pedido", "gracias, por favor"]:
+        assert main._looks_spanish(es), es
+    for en in ["how much is it", "5 boxes and a mini fridge", "where is my order",
+               "what days are open", "hi there", "a couch and a desk"]:
+        assert not main._looks_spanish(en), en
+
+
+def test_translate_uses_model_and_falls_back_on_empty(monkeypatch):
+    import asyncio
+    async def fake_gen(key, parts, temp=None, json_out=False):
+        return "¿Qué días están abiertos?"
+    monkeypatch.setattr(main, "_gemini_generate", fake_gen)
+    assert "días" in asyncio.run(main._translate("What days are open?", "es", "stub"))
+    async def empty_gen(key, parts, temp=None, json_out=False):
+        return ""
+    monkeypatch.setattr(main, "_gemini_generate", empty_gen)
+    assert asyncio.run(main._translate("hello", "es", "stub")) == "hello"   # empty -> original
+
+
+def test_chat_api_spanish_roundtrip(monkeypatch):
+    import asyncio, json as _json
+    async def no_rows(url):
+        return []
+    monkeypatch.setattr(main, "fetch_csv_rows", no_rows)
+    async def fake_gen(key, parts, temp=None, json_out=False):
+        p = parts[0]["text"]
+        if "to English" in p: return "what days are open?"
+        if "to Spanish" in p: return "Estos son los días disponibles."
+        return ""
+    monkeypatch.setattr(main, "_gemini_generate", fake_gen)
+    monkeypatch.setenv("GEMINI_API_KEY", "stub")
+
+    class Req:
+        client = type("C", (), {"host": "9.9.9.9"})()
+        async def json(self):
+            return {"args": {"message": "¿qué días están abiertos?", "state": {}}}
+
+    r = asyncio.run(main.chat_api(Req()))
+    body = r[1][0]                                            # conftest stub: JSONResponse(payload) -> ("JSON",(payload,),{})
+    assert body["state"].get("lang") == "es"                 # language stays sticky
+    assert "días" in body["reply"].lower()                   # reply came back translated
