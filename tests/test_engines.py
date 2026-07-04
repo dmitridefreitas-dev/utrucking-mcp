@@ -164,3 +164,28 @@ def test_reported_glued_input_prices_everything():
     q = engines.quote("keyboard, table, 3bed, 4u trucking box", b)
     got = {l["item"]: l["qty"] for l in q["line_items"]}
     assert got == {"Keyboard": 1, "Table": 1, "Mattress": 3, "Utrucking Box": 4}, got
+
+
+# ---------- staff truck-space estimate (Sprinter vs 26-ft U-Haul, real cargo capacity) ----------
+def test_space_estimate_reports_both_trucks_with_real_capacity():
+    s = engines.space_estimate([{"item": "Utrucking Box", "qty": 100, "unit_price": 22.0}])  # 300 cu ft
+    assert s["cubic_ft"] == 300.0 and s["box_equiv"] == 100
+    assert set(s["trucks"]) == {"sprinter", "uhaul26"}
+    assert s["trucks"]["uhaul26"]["cuft"] == 1682.0        # U-Haul 26' spec
+    assert s["trucks"]["sprinter"]["cuft"] == 488.0        # Sprinter 170" high-roof
+    # 300/1682 ≈ 18%, 300/488 ≈ 61% — the same load fills more of the smaller van
+    assert s["trucks"]["uhaul26"]["pct"] == 18 and s["trucks"]["sprinter"]["pct"] == 61
+    assert s["trucks"]["sprinter"]["pct"] > s["trucks"]["uhaul26"]["pct"]
+    assert s["default"] == "sprinter"
+
+
+def test_space_estimate_empty_is_zero_not_crash():
+    s = engines.space_estimate([])
+    assert s["cubic_ft"] == 0 and s["box_equiv"] == 0
+    assert s["trucks"]["uhaul26"]["pct"] == 0 and s["trucks"]["sprinter"]["loads"] == 0.0
+
+
+def test_space_estimate_overflows_smaller_truck_first():
+    s = engines.space_estimate([{"item": "Utrucking Box", "qty": 200, "unit_price": 22.0}])  # 600 cu ft
+    assert s["trucks"]["sprinter"]["loads"] > 1.0          # needs more than one Sprinter
+    assert s["trucks"]["uhaul26"]["loads"] < 1.0           # still one U-Haul

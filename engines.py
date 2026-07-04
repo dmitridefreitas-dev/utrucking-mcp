@@ -77,9 +77,20 @@ def upsell_value(service_rows, item_col="Summer Storage Item List", min_orders=8
 
 
 # ---- volume / truck-space model (STAFF planning only — never shown on the customer estimate) ----
-# Rough stored footprint in cubic feet per catalog item, by tier. A 15-ft box truck holds ~800 cu ft
-# usable. Used to answer "how much of a truck is this / how many boxes' worth" for crew planning.
-TRUCK_CUFT = 800.0
+# Rough stored footprint in cubic feet per catalog item, by tier. Used to answer "how much of the
+# truck is this / how many boxes' worth" so staff can decide which vehicle to take for a job.
+# The two trucks UTrucking actually runs, with real cargo capacity:
+#   • 26-ft U-Haul .................. 1,682 cu ft  (U-Haul spec: 26'5" × 7'8" × 8'3")
+#   • Mercedes Sprinter cargo van ... 488 cu ft   (2500, 170" wheelbase, high roof)
+# Sprinter capacity varies by config — 319 (144" std roof) · 374 (144" high) · 488 (170" high) ·
+# 533 (170" extended high). Change SPRINTER_CUFT below if the van is a different wheelbase/roof.
+UHAUL26_CUFT = 1682.0
+SPRINTER_CUFT = 488.0
+TRUCKS = {                          # order here = order the selector buttons appear in
+    "sprinter": {"label": "Sprinter (170\" high-roof)", "cuft": SPRINTER_CUFT},
+    "uhaul26":  {"label": "26-ft U-Haul",               "cuft": UHAUL26_CUFT},
+}
+_DEFAULT_TRUCK = "sprinter"         # show the smaller van first — "can we get away with the Sprinter?"
 _BOX_CUFT = 3.0                     # a UTrucking box ≈ 3 cu ft — the unit we express volume in
 _VOL_TIER = {                       # fallbacks by unit price when an item isn't explicitly sized
     15.0: 2.0, 18.0: 3.0, 20.0: 4.0, 23.0: 5.0, 27.0: 8.0, 33.0: 14.0, 39.0: 22.0, 60.0: 30.0}
@@ -110,11 +121,12 @@ def _item_cuft(key, unit_price=None):
     except (TypeError, ValueError):
         return _BOX_CUFT
 
-def space_estimate(line_items):
+def space_estimate(line_items, truck=None):
     """STAFF truck-planning estimate for a priced quote. Given [{item, qty, unit_price}], returns
-    {cubic_ft, box_equiv, truck_pct, trucks, breakdown} — how much space the load takes, in cu ft,
-    box-equivalents, and fraction of a 15-ft truck. Not for customer display; drives crew/truck load
-    planning. Missing sizes fall back to the item's price tier so the total is never understated."""
+    {cubic_ft, box_equiv, trucks{<key>:{label,cuft,pct,loads}}, default, breakdown} — how much space
+    the load takes in cu ft and box-equivalents, and what fraction of EACH truck (Sprinter vs 26-ft
+    U-Haul) it fills, so staff can pick the vehicle. Not for customer display. Missing item sizes fall
+    back to the price tier so the total is never understated."""
     total = 0.0; breakdown = []
     for l in (line_items or []):
         qty = int(l.get("qty", 1) or 1)
@@ -123,11 +135,17 @@ def space_estimate(line_items):
         total += sub
         breakdown.append({"item": l.get("item"), "qty": qty, "cuft_each": round(cu, 1), "cuft": sub})
     total = round(total, 1)
+    trucks = {}
+    for key, t in TRUCKS.items():
+        cap = t["cuft"]
+        trucks[key] = {"label": t["label"], "cuft": cap,
+                       "pct": int(round(100 * total / cap)) if total else 0,
+                       "loads": round(total / cap, 2) if total else 0.0}
     return {
         "cubic_ft": total,
         "box_equiv": int(round(total / _BOX_CUFT)) if total else 0,
-        "truck_pct": int(round(100 * total / TRUCK_CUFT)) if total else 0,
-        "trucks": round(total / TRUCK_CUFT, 2) if total else 0.0,
+        "trucks": trucks,
+        "default": truck if truck in TRUCKS else _DEFAULT_TRUCK,
         "breakdown": breakdown,
     }
 

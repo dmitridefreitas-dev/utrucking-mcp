@@ -9,3 +9,4 @@ _*.csv
 _*.json
 _preview/
 .pytest_cache/
+_render/

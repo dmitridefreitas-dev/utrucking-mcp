@@ -473,6 +473,26 @@ async def status(request: Request):
     })
 
 
+# ── brand assets (the real UTrucking logo, so the toolkit matches the official site) ──
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+def _serve_asset(fname, media):
+    from starlette.responses import Response
+    try:
+        with open(os.path.join(_ASSETS_DIR, fname), "rb") as f:
+            return Response(f.read(), media_type=media, headers={"Cache-Control": "public, max-age=604800"})
+    except Exception:
+        return JSONResponse({"error": "asset not found"}, status_code=404)
+
+@mcp.custom_route("/brand/logo.jpg", methods=["GET"])
+async def brand_logo(request: Request):
+    return _serve_asset("ut-logo.jpg", "image/jpeg")
+
+@mcp.custom_route("/brand/icon.png", methods=["GET"])
+async def brand_icon(request: Request):
+    return _serve_asset("ut-icon.png", "image/png")
+
+
 @mcp.tool()
 async def lookup_student(name_heard: str, order_hint: str = "", phone: str = "") -> str:
     """
@@ -513,7 +533,7 @@ async def quote_endpoint(request: Request):
     result = await _ai_map_unmatched(result, book)
     _attach_upsell(result, _upsell_pairs(service_rows), book, _upsell_value(service_rows))
     if _staff_flag(request, args):        # staff-only truck-space estimate (never on the customer view)
-        result["space"] = _space_estimate(result.get("line_items") or [])
+        result["space"] = _space_estimate(result.get("line_items") or [], args.get("truck"))
     return JSONResponse(result)
 
 
@@ -846,7 +866,7 @@ async def photo_quote_endpoint(request: Request):
     if service_rows:
         _attach_upsell(result, _upsell_pairs(service_rows), book, _upsell_value(service_rows))
     if _staff_flag(request, args):        # staff-only truck-space estimate (never on the customer view)
-        result["space"] = _space_estimate(result.get("line_items") or [])
+        result["space"] = _space_estimate(result.get("line_items") or [], args.get("truck"))
     result["detected"] = detected
     return JSONResponse(result)
 
@@ -900,8 +920,9 @@ async def condition_check_endpoint(request: Request):
 
 _CONDITION_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Condition Docs - UTrucking</title><style>
-:root{--navy:#0f2544;--orange:#c07d2a;--ink:#111827;--mut:#667085;--soft:#98a2b3;--line:#e5e7eb;--head:#0b1a33;--bg:#f4f5f7}
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
+@import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');:root{--navy:#164899;--orange:#006eff;--ink:#121212;--mut:#696b85;--soft:#a0b3e3;--line:#e1e3e4;--head:#164899;--bg:#f1f2f8}
+h1,h2,h3,h4,header b{font-family:'Inclusive Sans','Inter',sans-serif}
+*{box-sizing:border-box}body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
 header{background:#fff;border-bottom:1px solid var(--line);color:var(--head);padding:18px 20px}
 header .ey{display:block;text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600;color:var(--orange)}
 header b{display:block;font-size:18px;letter-spacing:-.01em;margin-top:3px}header .s{display:block;color:var(--mut);font-size:12.5px;margin-top:3px}
@@ -910,7 +931,7 @@ main{max-width:760px;margin:0 auto;padding:18px}
 label.file{display:inline-block;background:var(--navy);color:#fff;border-radius:9px;padding:10px 16px;font-weight:600;cursor:pointer;font-size:14px}
 input[type=file]{display:none}
 button{background:var(--navy);color:#fff;border:0;border-radius:9px;padding:10px 16px;font-weight:600;cursor:pointer;font-family:inherit;font-size:14.5px}
-button:hover{background:#173252}
+button:hover{background:#0f3b80}
 button.ghost{background:#eef1f5;color:var(--navy)}
 img.prev{max-width:100%;max-height:230px;border-radius:10px;margin-top:10px;display:none;border:1px solid var(--line)}
 table{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px}
@@ -922,7 +943,7 @@ th{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.05em
 .mut{color:var(--mut);font-size:12.5px}.err{color:#b42318}.stamp{color:var(--soft);font-size:12px;margin-top:8px}
 @media print{header,.controls,label.file,button{display:none}body{background:#fff}}
 </style></head><body>
-<header><span class=ey>University Trucking</span><b>Condition Docs</b><span class=s>Photograph an item at pickup - AI logs its condition for dispute protection (staff)</span></header>
+<header><img src="/brand/logo.jpg" alt="University Trucking" style="height:19px;width:auto;display:block;margin-bottom:6px"><b>Condition Docs</b><span class=s>Photograph an item at pickup - AI logs its condition for dispute protection (staff)</span></header>
 <main>
  <div class=card>
   <label class=file>Choose / take a photo<input type=file id=f accept="image/*" capture=environment></label>
@@ -976,8 +997,9 @@ _ESTIMATE_HTML = """<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>UTrucking - Instant Storage Estimate</title>
 <style>
- :root{--navy:#0f2544;--orange:#c07d2a;--ink:#111827;--head:#0b1a33;--mut:#667085;--soft:#98a2b3;--line:#e5e7eb;--bg:#f4f5f7}
- *{box-sizing:border-box} body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
+ @import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');:root{--navy:#164899;--orange:#006eff;--ink:#121212;--head:#164899;--mut:#696b85;--soft:#a0b3e3;--line:#e1e3e4;--bg:#f1f2f8}
+ h1,h2,h3,h4,header h1{font-family:'Inclusive Sans','Inter',sans-serif}
+ *{box-sizing:border-box} body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
  .bar{height:3px;background:var(--orange)}
  header{background:#fff;border-bottom:1px solid var(--line);color:var(--head);padding:20px}
  header .ey{text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600;color:var(--orange)}
@@ -990,7 +1012,7 @@ _ESTIMATE_HTML = """<!doctype html>
  textarea{width:100%;min-height:72px;border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;resize:vertical;color:var(--ink)}
  textarea:focus{outline:none;border-color:#b9c2cf;box-shadow:0 0 0 3px rgba(15,37,68,.08)}
  .btn{background:var(--navy);color:#fff;border:0;border-radius:10px;padding:12px 18px;font-weight:600;font-size:15px;cursor:pointer;margin-top:10px}
- .btn:hover{background:#173252} .btn:active{transform:translateY(1px)} .file{display:block;margin-top:6px;font:inherit}
+ .btn:hover{background:#0f3b80} .btn:active{transform:translateY(1px)} .file{display:block;margin-top:6px;font:inherit}
  .or{text-align:center;color:var(--soft);font-size:12px;margin:6px 0;text-transform:uppercase;letter-spacing:.12em}
  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
@@ -1001,18 +1023,24 @@ _ESTIMATE_HTML = """<!doctype html>
  .note{color:var(--mut);font-size:12px;margin-top:10px} .err{color:#b42318;font-size:14px;margin-top:8px}
  .spin{color:var(--mut);font-size:14px;margin-top:8px} #result{display:none}
  .tag{display:inline-block;background:#eef1f5;color:var(--navy);border-radius:20px;padding:3px 10px;font-size:12px;margin:3px 4px 0 0}
- .upsell{margin-top:12px;padding:10px 12px;background:#faf4e8;border:1px solid #ecdcbf;border-radius:10px}
- .upsell .uplbl{font-weight:600;color:#8a6a1f;font-size:12.5px;margin-right:4px}
- .staffchip{display:inline-block;margin-top:10px;background:#0f2544;color:#fff;border-radius:20px;padding:4px 11px;font-size:11.5px;font-weight:600;letter-spacing:.02em}
- .staffbox{margin-top:12px;padding:13px 14px;background:#0f2544;color:#fff;border-radius:10px}
- .staffbox .sh{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#e0a559;font-weight:600}
+ .upsell{margin-top:12px;padding:10px 12px;background:#eef2fb;border:1px solid #d3e0f5;border-radius:10px}
+ .upsell .uplbl{font-weight:600;color:var(--navy);font-size:12.5px;margin-right:4px}
+ .staffchip{display:inline-block;margin-top:10px;background:var(--navy);color:#fff;border-radius:20px;padding:4px 11px;font-size:11.5px;font-weight:600;letter-spacing:.02em}
+ .staffbox{margin-top:12px;padding:13px 14px;background:#0b2154;color:#fff;border-radius:10px}
+ .staffbox .sh{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#a8c4e6;font-weight:600}
  .staffbox .big{font-size:17px;font-weight:700;margin-top:5px}
- .staffbox .sub{font-size:12px;color:#c6d2e2;margin-top:5px;line-height:1.5}
+ .staffbox .sub{font-size:12px;color:#c6d2e2;margin-top:7px;line-height:1.5}
+ .staffbox .trucksel{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+ .staffbox .tbtn{background:rgba(255,255,255,.10);color:#c6d2e2;border:1px solid rgba(255,255,255,.24);border-radius:8px;padding:6px 12px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+ .staffbox .tbtn:hover{background:rgba(255,255,255,.17)}
+ .staffbox .tbtn.on{background:var(--orange);border-color:var(--orange);color:#fff}
+ .staffbox .truckread{margin-top:10px;font-size:14px;color:#fff}
+ .staffbox .truckread .cap{color:#c6d2e2;font-size:12.5px}
  .rev{display:inline-block;background:#fef0c7;color:#8a6a1f;border:1px solid #f0d48a;border-radius:6px;padding:1px 6px;font-size:10.5px;font-weight:600;margin-left:6px;vertical-align:middle}
  .revsum{margin-top:10px;padding:8px 11px;background:#fffaf0;border:1px solid #f0d48a;border-radius:8px;color:#8a6a1f;font-size:12.5px}
 </style></head><body>
 <div class="bar"></div>
-<header><div class="ey">University Trucking</div>
+<header><img src="/brand/logo.jpg" alt="University Trucking" style="height:21px;width:auto;display:block;margin-bottom:7px">
  <h1>Instant Storage &amp; Moving Estimate</h1>
  <p>Snap a photo of your stuff or type what you have - get a price in seconds.</p></header>
 <main>
@@ -1040,6 +1068,13 @@ _ESTIMATE_HTML = """<!doctype html>
   fr.onerror=()=>res('');fr.readAsDataURL(f);});}
  function show(h){$('result').style.display='block';$('body').innerHTML=h;$('result').scrollIntoView({behavior:'smooth'});}
  function loading(m){$('detected').innerHTML='';show('<div class=spin>'+m+'</div>');}
+ /* staff truck selector: click Sprinter / 26-ft U-Haul to recalibrate the % this load fills */
+ function renderTruck(k){var S=window.__space;if(!S||!S.trucks[k])return;var t=S.trucks[k];
+  var rd=$('truckread');if(rd)rd.innerHTML='&#8776; <b>'+t.pct+'% of the '+t.label+'</b>'+(t.loads>=1?' &middot; '+t.loads+' loads':'')+' <span class=cap>('+Number(t.cuft).toLocaleString()+' cu ft cargo)</span>';
+  var sel=$('trucksel');if(sel)Array.prototype.forEach.call(sel.querySelectorAll('.tbtn'),function(b){b.classList.toggle('on',b.getAttribute('data-k')===k);});}
+ function wireTruck(){var S=window.__space;var sel=$('trucksel');if(!S||!sel)return;
+  Array.prototype.forEach.call(sel.querySelectorAll('.tbtn'),function(b){b.addEventListener('click',function(){renderTruck(b.getAttribute('data-k'));});});
+  renderTruck(S.default||'sprinter');}
  function render(data,fromPhoto){
   if(!data||data.status==='error'){show('<div class=err>Sorry - '+((data&&data.message)||'something went wrong')+'</div>');return;}
   if(data.status==='not_configured'){show('<div class=err>Photo estimates are not switched on yet. Try the text box above.</div>');return;}
@@ -1070,9 +1105,13 @@ _ESTIMATE_HTML = """<!doctype html>
      +data.upsell.items.map(function(it){return '<span class=tag>'+it.item+' &middot; $'+Number(it.unit_price).toFixed(0)+'</span>';}).join(' ')+'</div>';
   }
   let sp='';
-  if(STAFF&&data.space){var s=data.space;
-   var sl='&#8776; '+s.cubic_ft+' cu ft &middot; &#8776; '+s.box_equiv+" boxes&rsquo; worth &middot; &#8776; "+s.truck_pct+'% of a 15-ft truck'+(s.trucks>=1?' ('+s.trucks+' trucks)':'');
-   sp='<div class=staffbox><div class=sh>Staff &middot; space &amp; truck estimate</div><div class=big>'+sl+'</div><div class=sub>Planning figure for crew &amp; truck load &mdash; not shown to customers.</div></div>';
+  if(STAFF&&data.space&&data.space.trucks){var s=data.space;window.__space=s;
+   var tbtns=Object.keys(s.trucks).map(function(k){return '<button type=button class=tbtn data-k="'+k+'">'+s.trucks[k].label+'</button>';}).join('');
+   sp='<div class=staffbox><div class=sh>Staff &middot; space &amp; truck estimate</div>'
+     +'<div class=big>&#8776; '+s.cubic_ft+' cu ft &middot; &#8776; '+s.box_equiv+" boxes&rsquo; worth</div>"
+     +'<div class=trucksel id=trucksel>'+tbtns+'</div>'
+     +'<div class=truckread id=truckread></div>'
+     +'<div class=sub>Pick the truck to see how much of it this load fills &mdash; planning figure only, not shown to customers.</div></div>';
   }
   let html='<table><thead><tr><th>Item</th><th class=n>Est.</th></tr></thead><tbody>'+rows+'</tbody></table>'
    +revsum
@@ -1080,6 +1119,7 @@ _ESTIMATE_HTML = """<!doctype html>
    +up+sp+extra
    +'<p class=note>Instant estimate based on typical UTrucking pricing. Final price is confirmed at pickup. Ready to book? Call (314) 266-8878 and mention your estimate.</p>';
   show(html);
+  if(STAFF&&data.space&&data.space.trucks) wireTruck();
  }
  let photoB64=null;
  async function quoteNow(){
@@ -1472,13 +1512,14 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
 <meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
 <title>UTrucking Assistant - SMS Preview</title>
 <style>
- :root{--navy:#0f2544;--orange:#c07d2a;--bot:#eef1f5;--me:#173252;--ink:#111827;--head:#0b1a33;--mut:#667085;--line:#e5e7eb;--bg:#f4f5f7}
+ @import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');:root{--navy:#164899;--orange:#006eff;--bot:#eef2fb;--me:#164899;--ink:#121212;--head:#164899;--mut:#696b85;--line:#e1e3e4;--bg:#f1f2f8}
+ h1,h2,h3,h4,header b{font-family:'Inclusive Sans','Inter',sans-serif}
  *{box-sizing:border-box} html,body{height:100%}
- body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);display:flex;flex-direction:column;height:100vh;height:100dvh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+ body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);display:flex;flex-direction:column;height:100vh;height:100dvh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
  header{background:#fff;border-bottom:1px solid var(--line);color:var(--head);padding:14px 16px}
  header .ey{text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600;color:var(--orange)}
  header b{font-size:16px;display:block;margin-top:2px;color:var(--head)} header .s{display:block;color:var(--mut);font-size:12px;margin-top:2px}
- .note{background:#faf4e8;color:#8a6a1f;font-size:12px;text-align:center;padding:6px 10px;border-bottom:1px solid #ecdcbf}
+ .note{background:#eef2fb;color:var(--navy);font-size:12px;text-align:center;padding:6px 10px;border-bottom:1px solid #d3e0f5}
  #log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px;-webkit-overflow-scrolling:touch}
  .b{max-width:82%;padding:9px 13px;border-radius:16px;font-size:15px;line-height:1.4;white-space:pre-wrap;word-wrap:break-word}
  .bot{background:var(--bot);color:#1f2933;align-self:flex-start;border-bottom-left-radius:4px;border:1px solid var(--line)}
@@ -1487,13 +1528,13 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  input{flex:1;min-width:0;border:1px solid #d3d8df;border-radius:20px;padding:11px 14px;font:inherit;font-size:16px;color:var(--ink)}
  input:focus{outline:none;border-color:#b9c2cf;box-shadow:0 0 0 3px rgba(15,37,68,.08)}
  button{background:var(--navy);color:#fff;border:0;border-radius:20px;padding:0 18px;font-weight:600;cursor:pointer;font-family:inherit}
- button:hover{background:#173252}
+ button:hover{background:#0f3b80}
  #mic{flex:none;width:44px;height:44px;padding:0;border-radius:50%;display:flex;align-items:center;justify-content:center;
   background:#eef1f5;border:1px solid #d3d8df;color:var(--navy)}
  #mic:hover{background:#e4e8ee}
  #mic svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
  #mic.rec{background:var(--orange);border-color:var(--orange);color:#fff;animation:recpulse 1.2s ease-in-out infinite}
- @keyframes recpulse{0%,100%{box-shadow:0 0 0 0 rgba(192,125,42,.5)}50%{box-shadow:0 0 0 8px rgba(192,125,42,0)}}
+ @keyframes recpulse{0%,100%{box-shadow:0 0 0 0 rgba(0,110,255,.5)}50%{box-shadow:0 0 0 8px rgba(0,110,255,0)}}
  /* live test-ID panel (upper right) — real names from the sheet so you can test lookups without it */
  #ids{position:fixed;top:8px;right:8px;z-index:20;width:214px;max-width:62vw;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 22px rgba(16,24,40,.14);font-size:12px;overflow:hidden}
  #ids .h{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:7px 10px;background:var(--navy);color:#fff;cursor:pointer;user-select:none}
@@ -1511,7 +1552,7 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  #ids .it .mt{color:var(--mut);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
  @media (max-width:620px){#ids{width:172px}}
 </style></head><body>
-<header><span class=ey>University Trucking</span><b>Assistant</b><span class=s>SMS preview - test chat</span></header>
+<header><img src="/brand/logo.jpg" alt="University Trucking" style="height:19px;width:auto;display:block;margin-bottom:6px"><b>Assistant</b><span class=s>SMS preview - test chat</span></header>
 <div class=note>Preview only - no real texts are sent. Order lookups verify your identity, like the phone line.</div>
 <div id=ids><div class=h id=idsh><b>Test IDs · live</b><span class=rt><button class=rf id=idsrf title="Shuffle" type=button>&#8635;</button><span id=idst>&#9662;</span></span></div><div class=bd id=idsbd><div class=it>Loading…</div></div></div>
 <div id=log></div>
@@ -1731,8 +1772,9 @@ async def ask_api(request: Request):
 
 _ASK_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Ask Your Data - UTrucking</title><style>
-:root{--navy:#0f2544;--orange:#c07d2a;--line:#e5e7eb;--ink:#111827;--head:#0b1a33;--mut:#667085;--soft:#98a2b3;--bg:#f4f5f7}
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+@import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');:root{--navy:#164899;--orange:#006eff;--line:#e1e3e4;--ink:#121212;--head:#164899;--mut:#696b85;--soft:#a0b3e3;--bg:#f1f2f8}
+h1,h2,h3,h4,header b{font-family:'Inclusive Sans','Inter',sans-serif}
+*{box-sizing:border-box}body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
 header{background:#fff;border-bottom:1px solid var(--line);color:var(--head);padding:18px 20px}
 header b{font-size:18px;letter-spacing:-.01em}header .s{display:block;color:var(--mut);font-size:12.5px;margin-top:3px}
 header .ey{display:block;text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600;color:var(--orange);margin-bottom:2px}
@@ -1744,11 +1786,11 @@ form{display:flex;gap:8px;margin-top:10px}
 input{flex:1;min-width:0;border:1px solid #d3d8df;border-radius:10px;padding:12px;font:inherit;font-size:16px;color:var(--ink)}
 input:focus{outline:none;border-color:#b9c2cf;box-shadow:0 0 0 3px rgba(15,37,68,.08)}
 button{background:var(--navy);color:#fff;border:0;border-radius:10px;padding:0 18px;font-weight:600;cursor:pointer;font-family:inherit}
-button:hover{background:#173252}
+button:hover{background:#0f3b80}
 #ans{white-space:pre-wrap;background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:14px;line-height:1.5;display:none;box-shadow:0 1px 2px rgba(16,24,40,.05)}
 .mut{color:var(--mut);font-size:13px}
 </style></head><body>
-<header><span class=ey>University Trucking</span><b>Ask Your Data</b><span class=s>Internal analyst - aggregate business stats</span></header>
+<header><img src="/brand/logo.jpg" alt="University Trucking" style="height:19px;width:auto;display:block;margin-bottom:6px"><b>Ask Your Data</b><span class=s>Internal analyst - aggregate business stats</span></header>
 <main>
 <p class=mut>Ask a plain-English question about the storage operation. Aggregate figures only - no individual customer data.</p>
 <div class=chips id=chips></div>
@@ -1767,8 +1809,9 @@ document.getElementById('f').addEventListener('submit',function(e){e.preventDefa
 
 _INSIGHTS_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Business Insights - UTrucking</title><style>
-:root{--navy:#0f2544;--orange:#c07d2a;--line:#e5e7eb;--ink:#111827;--head:#0b1a33;--mut:#667085;--soft:#98a2b3;--bg:#f4f5f7}
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+@import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');:root{--navy:#164899;--orange:#006eff;--line:#e1e3e4;--ink:#121212;--head:#164899;--mut:#696b85;--soft:#a0b3e3;--bg:#f1f2f8}
+h1,h2,h3,h4,header b{font-family:'Inclusive Sans','Inter',sans-serif}
+*{box-sizing:border-box}body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
 header{background:#fff;border-bottom:1px solid var(--line);color:var(--head);padding:18px 20px}
 header b{font-size:18px;letter-spacing:-.01em}header .s{display:block;color:var(--mut);font-size:12.5px;margin-top:3px}
 header .ey{display:block;text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600;color:var(--orange);margin-bottom:2px}
@@ -1786,12 +1829,12 @@ main{max-width:900px;margin:0 auto;padding:16px}
 .controls label{font-size:12.5px;color:var(--mut);display:flex;gap:5px;align-items:center}
 .controls input[type=date]{border:1px solid #d3d8df;border-radius:8px;padding:7px 9px;font:inherit;font-size:15px;color:var(--ink)}
 .controls button{background:var(--navy);color:#fff;border:0;border-radius:8px;padding:8px 13px;font-weight:600;cursor:pointer;font-family:inherit;font-size:13px}
-.controls button:hover{background:#173252}
+.controls button:hover{background:#0f3b80}
 .controls button.ghost{background:#eef1f5;color:var(--navy)}
 .controls button.ghost:hover{background:#e4e8ee}
 @media (max-width:480px){.row .lab{width:96px;font-size:12px}.row .val{width:64px;font-size:12px}.stat .n{font-size:18px}}
 </style></head><body>
-<header><span class=ey>University Trucking</span><b>Business Insights</b><span class=s>Live from the DISPATCH + SERVICE sheets</span></header>
+<header><img src="/brand/logo.jpg" alt="University Trucking" style="height:19px;width:auto;display:block;margin-bottom:6px"><b>Business Insights</b><span class=s>Live from the DISPATCH + SERVICE sheets</span></header>
 <div class=controls>
  <label>From <input type=date id=from></label>
  <label>To <input type=date id=to></label>
@@ -1866,40 +1909,47 @@ load();
 
 _DASH_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>University Trucking · AI Toolkit</title><style>
+@import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
 :root{
- --bg:#f4f5f7;--surface:#fff;--line:#e5e7eb;--line2:#eef0f3;
- --ink:#111827;--head:#0b1a33;--mut:#667085;--soft:#98a2b3;
- --brand:#0f2544;--brand-ink:#173252;--accent:#c07d2a;
- --ring:rgba(15,37,68,.16);
+ --bg:#f1f2f8;--surface:#fff;--line:#e1e3e4;--line2:#eef0f3;
+ --ink:#121212;--head:#164899;--mut:#696b85;--soft:#a0b3e3;
+ --brand:#164899;--brand-ink:#0b2154;--accent:#006eff;
+ --ring:rgba(22,72,153,.20);
  --sh:0 1px 2px rgba(16,24,40,.04),0 1px 3px rgba(16,24,40,.06);
- --sh-h:0 8px 20px rgba(16,24,40,.10),0 2px 6px rgba(16,24,40,.05)}
+ --sh-h:0 10px 24px rgba(16,24,40,.12),0 2px 6px rgba(16,24,40,.05)}
 *{box-sizing:border-box}html,body{height:100%}
-body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--ink);
+h1,.brand,.card h2{font-family:'Inclusive Sans','Inter',sans-serif}
+body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--ink);
  background:var(--bg);min-height:100vh;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}
 /* top bar */
 .top{background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-.top .in{max-width:1040px;margin:0 auto;padding:13px 24px;display:flex;align-items:center;gap:12px}
-.mono{width:32px;height:32px;border-radius:8px;background:var(--brand);color:#fff;font-weight:700;font-size:13px;
- letter-spacing:.03em;display:flex;align-items:center;justify-content:center;flex:none}
-.brand{font-weight:600;font-size:14.5px;color:var(--head);letter-spacing:-.01em}
-.brand span{color:var(--soft);font-weight:500}
-.chip{margin-left:auto;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);
- background:var(--line2);border:1px solid var(--line);border-radius:999px;padding:5px 11px}
+.top .in{max-width:1040px;margin:0 auto;padding:11px 24px;display:flex;align-items:center;gap:12px}
+.logo{height:34px;width:auto;display:block}
+.chip{margin-left:auto;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--brand);
+ background:#eaf0fb;border:1px solid #d3e0f5;border-radius:999px;padding:5px 11px}
+/* royal-blue hero band (matches the official site) */
+.hero{background:var(--brand);color:#fff;position:relative;overflow:hidden}
+.hero:after{content:"";position:absolute;top:-50px;right:-40px;width:360px;height:320px;opacity:.13;pointer-events:none;
+ background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52' viewBox='0 0 60 52'%3E%3Cpath d='M15 1 L45 1 L60 26 L45 51 L15 51 L0 26 Z' fill='none' stroke='%23ffffff' stroke-width='2'/%3E%3C/svg%3E");background-size:58px 50px}
+.hero .in{max-width:1040px;margin:0 auto;padding:42px 24px;position:relative;z-index:1}
+.hero .eyebrow{color:#a8c4e6}
+.hero h1{color:#fff;font-size:30px}
+.hero .lead{color:#dbe6f7}
 /* home */
 #home{flex:1;overflow:auto;-webkit-overflow-scrolling:touch}
-.wrap{max-width:1040px;margin:0 auto;padding:40px 24px 64px}
+.wrap{max-width:1040px;margin:0 auto;padding:30px 24px 64px}
 .eyebrow{font-size:12px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
-h1{margin:9px 0 0;font-size:28px;font-weight:680;letter-spacing:-.02em;color:var(--head)}
-.lead{margin:9px 0 0;color:var(--mut);font-size:15px;line-height:1.55;max-width:600px}
-.grid{margin-top:30px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+h1{margin:9px 0 0;font-size:28px;font-weight:700;letter-spacing:-.02em;color:var(--head)}
+.lead{margin:10px 0 0;color:var(--mut);font-size:15px;line-height:1.55;max-width:620px}
+.grid{margin-top:4px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .card{display:flex;gap:14px;align-items:flex-start;text-align:left;width:100%;background:var(--surface);
  border:1px solid var(--line);border-radius:12px;padding:17px;cursor:pointer;color:var(--ink);font:inherit;
  box-shadow:var(--sh);transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}
 .card:hover{transform:translateY(-2px);box-shadow:var(--sh-h);border-color:#d3d8df}
 .card:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
-.card .ic{flex:none;width:40px;height:40px;border-radius:10px;background:#f0f4f9;border:1px solid var(--line);
+.card .ic{flex:none;width:40px;height:40px;border-radius:50%;background:var(--brand);border:1px solid var(--brand);
  display:flex;align-items:center;justify-content:center}
-.card .ic svg{width:20px;height:20px;stroke:var(--brand);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.card .ic svg{width:20px;height:20px;stroke:#fff;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .card .tx{flex:1;min-width:0}
 .card h2{margin:1px 0 3px;font-size:15px;font-weight:640;color:var(--head)}
 .card p{margin:0;color:var(--mut);font-size:12.5px;line-height:1.5}
@@ -1921,14 +1971,15 @@ h1{margin:9px 0 0;font-size:28px;font-weight:680;letter-spacing:-.02em;color:var
 </style></head><body>
 <div id=home>
  <div class=top><div class=in>
-  <div class=mono>UT</div>
-  <div class=brand>University Trucking <span>· AI Toolkit</span></div>
+  <a href="/" style="text-decoration:none;display:block"><img class=logo src="/brand/logo.jpg" alt="University Trucking"></a>
   <div class=chip>Internal · Test</div>
  </div></div>
- <div class=wrap>
-  <div class=eyebrow>Operations Console</div>
+ <div class=hero><div class=in>
+  <div class=eyebrow>Internal Tools &middot; Testing</div>
   <h1>AI Toolkit</h1>
   <p class=lead>Every tool in one place &mdash; customer quotes, pickups and order lookup, live business intelligence, crew dispatch, a staff console and condition docs. Chat and voice run the live phone agent's brain for free testing.</p>
+ </div></div>
+ <div class=wrap>
   <div class=grid>
    <button class=card onclick="op('/chat','Assistant chat')">
     <span class=ic><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.7A8 8 0 1 1 21 12z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg></span>
@@ -1973,8 +2024,9 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')back();});
 
 _OPS_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Ops Command Center - UTrucking</title><style>
-:root{--navy:#0f2544;--orange:#c07d2a;--line:#e5e7eb;--ink:#111827;--head:#0b1a33;--mut:#667085;--soft:#98a2b3;--bg:#f4f5f7}
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+@import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');:root{--navy:#164899;--orange:#006eff;--line:#e1e3e4;--ink:#121212;--head:#164899;--mut:#696b85;--soft:#a0b3e3;--bg:#f1f2f8}
+h1,h2,h3,h4,header b{font-family:'Inclusive Sans','Inter',sans-serif}
+*{box-sizing:border-box}body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
 header{background:#fff;border-bottom:1px solid var(--line);color:var(--head);padding:18px 20px}
 header b{font-size:18px;letter-spacing:-.01em}header .s{display:block;color:var(--mut);font-size:12.5px;margin-top:3px}
 header .ey{display:block;text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600;color:var(--orange);margin-bottom:2px}
@@ -1983,7 +2035,7 @@ main{max-width:960px;margin:0 auto;padding:16px}
 .controls label{font-size:13px;color:var(--mut)}
 input[type=date],input[type=password]{border:1px solid #d3d8df;border-radius:8px;padding:9px 10px;font:inherit;font-size:15px;color:var(--ink)}
 button{background:var(--navy);color:#fff;border:0;border-radius:9px;padding:10px 16px;font-weight:600;cursor:pointer;font-family:inherit}
-button:hover{background:#173252}
+button:hover{background:#0f3b80}
 button.ghost{background:#eef1f5;color:var(--navy)}button.ghost:hover{background:#e4e8ee}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:12px 0}
 .stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
@@ -2001,7 +2053,7 @@ th{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.05em
 @media print{header,.controls,#keybox{display:none}body{background:#fff}.crew{border:0;page-break-inside:avoid}
  .crew h3{border-bottom:2px solid #000}main{max-width:none;padding:0}}
 </style></head><body>
-<header><span class=ey>University Trucking</span><b>Ops Command Center</b><span class=s>Daily dispatch plan - crews, buildings, run sheets (staff only)</span></header>
+<header><img src="/brand/logo.jpg" alt="University Trucking" style="height:19px;width:auto;display:block;margin-bottom:6px"><b>Ops Command Center</b><span class=s>Daily dispatch plan - crews, buildings, run sheets (staff only)</span></header>
 <main>
  <div class=controls>
   <label>Pickup day</label><input type=date id=day>
@@ -2031,7 +2083,7 @@ async function load(){
 var LASTP=null,LASTD='';
 function render(p,d){
  var h='';
- var util=p.utilization_pct||0, uc=(util>100?'#b42318':'#0f2544');
+ var util=p.utilization_pct||0, uc=(util>100?'#b42318':'#164899');
  h+='<div class=grid>'
   +'<div class=stat><div class=n>'+(p.total_stops||0)+'</div><div class=l>Stops booked</div></div>'
   +'<div class=stat><div class=n>'+(p.buildings||0)+'</div><div class=l>Buildings</div></div>'
@@ -2076,8 +2128,9 @@ async def ops_page(request: Request):
 
 _STAFF_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Staff Console - UTrucking</title><style>
-:root{--navy:#0f2544;--orange:#c07d2a;--line:#e5e7eb;--ink:#111827;--head:#0b1a33;--mut:#667085;--soft:#98a2b3;--bg:#f4f5f7}
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+@import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');:root{--navy:#164899;--orange:#006eff;--line:#e1e3e4;--ink:#121212;--head:#164899;--mut:#696b85;--soft:#a0b3e3;--bg:#f1f2f8}
+h1,h2,h3,h4,header b{font-family:'Inclusive Sans','Inter',sans-serif}
+*{box-sizing:border-box}body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
 header{background:#fff;border-bottom:1px solid var(--line);color:var(--head);padding:18px 20px}
 header .ey{display:block;text-transform:uppercase;letter-spacing:.09em;font-size:11px;font-weight:600;color:var(--orange)}
 header b{font-size:18px;letter-spacing:-.01em}header .s{display:block;color:var(--mut);font-size:12.5px;margin-top:3px}
@@ -2086,7 +2139,7 @@ main{max-width:900px;margin:0 auto;padding:16px}
 .controls label{font-size:13px;color:var(--mut)}
 input[type=date],input[type=password]{border:1px solid #d3d8df;border-radius:8px;padding:8px 10px;font:inherit;font-size:15px;color:var(--ink)}
 button{background:var(--navy);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-weight:600;cursor:pointer;font-family:inherit;font-size:13px}
-button:hover{background:#173252}
+button:hover{background:#0f3b80}
 button.ghost{background:#eef1f5;color:var(--navy)}button.ghost:hover{background:#e4e8ee}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:12px 0}
 .stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
@@ -2098,7 +2151,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 th{color:var(--mut);font-size:11px;text-transform:uppercase;font-weight:600}.mut{color:var(--mut);font-size:12.5px}.err{color:#b42318}
 #keybox{display:none}
 </style></head><body>
-<header><span class=ey>University Trucking</span><b>Staff Console</b><span class=s>One glance: today's pickups, revenue to recover, forecast, data health (staff only)</span></header>
+<header><img src="/brand/logo.jpg" alt="University Trucking" style="height:19px;width:auto;display:block;margin-bottom:6px"><b>Staff Console</b><span class=s>One glance: today's pickups, revenue to recover, forecast, data health (staff only)</span></header>
 <main>
  <div class=controls>
   <label>Pickup day</label><input type=date id=day>
@@ -2128,7 +2181,7 @@ async function load(){
   m.textContent='';render(plan,bill,ins,day);
  }catch(e){m.innerHTML='<span class=err>Could not load - try again.</span>';}}
 function render(plan,bill,ins,day){
- var h='';var util=plan.utilization_pct||0,uc=(util>100?'#b42318':'#0f2544');
+ var h='';var util=plan.utilization_pct||0,uc=(util>100?'#b42318':'#164899');
  h+='<div class=card><h3>Pickup day <span class=mut>'+esc(day||plan.date||'')+'</span></h3><div class=grid>'
   +'<div class=stat><div class=n>'+(plan.total_stops||0)+'</div><div class=l>Stops booked</div></div>'
   +'<div class=stat><div class=n>'+(plan.buildings||0)+'</div><div class=l>Buildings</div></div>'
