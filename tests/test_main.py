@@ -248,3 +248,77 @@ def test_chat_api_spanish_roundtrip(monkeypatch):
     body = r[1][0]                                            # conftest stub: JSONResponse(payload) -> ("JSON",(payload,),{})
     assert body["state"].get("lang") == "es"                 # language stays sticky
     assert "días" in body["reply"].lower()                   # reply came back translated
+
+
+# ---------- chat identity flow: bare-name routing + fuzzy verification ----------
+def _id_data():
+    D = [
+        {"Student": "Dalen Ainsworth", "ID": "#13851-SS", "Service": "Summer Storage",
+         "Building": "Eliot A", "Room": "3091", "Date": "5/6/2026", "Phone": "3145551234", "Status": "Complete"},
+        {"Student": "Nora Vance", "ID": "#20777-SS", "Service": "Summer Storage",
+         "Building": "", "Room": "", "Date": "5/9/2026", "Phone": "", "Status": "Scheduled"},
+    ]
+    S = [{"Student Name": "Dalen Ainsworth", "Order#:": "13851-SS", "Building": "Eliot A"},
+         {"Student Name": "Nora Vance", "Order#:": "20777-SS"}]
+    return D, S
+
+
+def test_bare_name_starts_verification():
+    D, S = _id_data()
+    reply, state = main._chat_reply("Dalen Ainsworth", {}, D, S, BOOK)
+    assert state.get("step") == "verify"
+    assert "building" in reply.lower()
+    assert state.get("name", "").lower() == "dalen ainsworth"
+
+
+def test_bare_name_typo_still_routes_to_verify():
+    D, S = _id_data()
+    _, state = main._chat_reply("Dalen Ainswrth", {}, D, S, BOOK)   # missing 'o'
+    assert state.get("step") == "verify"
+
+
+def test_quote_and_courtesy_are_not_treated_as_names():
+    D, S = _id_data()
+    _, s1 = main._chat_reply("mini fridge", {}, D, S, BOOK)
+    assert not s1                                                    # a quote, no lookup state
+    _, s2 = main._chat_reply("thank you", {}, D, S, BOOK)
+    assert s2.get("step") != "verify"
+
+
+def test_unknown_nameish_goes_to_lookup_not_menu():
+    D, S = _id_data()
+    reply, state = main._chat_reply("Marguerite Vanderhoff", {}, D, S, BOOK)
+    assert state.get("intent") == "lookup"
+    assert "couldn't find" in reply.lower()
+
+
+@pytest.mark.parametrize("answer", ["Eliot A", "eliot", "Elliot A", "Elliott", " ELIOT  A "])
+def test_building_verify_tolerates_misspellings(answer):
+    D, S = _id_data()
+    _, state = main._chat_reply("Dalen Ainsworth", {}, D, S, BOOK)
+    reply, _ = main._lookup_flow(answer, state, D, S)
+    assert "You're verified" in reply
+
+
+@pytest.mark.parametrize("answer", ["Umrath", "Gregg", "zzz", "the dorm"])
+def test_building_verify_rejects_wrong_building(answer):
+    D, S = _id_data()
+    _, state = main._chat_reply("Dalen Ainsworth", {}, D, S, BOOK)
+    reply, _ = main._lookup_flow(answer, state, D, S)
+    assert "You're verified" not in reply
+
+
+@pytest.mark.parametrize("answer", ["20777", "#20777-SS", "20777-ss", "order 20777"])
+def test_order_number_verifies_when_no_building_or_phone(answer):
+    D, S = _id_data()
+    ask, state = main._chat_reply("Nora Vance", {}, D, S, BOOK)
+    assert "order number" in ask.lower()                            # asked for the order #
+    reply, _ = main._lookup_flow(answer, state, D, S)
+    assert "You're verified" in reply
+
+
+def test_order_number_wrong_is_rejected():
+    D, S = _id_data()
+    _, state = main._chat_reply("Nora Vance", {}, D, S, BOOK)
+    reply, _ = main._lookup_flow("00000", state, D, S)
+    assert "You're verified" not in reply

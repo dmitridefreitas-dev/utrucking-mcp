@@ -1275,6 +1275,41 @@ def _verify_fail(name):
     ent[0] += 1
 
 
+def _norm_id(s):
+    """Order-number normaliser: keep alphanumerics only. '#13851-SS' -> '13851ss'."""
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _id_matches(text, order_id):
+    """True if the caller's answer names their order number — tolerant of the '#', the
+    '-SS' suffix, and giving just the digits ('13851' vs '#13851-SS')."""
+    t, o = _norm_id(text), _norm_id(order_id)
+    if len(t) < 4 or not o:
+        return False
+    if t in o or o in t:
+        return True
+    dt, do = re.sub(r"\D", "", t), re.sub(r"\D", "", o)   # digit cores
+    return len(dt) >= 4 and dt == do
+
+
+def _building_matches(text, building):
+    """True if the caller's answer plausibly names their pickup building — tolerant of
+    misspellings, a missing/extra section letter, and abbreviations. Uses difflib (the same
+    family as the name matcher); buildings are short and distinct so a high ratio stays safe."""
+    b = re.sub(r"[^a-z0-9]+", " ", (building or "").lower()).strip()
+    t = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+    if not b or len(t) < 3:
+        return False
+    if t in b or b in t:                                  # exact / partial (kept from before)
+        return True
+    if difflib.SequenceMatcher(None, t, b).ratio() >= 0.8:
+        return True
+    # token level: the main building word matching is enough (section letter optional)
+    bt = [w for w in b.split() if len(w) >= 3]
+    tt = [w for w in t.split() if len(w) >= 3]
+    return any(difflib.SequenceMatcher(None, x, y).ratio() >= 0.82 for x in tt for y in bt)
+
+
 def _lookup_flow(text, state, dispatch_rows, service_rows):
     if state.get("step") == "verify":
         nm = " ".join((state.get("name") or "").lower().split())
@@ -1283,9 +1318,12 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
         rec = _build_order_result(state.get("name", ""), dispatch_rows, service_rows, state.get("hint", ""))
         if rec.get("status") != "found":
             return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
-        b = (rec.get("building") or "").lower(); low = text.lower().strip()
-        ok = bool(b) and len(low) >= 3 and (low in b or b in low)
-        if rec.get("phone") and _last4(text) and _last4(text) == _last4(rec["phone"]):
+        # accept ANY on-file identifier, each fuzzy-tolerant: building (misspelled/partial),
+        # phone last-4, or the order number — whichever the caller happens to give.
+        ok = _building_matches(text, rec.get("building"))
+        if not ok and rec.get("phone") and _last4(text) and _last4(text) == _last4(rec["phone"]):
+            ok = True
+        if not ok and _id_matches(text, rec.get("order_id")):
             ok = True
         if ok:
             _VERIFY_FAILS.pop(nm, None)
@@ -1324,6 +1362,25 @@ _RE_HOURS = re.compile(r"\b(hours?|located|location|address|where are you|contac
 _RE_LOOKUP = re.compile(r"\b(my order|order status|status of|where.?s my|where is my|track|my stuff|my pickup|my booking|look ?up|account|invoice|balance|do i owe|did you (?:pick|get))\b", re.I)
 _RE_LIST = re.compile(r"\b(other|another|others|list|what days|which days|when are|any (?:other )?day|days? (?:are )?(?:open|available|free)|options|else)\b", re.I)
 _RE_AVAIL = re.compile(r"\b(available|availab|book|booking|pickup|pick up|schedul|slot|reschedul|move-?out)\b", re.I)
+
+# A bare name looks like "Firstname Lastname" (2-3 alpha words) and isn't a command/courtesy word.
+_NAME_STOP = {"thanks", "thank", "you", "please", "yes", "no", "nope", "yeah", "yep", "ok", "okay",
+              "sure", "hello", "hey", "hi", "the", "and", "for", "what", "how", "when", "where",
+              "who", "why", "cool", "great", "good", "fine", "help", "menu", "quote", "order",
+              "status", "pickup", "box", "boxes", "fridge", "desk", "info", "hours",
+              "i", "am", "is", "it", "an", "to", "of", "in", "on", "at", "my", "me", "we",
+              "us", "he", "she", "they", "do", "did", "can", "will", "u", "im"}
+# 2-3 tokens; a single-letter token is allowed only as a middle initial ("John A Smith").
+_RE_NAMEISH = re.compile(r"^[a-z][a-z'\-]+(?:\s+[a-z][a-z'\-]*){1,2}$", re.I)
+
+
+def _looks_like_name(text):
+    """Cheap gate: does this read like a person's name (2-3 alpha words, no command words)?
+    Used so a caller who just types their name is taken into the order-lookup flow."""
+    t = " ".join((text or "").split())
+    if not (3 <= len(t) <= 40) or not _RE_NAMEISH.match(t):
+        return False
+    return not any(w.lower() in _NAME_STOP for w in t.split())
 
 
 def _attach_upsell(result, upsell, book, lift=None, max_items=2):
@@ -1393,6 +1450,13 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
         return ("Sure — I can check your order. What's the name on the order?", {"intent": "lookup", "step": "name"})
     if _RE_HOURS.search(low) and not _find_date(low) and not _find_month(low):
         return ("You can reach the UTrucking team at (314) 266-8878. Summer storage pickups run May–June. Want a quote, a pickup date, or your order status?", {})
+    # A bare name (no other intent matched) is almost always someone wanting their order —
+    # take them straight into the identity flow when the name matches a real customer, so
+    # quotes/dates still win otherwise. (smart_name_match already tolerates name typos.)
+    if _looks_like_name(text):
+        nrec = _build_order_result(text, dispatch_rows, service_rows)
+        if nrec.get("status") in ("found", "confirm"):
+            return _lookup_flow(text, {}, dispatch_rows, service_rows)
     d = _find_date(low)
     if d:
         av = _availability(dispatch_rows, d)
@@ -1420,6 +1484,10 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
         return (_quote_reply_text(q), {})
     if q.get("unmatched"):
         return ("I couldn't find a price for: %s. I can price boxes, fridges, duffels, TVs, desks, couches, mattresses and more — what do you have?" % ", ".join(q["unmatched"]), {})
+    # Name-shaped but not a known customer (and not a quote): treat it as an order-lookup
+    # attempt so they get the "couldn't find that name — try spelling it" path, not the menu.
+    if _looks_like_name(text):
+        return _lookup_flow(text, {}, dispatch_rows, service_rows)
     return ("I can give you an instant quote, check pickup dates, or look up your order. Try \"quote 5 boxes and a mini fridge\", \"what days are open?\", or \"my order status\".", {})
 
 
