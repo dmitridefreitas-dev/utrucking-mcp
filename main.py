@@ -1736,7 +1736,7 @@ h1{margin:9px 0 0;font-size:28px;font-weight:680;letter-spacing:-.02em;color:var
  <div class=wrap>
   <div class=eyebrow>Operations Console</div>
   <h1>AI Toolkit</h1>
-  <p class=lead>Six tools in one place &mdash; customer quotes, pickups and order lookup, live business intelligence, and crew dispatch. Chat and voice run the live phone agent's brain for free testing.</p>
+  <p class=lead>Every tool in one place &mdash; customer quotes, pickups and order lookup, live business intelligence, crew dispatch, a staff console and condition docs. Chat and voice run the live phone agent's brain for free testing.</p>
   <div class=grid>
    <button class=card onclick="op('/chat','Assistant chat')">
     <span class=ic><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.7A8 8 0 1 1 21 12z"/><path d="M8.5 10.5h7M8.5 13.5h4.5"/></svg></span>
@@ -1756,6 +1756,12 @@ h1{margin:9px 0 0;font-size:28px;font-weight:680;letter-spacing:-.02em;color:var
    <button class=card onclick="op('/ops','Ops command center')">
     <span class=ic><svg viewBox="0 0 24 24"><rect x="2.5" y="8" width="12" height="9"/><path d="M14.5 10h4L21 13v4h-2M2.5 17h12M7 20.5a1.8 1.8 0 1 0 .01 0M17 20.5a1.8 1.8 0 1 0 .01 0"/></svg></span>
     <span class=tx><h2>Ops command center</h2><p>Staff: daily crew plan, building routes &amp; printable run sheets.</p></span><span class=go>&rsaquo;</span></button>
+   <button class=card onclick="op('/staff','Staff console')">
+    <span class=ic><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>
+    <span class=tx><h2>Staff console</h2><p>One glance: today's pickups, revenue to recover, forecast &amp; data health.</p></span><span class=go>&rsaquo;</span></button>
+   <button class=card onclick="op('/condition','Condition docs')">
+    <span class=ic><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span>
+    <span class=tx><h2>Condition docs</h2><p>Staff: photograph an item &rarr; AI logs its condition for dispute protection.</p></span><span class=go>&rsaquo;</span></button>
   </div>
   <p class=note><b>Chat &amp; Voice are the live phone agent</b> &mdash; same brain, same data, here for free testing so no call minutes or tokens are burned. <b>Live data</b> &mdash; order details are shared only after identity verification.</p>
  </div>
