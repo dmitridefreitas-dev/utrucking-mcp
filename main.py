@@ -185,6 +185,34 @@ async def do_lookup_student(name_heard: str, order_hint: str = "", phone: str = 
     return _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
 
 
+async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "") -> dict:
+    """Confirm a caller is who they say before any order detail is revealed. Re-looks up the
+    record by name and checks the caller's answer with the SAME tolerant matcher the web chat
+    uses (fuzzy/partial building, phone last-4, or order number). Returns only a verified
+    boolean + the confirmed name — never any order PII — so it's a clean gate for the phone."""
+    if not (name_heard or "").strip():
+        return {"status": "not_found", "verified": False,
+                "message": "I didn't catch a name to verify."}
+    try:
+        dispatch_rows, service_rows = await asyncio.gather(
+            fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
+    except Exception:
+        return {"status": "error", "verified": False,
+                "message": "I'm having trouble reaching our records right now."}
+    rec = _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
+    if rec.get("status") != "found":
+        # pass confirm/not_found through so the agent can re-ask or offer suggestions
+        return {"status": rec.get("status", "not_found"), "verified": False,
+                "confirmed_name": rec.get("confirmed_name", ""),
+                "suggestions": rec.get("suggestions", []),
+                "message": rec.get("message", "")}
+    verified = _verify_answer(rec, answer or "")
+    return {"status": "found", "verified": bool(verified),
+            "confirmed_name": rec.get("confirmed_name", ""),
+            "message": ("Identity confirmed." if verified
+                        else "That detail doesn't match what we have on file.")}
+
+
 def _order_label(row):
     """Short human label for one order row: 'Summer Storage #13851 (5/6/2026)'."""
     parts = [(row.get("Service") or "").strip() or "Order"]
@@ -506,6 +534,41 @@ async def lookup_student(name_heard: str, order_hint: str = "", phone: str = "")
     pass it as phone to identify them by their number.
     """
     return json.dumps(await do_lookup_student(name_heard, order_hint, phone))
+
+
+@mcp.custom_route("/verify_identity", methods=["POST", "GET"])
+async def verify_identity_endpoint(request: Request):
+    if request.method == "GET":
+        return JSONResponse({
+            "endpoint": "/verify_identity",
+            "method": "POST",
+            "expects": {"args": {
+                "name_heard": "string - the confirmed caller name",
+                "answer": "string - the one detail the caller gave to prove it's them: building, phone last 4, or order number",
+                "order_hint": "optional - order # / service / month when they have multiple orders"}},
+            "returns": {"status": "found | confirm | not_found | error",
+                        "verified": "true | false",
+                        "confirmed_name": "exact name from records"}
+        })
+    if not _authorized(request):
+        return _unauthorized()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    args = _extract_args(body)
+    return JSONResponse(await do_verify_identity(
+        args.get("name_heard", ""), args.get("answer", ""), args.get("order_hint", "")))
+
+
+@mcp.tool()
+async def verify_identity(name_heard: str, answer: str, order_hint: str = "") -> str:
+    """Verify a caller before revealing any order detail. Pass the confirmed name and the ONE
+    detail they gave to prove it's them — their building, the last 4 digits of their phone, or
+    their order number. Returns verified: true/false using the same tolerant matching as the
+    chat (a slightly misspelled or partial building still passes; a wrong detail fails). Only
+    read out order details when verified is true."""
+    return json.dumps(await do_verify_identity(name_heard, answer, order_hint))
 
 
 # ── Wave A/B/C engine endpoints ─────────────────────────────────────
@@ -1310,6 +1373,19 @@ def _building_matches(text, building):
     return any(difflib.SequenceMatcher(None, x, y).ratio() >= 0.82 for x in tt for y in bt)
 
 
+def _verify_answer(rec, text):
+    """Does the caller's answer prove identity for this record? Shared by the web chat's
+    verify step AND the phone agent's verify_identity tool, so both accept the SAME three
+    things — a fuzzy/partial building, the phone's last 4 digits, or the order number."""
+    if _building_matches(text, rec.get("building")):
+        return True
+    if rec.get("phone") and _last4(text) and _last4(text) == _last4(rec["phone"]):
+        return True
+    if _id_matches(text, rec.get("order_id")):
+        return True
+    return False
+
+
 def _lookup_flow(text, state, dispatch_rows, service_rows):
     if state.get("step") == "verify":
         nm = " ".join((state.get("name") or "").lower().split())
@@ -1319,12 +1395,8 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
         if rec.get("status") != "found":
             return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
         # accept ANY on-file identifier, each fuzzy-tolerant: building (misspelled/partial),
-        # phone last-4, or the order number — whichever the caller happens to give.
-        ok = _building_matches(text, rec.get("building"))
-        if not ok and rec.get("phone") and _last4(text) and _last4(text) == _last4(rec["phone"]):
-            ok = True
-        if not ok and _id_matches(text, rec.get("order_id")):
-            ok = True
+        # phone last-4, or the order number — the SAME check the phone agent runs.
+        ok = _verify_answer(rec, text)
         if ok:
             _VERIFY_FAILS.pop(nm, None)
             return (_reveal_order(rec), {})

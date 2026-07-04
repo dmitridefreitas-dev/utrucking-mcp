@@ -322,3 +322,35 @@ def test_order_number_wrong_is_rejected():
     _, state = main._chat_reply("Nora Vance", {}, D, S, BOOK)
     reply, _ = main._lookup_flow("00000", state, D, S)
     assert "You're verified" not in reply
+
+
+# ---------- verify_identity: the phone agent verifies with the SAME logic as the chat ----------
+def test_verify_identity_matches_chat_and_leaks_no_pii(monkeypatch):
+    import asyncio
+    D, S = _id_data()
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else S
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+
+    ok = asyncio.run(main.do_verify_identity("Dalen Ainsworth", "Elliot A"))   # misspelled building
+    assert ok["status"] == "found" and ok["verified"] is True
+    assert ok["confirmed_name"].lower() == "dalen ainsworth"
+    for pii in ("building", "room", "phone", "order_id", "items_list"):        # gate returns no PII
+        assert pii not in ok
+
+    bad = asyncio.run(main.do_verify_identity("Dalen Ainsworth", "Umrath"))    # wrong building
+    assert bad["verified"] is False
+
+    byid = asyncio.run(main.do_verify_identity("Nora Vance", "20777"))         # no-building -> order #
+    assert byid["verified"] is True
+
+
+def test_verify_identity_unknown_name_is_not_verified(monkeypatch):
+    import asyncio
+    D, S = _id_data()
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else S
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+    r = asyncio.run(main.do_verify_identity("Nobody McGhost", "Eliot A"))
+    assert r["verified"] is False
+    assert r["status"] in ("not_found", "confirm")
