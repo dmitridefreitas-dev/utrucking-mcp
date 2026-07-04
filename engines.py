@@ -36,6 +36,19 @@ def build_price_book(service_rows, item_col="Summer Storage Item List"):
     book.update(learned)          # history overrides the seeds
     return book
 
+
+def upsell_pairs(service_rows, item_col="Summer Storage Item List"):
+    """Per-item co-occurrence learned from real baskets: item_key -> [(partner_key, orders_together), ...]
+    sorted most-common first. Powers the 'people who store X also add Y' suggestion on a quote."""
+    co = defaultdict(Counter)
+    for r in service_rows:
+        names = sorted({_canon(n) for n, a, q in _ITEM_RE.findall(r.get(item_col, "") or "")})
+        for i in range(len(names)):
+            for j in range(len(names)):
+                if i != j:
+                    co[names[i]][names[j]] += 1
+    return {k: v.most_common() for k, v in co.items()}
+
 # spoken / written aliases -> canonical item name (used only if the canonical exists in the learned book)
 ALIASES = {
     "box":"utrucking box","boxes":"utrucking box","utrucking box":"utrucking box",
@@ -426,8 +439,21 @@ def open_days(dispatch_rows, start, end, limit=6, capacity_per_day=None):
         d += datetime.timedelta(days=1)
     return out
 
+def _room_key(s):
+    """Natural sort key for a room string so 2 < 10 < 12A (a sensible walking order in a building).
+    Each chunk is a (type_rank, number, text) tuple so int and str chunks never compare directly."""
+    out = []
+    for t in re.findall(r'\d+|\D+', (s or "").strip()):
+        if t.isdigit():
+            out.append((0, int(t), ""))
+        else:
+            out.append((1, 0, t.lower()))
+    return out
+
+
 def dispatch_plan(dispatch_rows, date):
-    """B-ops: cluster a day's pickups by building and suggest crew split (route optimizer core)."""
+    """B-ops: cluster a day's pickups by building and suggest crew split (route optimizer core).
+    Stops inside a building are sequenced by room order so a crew walks it in one pass."""
     d = date if isinstance(date, datetime.date) else _parse_date(date)
     stops = defaultdict(list)
     for r in dispatch_rows:
@@ -435,6 +461,10 @@ def dispatch_plan(dispatch_rows, date):
             b = (r.get("Building", "") or "").strip() or "Unknown"
             stops[b].append({"student": r.get("Student", ""), "room": r.get("Room", ""),
                              "order_id": r.get("ID", ""), "service": r.get("Service", "")})
+    for b in stops:                                   # sequence each building's stops by room
+        stops[b].sort(key=lambda o: _room_key(o.get("room", "")))
+        for i, o in enumerate(stops[b], 1):
+            o["seq"] = i
     clusters = sorted(stops.items(), key=lambda kv: -len(kv[1]))
     total = sum(len(v) for v in stops.values())
     crews = crews_for(d) if d else 2
@@ -445,8 +475,11 @@ def dispatch_plan(dispatch_rows, date):
         tgt = min(bins, key=lambda x: x["stops"])
         tgt["buildings"].append(b)
         tgt["stops"] += len(v)
+    capacity = crews * JOBS_PER_CREW
     return {"date": str(d) if d else None, "total_stops": total, "buildings": len(stops),
             "crews_available": crews, "avg_stops_per_crew": round(total / max(crews, 1), 1),
+            "capacity": capacity, "jobs_per_crew": JOBS_PER_CREW,
+            "utilization_pct": round(100 * total / capacity, 0) if capacity else 0,
             "crew_plan": bins,
             "route": [{"building": b, "stops": len(v), "orders": v} for b, v in clusters]}
 

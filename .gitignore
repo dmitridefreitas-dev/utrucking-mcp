@@ -1,3 +1,9 @@
 __pycache__/
 *.pyc
 .env
+# local scratch harnesses / previews (never committed)
+_*.py
+_*.html
+_*.png
+_preview/
+.pytest_cache/

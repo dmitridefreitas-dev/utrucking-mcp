@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse, HTMLResponse
 from starlette.requests import Request
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan, open_days as _open_days, season_bounds as _season_bounds, peak_date as _peak_date, merge_photo_text as _merge_photo_text
+from engines import build_price_book, quote as _quote_items, availability as _availability, billing_audit as _billing_audit, dispatch_plan as _dispatch_plan, open_days as _open_days, season_bounds as _season_bounds, peak_date as _peak_date, merge_photo_text as _merge_photo_text, upsell_pairs as _upsell_pairs
 
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
 
@@ -49,13 +49,31 @@ async def keep_alive():
         await asyncio.sleep(14 * 60)
 
 
-async def fetch_csv_rows(url: str) -> list[dict]:
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-        resp = await client.get(url)
-    if resp.status_code != 200:
-        return []
-    reader = csv.DictReader(io.StringIO(resp.text))
-    return [row for row in reader]
+# ── In-memory sheet cache ────────────────────────────────────────────
+# The sheets are read on every tool call; without a cache each quote/lookup/
+# insights request re-downloads both. A short TTL cuts that to at most one
+# fetch per sheet per SHEET_TTL, and on a fetch failure we serve the last good
+# copy so a transient Google Sheets hiccup doesn't take a tool down.
+SHEET_TTL = 60                                    # seconds a cached sheet is served as-is
+_SHEET_CACHE: dict[str, tuple[float, list[dict]]] = {}   # url -> (fetched_at, rows)
+
+
+async def fetch_csv_rows(url: str, force: bool = False) -> list[dict]:
+    now = time.time()
+    hit = _SHEET_CACHE.get(url)
+    if hit and not force and (now - hit[0]) < SHEET_TTL:
+        return hit[1]
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+        if resp.status_code == 200:
+            rows = list(csv.DictReader(io.StringIO(resp.text)))
+            _SHEET_CACHE[url] = (now, rows)
+            return rows
+    except Exception:
+        pass
+    # fetch failed / non-200 → serve last-good rows if we have any (resilience), else empty
+    return hit[1] if hit else []
 
 
 def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list[str]]:
@@ -114,8 +132,29 @@ def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list
     return None, []
 
 
-async def do_lookup_student(name_heard: str, order_hint: str = "") -> dict:
-    if not name_heard or not name_heard.strip():
+def _phone_digits(s, n=10):
+    """Last n digits of a phone string (strips formatting)."""
+    d = re.sub(r"\D", "", s or "")
+    return d[-n:] if len(d) >= n else d
+
+
+def _match_by_phone(phone, dispatch_rows):
+    """Distinct customer names whose on-file phone matches the caller's number (last 10 digits).
+    Powers caller-ID: greet a returning caller by name instead of asking them to spell it."""
+    want = _phone_digits(phone, 10)
+    if len(want) < 7:                       # need a real number, not a fragment
+        return []
+    names, seen = [], set()
+    for r in dispatch_rows:
+        if _phone_digits(r.get("Phone", ""), 10) and _phone_digits(r.get("Phone", ""), 10) == want:
+            n = " ".join((r.get("Student") or "").split())
+            if n and n.lower() not in seen:
+                seen.add(n.lower()); names.append(n)
+    return names
+
+
+async def do_lookup_student(name_heard: str, order_hint: str = "", phone: str = "") -> dict:
+    if not (name_heard or "").strip() and not (phone or "").strip():
         return {
             "status": "not_found",
             "message": "I didn't catch a name. Could you repeat that?"
@@ -128,6 +167,21 @@ async def do_lookup_student(name_heard: str, order_hint: str = "") -> dict:
         )
     except Exception:
         return {"status": "error", "message": "I'm having trouble reaching our records right now."}
+
+    # Caller-ID: if we have a number and no name, resolve the name from the number first.
+    if (phone or "").strip() and not (name_heard or "").strip():
+        names = _match_by_phone(phone, dispatch_rows)
+        if len(names) == 1:
+            res = _build_order_result(names[0], dispatch_rows, service_rows, order_hint)
+            if isinstance(res, dict) and res.get("status") == "found":
+                res["identified_by"] = "phone"    # still identity-verified before any reveal
+            return res
+        if len(names) > 1:
+            return {"status": "confirm", "suggestions": names[:4],
+                    "message": "I see a few names on this number — %s. Which one is this?" % ", ".join(names[:4])}
+        return {"status": "not_found",
+                "message": "I couldn't find an order under that number. What's the name on the order?"}
+
     return _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
 
 
@@ -357,7 +411,7 @@ async def lookup_student_endpoint(request: Request):
         return JSONResponse({
             "endpoint": "/lookup_student",
             "method": "POST",
-            "expects": {"args": {"name_heard": "string", "order_hint": "optional - order #, service or month if the caller has multiple orders"}},
+            "expects": {"args": {"name_heard": "string", "order_hint": "optional - order #, service or month if the caller has multiple orders", "phone": "optional - caller's phone number; if given without a name, the caller is identified by their number"}},
             "returns": {
                 "status": "found | confirm | not_found | error",
                 "confirmed_name": "exact name from records",
@@ -373,7 +427,7 @@ async def lookup_student_endpoint(request: Request):
     except Exception:
         body = {}
     args = _extract_args(body)
-    return JSONResponse(await do_lookup_student(args.get("name_heard", ""), args.get("order_hint", "")))
+    return JSONResponse(await do_lookup_student(args.get("name_heard", ""), args.get("order_hint", ""), args.get("phone", "")))
 
 
 @mcp.custom_route("/debug_sheets", methods=["GET"])
@@ -414,7 +468,7 @@ async def status(request: Request):
 
 
 @mcp.tool()
-async def lookup_student(name_heard: str, order_hint: str = "") -> str:
+async def lookup_student(name_heard: str, order_hint: str = "", phone: str = "") -> str:
     """
     Look up a UTrucking student order by the name heard over the phone.
     Handles fuzzy/misspelled names. Returns a short message (name, order ID, service)
@@ -422,8 +476,10 @@ async def lookup_student(name_heard: str, order_hint: str = "") -> str:
     calling another function. Also returns available_fields listing what data exists.
     If the student has multiple orders the result lists order_choices — pass the
     caller's answer (order #, service type, or month) back as order_hint.
+    If you have the caller's phone number (e.g. from caller ID) and no name yet,
+    pass it as phone to identify them by their number.
     """
-    return json.dumps(await do_lookup_student(name_heard, order_hint))
+    return json.dumps(await do_lookup_student(name_heard, order_hint, phone))
 
 
 # ── Wave A/B/C engine endpoints ─────────────────────────────────────
@@ -448,7 +504,9 @@ async def quote_endpoint(request: Request):
     payload = ([(i[0], i[1]) for i in items] if isinstance(items, list)
                else (args.get("text") or args.get("name_heard") or ""))
     result = _quote_items(payload, book)
-    return JSONResponse(await _ai_map_unmatched(result, book))
+    result = await _ai_map_unmatched(result, book)
+    _attach_upsell(result, _upsell_pairs(service_rows), book)
+    return JSONResponse(result)
 
 
 @mcp.custom_route("/availability", methods=["POST", "GET"])
@@ -485,7 +543,10 @@ async def get_quote(items_text: str) -> str:
     (e.g. 'five boxes, a mini fridge and two duffels'). Returns itemized lines + total."""
     service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
     book = build_price_book(service_rows) if service_rows else {}
-    return json.dumps(_quote_items(items_text, book))
+    result = _quote_items(items_text, book)
+    if service_rows:
+        _attach_upsell(result, _upsell_pairs(service_rows), book)
+    return json.dumps(result)
 
 
 @mcp.tool()
@@ -515,6 +576,15 @@ _VISION_PROMPT = (
     '{"items":[{"name":"UTrucking Box","qty":3}]}. Prefer these names when they fit: '
     "UTrucking Box, Plastic Container, Mini Fridge, Camp Duffel, Luggage, Rolling Cart, "
     "Bookshelf, Dresser, Headboard, Shoe Rack, Ottoman, Mattress. Output JSON only, no prose."
+)
+
+_CONDITION_PROMPT = (
+    'You are documenting the condition of items being handed over for storage, for dispute '
+    'protection at pickup. List each visible item as STRICT JSON only: '
+    '{"items":[{"item":"Mini Fridge","condition":"good","notes":"small dent on left door"}]}. '
+    'condition must be exactly one of: new, like-new, good, worn, damaged. '
+    'notes: any visible scratches, dents, stains, tears or missing parts, or "no visible damage". '
+    'Only report what is actually visible in the photo. Output JSON only, no prose.'
 )
 
 def _img_mime(b):
@@ -628,29 +698,38 @@ async def _ai_map_unmatched(result, book):
     return result
 
 
-async def _vision_items(provider, key, img_b64, mime="image/jpeg"):
+async def _vision_json(provider, key, img_b64, mime, prompt):
+    """Run a vision prompt against the configured provider and return the parsed JSON object."""
     async with httpx.AsyncClient(timeout=60.0) as c:
         if provider == "groq":
             r = await _post_retry(c, "https://api.groq.com/openai/v1/chat/completions",
                 {"Authorization": "Bearer " + key},
                 {"model": "llama-3.2-90b-vision-preview", "messages": [{"role": "user", "content": [
-                    {"type": "text", "text": _VISION_PROMPT},
+                    {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": "data:" + mime + ";base64," + img_b64}}]}]})
             txt = r.json()["choices"][0]["message"]["content"]
         elif provider == "anthropic":
             r = await _post_retry(c, "https://api.anthropic.com/v1/messages",
                 {"x-api-key": key, "anthropic-version": "2023-06-01"},
                 {"model": "claude-haiku-4-5-20251001", "max_tokens": 1024, "messages": [{"role": "user", "content": [
-                    {"type": "text", "text": _VISION_PROMPT},
+                    {"type": "text", "text": prompt},
                     {"type": "image", "source": {"type": "base64", "media_type": mime, "data": img_b64}}]}]})
             txt = r.json()["content"][0]["text"]
         else:  # gemini (free tier at aistudio.google.com)
             # Model fallback chain: each model has its own free-tier quota bucket.
             # Key goes in a header, NOT the URL, so it can never leak into an error/log line.
-            txt = await _gemini_generate(key, [{"text": _VISION_PROMPT},
+            txt = await _gemini_generate(key, [{"text": prompt},
                 {"inline_data": {"mime_type": mime, "data": img_b64}}])
     m = re.search(r'\{.*\}', txt, re.S)
-    return (json.loads(m.group(0)).get("items", []) if m else [])
+    return json.loads(m.group(0)) if m else {}
+
+
+async def _vision_items(provider, key, img_b64, mime="image/jpeg"):
+    return (await _vision_json(provider, key, img_b64, mime, _VISION_PROMPT)).get("items", [])
+
+
+async def _vision_condition(provider, key, img_b64, mime="image/jpeg"):
+    return (await _vision_json(provider, key, img_b64, mime, _CONDITION_PROMPT)).get("items", [])
 
 
 @mcp.custom_route("/photo_quote", methods=["POST", "GET"])
@@ -712,8 +791,128 @@ async def photo_quote_endpoint(request: Request):
     else:
         result = _quote_items(pairs, book)
     result = await _ai_map_unmatched(result, book)
+    if service_rows:
+        _attach_upsell(result, _upsell_pairs(service_rows), book)
     result["detected"] = detected
     return JSONResponse(result)
+
+
+async def _load_image_arg(args):
+    """Resolve an image from {image_base64} or {image_url} -> (img_b64, mime, error_dict_or_None)."""
+    img_b64 = args.get("image_base64"); raw = b""
+    if not img_b64 and args.get("image_url"):
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+                resp = await c.get(args["image_url"], headers={"User-Agent": "Mozilla/5.0 (UTrucking)"})
+            if resp.status_code != 200:
+                return None, None, {"status": "error", "message": "Could not fetch image_url (HTTP %d)." % resp.status_code}
+            raw = resp.content; img_b64 = base64.b64encode(raw).decode()
+        except Exception:
+            return None, None, {"status": "error", "message": "Could not fetch image_url."}
+    if not img_b64:
+        return None, None, {"status": "error", "message": "Provide image_url or image_base64."}
+    if not raw:
+        try: raw = base64.b64decode(img_b64)
+        except Exception: raw = b""
+    return img_b64, _img_mime(raw), None
+
+
+@mcp.custom_route("/condition_check", methods=["POST", "GET"])
+async def condition_check_endpoint(request: Request):
+    """Document item condition from a pickup photo (dispute protection + protection-plan upsell).
+    Free vision via the same provider chain as /photo_quote."""
+    if request.method == "GET":
+        return JSONResponse({"endpoint": "/condition_check", "method": "POST",
+            "expects": {"args": {"image_url": "https://...", "image_base64": "...(alternative)"}},
+            "returns": {"items": [{"item": "Mini Fridge", "condition": "good", "notes": "small dent"}]}})
+    try: body = await request.json()
+    except Exception: body = {}
+    args = _extract_args(body)
+    provider = os.getenv("VISION_PROVIDER", "gemini").lower()
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+    if not key:
+        return JSONResponse({"status": "not_configured",
+            "message": "Condition docs need a free vision key. Set GEMINI_API_KEY (free at aistudio.google.com)."})
+    img_b64, mime, err = await _load_image_arg(args)
+    if err:
+        return JSONResponse(err)
+    try:
+        items = await _vision_condition(provider, key, img_b64, mime)
+    except Exception as e:
+        msg = str(e)[:200].replace(key, "***")
+        return JSONResponse({"status": "error", "message": "Vision call failed: " + msg})
+    return JSONResponse({"status": "ok", "items": items})
+
+
+_CONDITION_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Condition Docs - UTrucking</title><style>
+:root{--navy:#14335f;--orange:#f5a623;--ink:#1f2933;--mut:#5b6b7f;--line:#e3e9f2;--space0:#070d1a;--space1:#16305c}
+*{box-sizing:border-box}body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;color:var(--ink);background:#f5f7fb}
+header{background:linear-gradient(150deg,var(--space0),#122a52 65%,var(--space1));color:#fff;padding:16px 18px}
+header .ey{display:block;text-transform:uppercase;letter-spacing:.28em;font-size:10px;font-weight:700;color:var(--orange)}
+header b{font-size:17px}header .s{display:block;color:#aebfda;font-size:12px}
+main{max-width:760px;margin:0 auto;padding:16px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
+label.file{display:inline-block;background:var(--navy);color:#fff;border-radius:9px;padding:10px 16px;font-weight:700;cursor:pointer}
+input[type=file]{display:none}
+button{background:var(--navy);color:#fff;border:0;border-radius:9px;padding:10px 16px;font-weight:700;cursor:pointer;font-family:inherit;font-size:15px}
+button.ghost{background:#eef3fb;color:var(--navy)}
+img.prev{max-width:100%;max-height:230px;border-radius:10px;margin-top:10px;display:none}
+table{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+.pill{display:inline-block;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:700}
+.c-new,.c-likenew{background:#eaf3ea;color:#2e7d32}.c-good{background:#eef3fb;color:#1e5aa8}
+.c-worn{background:#fff7e6;color:#8a6d3b}.c-damaged{background:#fdecec;color:#b23b3b}
+.mut{color:var(--mut);font-size:12.5px}.err{color:#b23b3b}.stamp{color:var(--mut);font-size:12px;margin-top:8px}
+@media print{header,.controls,label.file,button{display:none}body{background:#fff}}
+</style></head><body>
+<header><span class=ey>University Trucking</span><b>Condition Docs</b><span class=s>Photograph an item at pickup - AI logs its condition for dispute protection (staff)</span></header>
+<main>
+ <div class=card>
+  <label class=file>Choose / take a photo<input type=file id=f accept="image/*" capture=environment></label>
+  <button onclick=go()>Document condition</button>
+  <span class=mut id=msg></span>
+  <img id=prev class=prev>
+ </div>
+ <div id=out></div>
+</main><script>
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+var B64=null;
+document.getElementById('f').addEventListener('change',function(e){
+ var file=e.target.files[0];if(!file)return;var img=new Image();var rd=new FileReader();
+ rd.onload=function(){img.onload=function(){
+  var mx=1280,s=Math.min(1,mx/Math.max(img.width,img.height));
+  var cv=document.createElement('canvas');cv.width=img.width*s;cv.height=img.height*s;
+  cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+  var d=cv.toDataURL('image/jpeg',0.85);B64=d.split(',')[1];
+  var p=document.getElementById('prev');p.src=d;p.style.display='block';};img.src=rd.result;};
+ rd.readAsDataURL(file);});
+function cls(c){return 'c-'+String(c||'').toLowerCase().replace(/[^a-z]/g,'');}
+async function go(){
+ if(!B64){document.getElementById('msg').textContent='Pick a photo first.';return;}
+ var m=document.getElementById('msg');m.textContent='Analyzing...';document.getElementById('out').innerHTML='';
+ try{
+  var r=await fetch('/condition_check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({args:{image_base64:B64}})});
+  var j=await r.json();m.textContent='';render(j);
+ }catch(e){m.innerHTML='<span class=err>Could not analyze - try again.</span>';}}
+function render(j){
+ if(!j||j.status==='error'){document.getElementById('out').innerHTML='<div class=card><span class=err>'+esc((j&&j.message)||'Something went wrong')+'</span></div>';return;}
+ if(j.status==='not_configured'){document.getElementById('out').innerHTML='<div class=card><span class=err>Vision is not switched on yet (needs a free GEMINI_API_KEY).</span></div>';return;}
+ var items=j.items||[];
+ if(!items.length){document.getElementById('out').innerHTML='<div class=card><span class=mut>No items clearly identified. Try a closer, well-lit shot.</span></div>';return;}
+ var rows=items.map(function(it){return '<tr><td>'+esc(it.item)+'</td><td><span class="pill '+cls(it.condition)+'">'+esc(it.condition||'-')+'</span></td><td>'+esc(it.notes||'')+'</td></tr>';}).join('');
+ var stamp=new Date().toLocaleString();
+ document.getElementById('out').innerHTML='<div class=card><h3 style="margin:0 0 8px;color:var(--navy)">Condition report</h3>'
+  +'<table><thead><tr><th>Item</th><th>Condition</th><th>Notes</th></tr></thead><tbody>'+rows+'</tbody></table>'
+  +'<div class=stamp>Documented '+esc(stamp)+'. Keep this with the order for dispute protection.</div>'
+  +'<div style="margin-top:10px"><button class=ghost onclick=window.print()>Print / save</button></div></div>';}
+</script></body></html>"""
+
+
+@mcp.custom_route("/condition", methods=["GET"])
+async def condition_page(request: Request):
+    return HTMLResponse(_CONDITION_HTML)
 
 
 # ── Customer-facing instant-estimate page (photo OR text) ───────────
@@ -754,6 +953,8 @@ _ESTIMATE_HTML = """<!doctype html>
  .note{color:var(--mut);font-size:12px;margin-top:10px} .err{color:#b23b3b;font-size:14px;margin-top:8px}
  .spin{color:var(--mut);font-size:14px;margin-top:8px} #result{display:none}
  .tag{display:inline-block;background:#eef3fb;color:var(--navy);border-radius:20px;padding:3px 10px;font-size:12px;margin:3px 4px 0 0}
+ .upsell{margin-top:12px;padding:10px 12px;background:#fff7e6;border:1px solid #f4e0bd;border-radius:10px}
+ .upsell .uplbl{font-weight:700;color:#8a6d3b;font-size:12.5px;margin-right:4px}
 </style></head><body>
 <div class="bar"></div>
 <header><div class="ey">University Trucking</div>
@@ -804,9 +1005,14 @@ _ESTIMATE_HTML = """<!doctype html>
    +'</td><td class=n>$'+Number(x.amount).toFixed(2)+'</td></tr>').join('');
   let extra=un.length?'<p class=note>Not priced (call us for these): '+un.join(', ')+'.</p>':'';
   if(data.capped) extra+='<p class=note>For more than '+data.capped+' of one item, call (314) 266-8878 for a bulk quote.</p>';
+  let up='';
+  if(data.upsell&&data.upsell.items&&data.upsell.items.length){
+   up='<div class=upsell><span class=uplbl>Most people also add</span> '
+     +data.upsell.items.map(function(it){return '<span class=tag>'+it.item+' &middot; $'+Number(it.unit_price).toFixed(0)+'</span>';}).join(' ')+'</div>';
+  }
   let html='<table><thead><tr><th>Item</th><th class=n>Est.</th></tr></thead><tbody>'+rows+'</tbody></table>'
    +'<div class=total><span class=lbl>Estimated total</span><span class=amt>$'+Number(data.total||0).toFixed(2)+'</span></div>'
-   +extra
+   +up+extra
    +'<p class=note>Instant estimate based on typical UTrucking pricing. Final price is confirmed at pickup. Ready to book? Call (314) 266-8878 and mention your estimate.</p>';
   show(html);
  }
@@ -1015,6 +1221,33 @@ _RE_LIST = re.compile(r"\b(other|another|others|list|what days|which days|when a
 _RE_AVAIL = re.compile(r"\b(available|availab|book|booking|pickup|pick up|schedul|slot|reschedul|move-?out)\b", re.I)
 
 
+def _attach_upsell(result, upsell, book, max_items=2):
+    """Attach a data-driven upsell to a quote result: the priced items most often stored
+    alongside what's already in the cart (and not already in it), learned from real baskets.
+    Sets result['upsell'] = {items:[{item,unit_price}], line:'...'} — used by the phone JSON,
+    the estimate page, and the chat/voice reply. No-op when nothing strong or new to suggest."""
+    if not upsell or not result.get("line_items"):
+        return result
+    import engines as _e
+    have = {_e._canon(l["item"]) for l in result["line_items"]}
+    score = {}
+    for l in result["line_items"]:
+        for partner, cnt in (upsell.get(_e._canon(l["item"])) or [])[:8]:
+            if partner in have or partner in _e.NON_STORAGE or partner not in book:
+                continue
+            score[partner] = score.get(partner, 0) + cnt
+    if not score:
+        return result
+    top = sorted(score, key=lambda p: (-score[p], p))[:max_items]
+    items = [{"item": p.title(), "unit_price": round(book[p], 2)} for p in top]
+    if len(items) == 1:
+        line = "Most people also add a %s (about $%.0f) — want it on there?" % (items[0]["item"], items[0]["unit_price"])
+    else:
+        line = "Most people also add a %s or %s — want either on there?" % (items[0]["item"], items[1]["item"])
+    result["upsell"] = {"items": items, "line": line}
+    return result
+
+
 def _quote_reply_text(q):
     """Human-readable quote reply — shared by the chat brain and the AI-mapped re-render."""
     def _fmt(l):
@@ -1027,7 +1260,9 @@ def _quote_reply_text(q):
     ums = ("\n(Couldn't price: %s — call us for those.)" % ", ".join(um)) if um else ""
     if q.get("capped"):
         ums += "\n(For more than %d of one item, call (314) 266-8878 for a bulk quote.)" % q["capped"]
-    return "Here's your estimate:\n%s\nTotal: about $%.2f.%s\nWant a pickup date?" % (lines, q["total"], ums)
+    up = (q.get("upsell") or {}).get("line") or ""
+    ups = ("\n" + up) if up else ""
+    return "Here's your estimate:\n%s\nTotal: about $%.2f.%s%s\nWant a pickup date?" % (lines, q["total"], ums, ups)
 
 
 def _chat_reply(msg, state, dispatch_rows, service_rows, book):
@@ -1070,6 +1305,8 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
         return ("Those weeks are tight — tell me a date and I'll find the nearest opening.", {})
     q = _quote_items(text, book)
     if q.get("line_items"):
+        if service_rows:
+            _attach_upsell(q, _upsell_pairs(service_rows), book)
         return (_quote_reply_text(q), {})
     if q.get("unmatched"):
         return ("I couldn't find a price for: %s. I can price boxes, fridges, duffels, TVs, desks, couches, mattresses and more — what do you have?" % ", ".join(q["unmatched"]), {})
@@ -1100,6 +1337,8 @@ async def chat_api(request: Request):
         if q.get("unmatched_items"):
             q = await _ai_map_unmatched(q, book)
             if q.get("line_items") and any(l.get("ai_matched") for l in q["line_items"]):
+                if service_rows:
+                    _attach_upsell(q, _upsell_pairs(service_rows), book)
                 reply = _quote_reply_text(q)
     return JSONResponse({"reply": reply, "state": new_state})
 
@@ -1201,10 +1440,40 @@ async def _load_rows():
     return await asyncio.gather(fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
 
 
+def _parse_any_date(s):
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return datetime.date.fromisoformat(s)         # HTML date input -> 2026-05-01
+    except Exception:
+        import engines as _e
+        return _e._parse_date(s)                       # sheet format -> 5/6/2026
+
+
+def _rows_in_range(rows, key, lo, hi):
+    import engines as _e
+    out = []
+    for r in rows:
+        dd = _e._parse_date(r.get(key, ""))
+        if dd is None or (lo and dd < lo) or (hi and dd > hi):
+            continue
+        out.append(r)
+    return out
+
+
 @mcp.custom_route("/insights_api", methods=["GET"])
 async def insights_api(request: Request):
     d, s = await _load_rows()
-    return JSONResponse(analytics.compute_metrics(d, s) if (d or s) else {})
+    lo = _parse_any_date(request.query_params.get("from"))
+    hi = _parse_any_date(request.query_params.get("to"))
+    if lo or hi:
+        d = _rows_in_range(d, "Date", lo, hi)
+        s = _rows_in_range(s, "Date", lo, hi)
+    m = analytics.compute_metrics(d, s) if (d or s) else {}
+    if lo or hi:
+        m["date_range"] = {"from": str(lo) if lo else None, "to": str(hi) if hi else None}
+    return JSONResponse(m)
 
 
 def _metrics_brief(m):
@@ -1339,9 +1608,22 @@ main{max-width:900px;margin:0 auto;padding:16px}
 .row .lab{width:130px;flex:none}.row .barwrap{flex:1;background:#eef3fb;border-radius:6px;height:16px;overflow:hidden}
 .row .bar{height:16px;background:linear-gradient(90deg,var(--navy),#2c5aa0)}.row .val{width:78px;flex:none;text-align:right;color:var(--mut)}
 .mut{color:var(--mut);font-size:12px}
+.controls{max-width:900px;margin:12px auto 0;padding:10px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.controls label{font-size:12.5px;color:var(--mut);display:flex;gap:5px;align-items:center}
+.controls input[type=date]{border:1px solid #cdd6e4;border-radius:8px;padding:7px 9px;font:inherit;font-size:15px}
+.controls button{background:var(--navy);color:#fff;border:0;border-radius:8px;padding:8px 13px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px}
+.controls button.ghost{background:#eef3fb;color:var(--navy)}
 @media (max-width:480px){.row .lab{width:96px;font-size:12px}.row .val{width:64px;font-size:12px}.stat .n{font-size:18px}}
 </style></head><body>
 <header><span class=ey>University Trucking</span><b>Business Insights</b><span class=s>Live from the DISPATCH + SERVICE sheets</span></header>
+<div class=controls>
+ <label>From <input type=date id=from></label>
+ <label>To <input type=date id=to></label>
+ <button onclick=applyRange()>Apply</button>
+ <button class=ghost onclick=resetRange()>All season</button>
+ <button class=ghost onclick=exportCSV()>Export CSV</button>
+ <span class=mut id=rangemsg></span>
+</div>
 <main id=root><p class=mut>Loading live data...</p></main>
 <script>
 function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
@@ -1350,7 +1632,11 @@ function bars(items,labKey,valKey,fmt){var mx=Math.max.apply(null,items.map(func
  return items.map(function(x){var w=Math.round(100*x[valKey]/mx);return '<div class=row><div class=lab>'+esc(x[labKey])+'</div><div class=barwrap><div class=bar style="width:'+w+'%"></div></div><div class=val>'+(fmt?fmt(x[valKey]):x[valKey])+'</div></div>';}).join('');}
 function money(n){return '$'+Number(n).toLocaleString();}
 function card(t,i){return '<div class=card><h3>'+t+'</h3>'+i+'</div>';}
-function render(m){var o=m.overview||{},dq=m.data_quality||{},fn=m.funnel||{},dem=m.demand||{},rp=m.repeat||{};var h='';
+function render(m){
+ var rmsg=document.getElementById('rangemsg');
+ if(rmsg)rmsg.textContent=(m&&m.date_range)?'Showing '+(m.date_range.from||'start')+' to '+(m.date_range.to||'now'):'';
+ if(!m||!m.overview){document.getElementById('root').innerHTML='<p class=mut>No orders'+((m&&m.date_range)?' in that date range':'')+'. Try a wider range or "All season".</p>';return;}
+ var o=m.overview||{},dq=m.data_quality||{},fn=m.funnel||{},dem=m.demand||{},rp=m.repeat||{};var h='';
  h+='<div class=grid>'+stat(money(o.revenue),'Revenue (season)')+stat(money(o.avg_order),'Avg order')+stat(o.dispatch_orders,'Dispatch orders')+stat(rp.repeat_rate_pct+'%','Repeat customers')+stat(m.avg_items_per_order,'Avg items/order')+stat(dq.unknown_building,'Unknown buildings')+'</div>';
  h+=card('Revenue by building',bars(m.revenue_by_building||[],'building','revenue',money));
  h+=card('Top stored items',bars(m.top_items||[],'item','count'));
@@ -1358,13 +1644,40 @@ function render(m){var o=m.overview||{},dq=m.data_quality||{},fn=m.funnel||{},de
  h+=card('Pricing levers (+$1 on the item &asymp; extra $/season)',(m.pricing||[]).slice(0,8).map(function(x){return '<div class=row><div class=lab style="width:auto;flex:1">'+esc(x.item)+' &mdash; $'+x.unit_price+' &times; '+x.units_sold+' sold ('+x.revenue_share_pct+'% of revenue)</div><div class=val>+$'+x["extra_per_$1_increase"]+'</div></div>';}).join('')+'<div class=mut style="margin-top:6px">Rough sensitivity: +$1 on an item adds about its units-sold in season revenue, minus any demand drop. Price changes are a management call.</div>');
  h+=card('Demand by month',bars(dem.by_month||[],'month','orders'));
  var fc=m.forecast||{};
- if(fc.peak_window){h+=card('Next-season planner (projected from this season)',
+ if(fc.peak_window){
+  var rv=fc.revenue_forecast||{};
+  var rvline=rv.peak_day_revenue?'<div class=mut style="margin-top:6px">Projected peak-day revenue &asymp; '+money(rv.peak_day_revenue)+' &middot; move-out window &asymp; '+money(rv.move_out_window_revenue)+' (at '+money(rv.avg_order)+'/order).</div>':'';
+  var tm=fc.building_peak_timing||[];
+  var tmline=tm.length?'<div class=mut style="margin-top:6px"><b>Building peak timing:</b> '+tm.map(function(x){var o=x.offset_days,w=(o===0?'peak day':(Math.abs(o)+'d '+(o<0?'before':'after')));return esc(x.building)+' ('+w+')';}).join(' &middot; ')+'</div>':'';
+  h+=card('Next-season planner (projected from this season)',
   (fc.peak_window||[]).map(function(x){return '<div class=row><div class=lab style="width:150px">'+esc(x.label)+'</div><div class=barwrap><div class=bar style="width:'+Math.round(100*x.orders/fc.peak_window[0].orders)+'%"></div></div><div class=val>'+x.orders+' &middot; '+x.crews_needed+' crews</div></div>';}).join('')
-  +'<div class=mut style="margin-top:6px">'+esc(fc.note||'')+' Return season (Aug): '+((fc.return_season||{}).orders||0)+' orders ('+((fc.return_season||{}).share_pct||0)+'% of the year).</div>');}
+  +'<div class=mut style="margin-top:6px">'+esc(fc.note||'')+' Return season (Aug): '+((fc.return_season||{}).orders||0)+' orders ('+((fc.return_season||{}).share_pct||0)+'% of the year).</div>'
+  +rvline+tmline);}
  h+=card('Completion funnel','<div class=mut>orders '+fn.orders+' &rarr; dispatched '+fn.dispatched+' &rarr; completed '+fn.completed+' &rarr; invoiced '+fn.invoiced+' &middot; '+fn.flagged_billing+' billing flags</div>');
  h+=card('Data-quality scorecard','<div class=row><div class=lab style="flex:1">Unknown building</div><div class=val>'+dq.unknown_building+' ('+dq.unknown_building_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing phone</div><div class=val>'+dq.missing_phone+' ('+dq.missing_phone_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing invoice</div><div class=val>'+dq.missing_invoice+'</div></div><div class=row><div class=lab style="flex:1">$0 / missing total</div><div class=val>'+dq.zero_or_missing_total+'</div></div>');
  document.getElementById('root').innerHTML=h;}
-fetch('/insights_api').then(function(r){return r.json();}).then(render).catch(function(){document.getElementById('root').innerHTML='<p class=mut>Could not load insights.</p>';});
+var LAST=null;
+function load(){
+ var f=document.getElementById('from').value,t=document.getElementById('to').value,qs=[];
+ if(f)qs.push('from='+encodeURIComponent(f));if(t)qs.push('to='+encodeURIComponent(t));
+ document.getElementById('root').innerHTML='<p class=mut>Loading live data...</p>';
+ fetch('/insights_api'+(qs.length?'?'+qs.join('&'):'')).then(function(r){return r.json();})
+  .then(function(m){LAST=m;render(m);})
+  .catch(function(){document.getElementById('root').innerHTML='<p class=mut>Could not load insights.</p>';});}
+function applyRange(){load();}
+function resetRange(){document.getElementById('from').value='';document.getElementById('to').value='';load();}
+function exportCSV(){
+ if(!LAST)return;var rows=[['Section','Label','Value']];var o=LAST.overview||{};
+ Object.keys(o).forEach(function(k){rows.push(['overview',k,o[k]]);});
+ (LAST.revenue_by_building||[]).forEach(function(x){rows.push(['revenue_by_building',x.building,x.revenue]);});
+ (LAST.top_items||[]).forEach(function(x){rows.push(['top_items',x.item,x.count]);});
+ (LAST.pricing||[]).forEach(function(x){rows.push(['pricing',x.item,x.unit_price+' x '+x.units_sold+' = '+x.revenue]);});
+ ((LAST.demand||{}).by_month||[]).forEach(function(x){rows.push(['demand_by_month',x.month,x.orders]);});
+ (LAST.billing_flags?Object.keys(LAST.billing_flags):[]).forEach(function(k){rows.push(['billing_flags',k,LAST.billing_flags[k]]);});
+ var csv=rows.map(function(r){return r.map(function(c){c=String(c==null?'':c);return /[",\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(',');}).join('\n');
+ var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+ a.download='utrucking-insights'+(LAST.date_range?'-'+(LAST.date_range.from||'')+'_'+(LAST.date_range.to||''):'')+'.csv';a.click();}
+load();
 </script></body></html>"""
 
 
@@ -1551,6 +1864,7 @@ th{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.05em
   <label>Pickup day</label><input type=date id=day>
   <button onclick=load()>Build plan</button>
   <button class=ghost onclick=window.print()>Print run sheets</button>
+  <button class=ghost onclick=exportCSV()>Export CSV</button>
   <span class=mut id=msg></span>
  </div>
  <div class=controls id=keybox>
@@ -1569,16 +1883,20 @@ async function load(){
  try{
   var r=await fetch('/dispatch_plan',{method:'POST',headers:hdrs(),body:JSON.stringify({args:{date:d}})});
   if(r.status===401){document.getElementById('keybox').style.display='flex';m.textContent='Staff key required.';return;}
-  var p=await r.json();m.textContent='';render(p,d);
+  var p=await r.json();LASTP=p;LASTD=d;m.textContent='';render(p,d);
  }catch(e){m.textContent='Could not load the plan - try again.';}}
+var LASTP=null,LASTD='';
 function render(p,d){
  var h='';
+ var util=p.utilization_pct||0, uc=(util>100?'#b23b3b':'#14335f');
  h+='<div class=grid>'
-  +'<div class=stat><div class=n>'+(p.total_stops||0)+'</div><div class=l>Stops</div></div>'
+  +'<div class=stat><div class=n>'+(p.total_stops||0)+'</div><div class=l>Stops booked</div></div>'
   +'<div class=stat><div class=n>'+(p.buildings||0)+'</div><div class=l>Buildings</div></div>'
   +'<div class=stat><div class=n>'+(p.crews_available||0)+'</div><div class=l>Crews scheduled</div></div>'
-  +'<div class=stat><div class=n>'+(p.avg_stops_per_crew||0)+'</div><div class=l>Stops per crew</div></div>'
+  +'<div class=stat><div class=n>'+(p.capacity||0)+'</div><div class=l>Modeled capacity</div></div>'
+  +'<div class=stat><div class=n style="color:'+uc+'">'+util+'%</div><div class=l>Capacity used</div></div>'
   +'</div>';
+ if(util>100){h+='<p class=mut>Booked exceeds modeled capacity ('+p.jobs_per_crew+' stops/crew &times; '+p.crews_available+' crews). Set real crew counts in engines.CREW_SCHEDULE for accurate planning.</p>';}
  if(!p.total_stops){h+='<p class=mut>No pickups booked on '+esc(d)+'.</p>';document.getElementById('out').innerHTML=h;return;}
  var byB={};(p.route||[]).forEach(function(x){byB[x.building]=x;});
  (p.crew_plan||[]).forEach(function(c){
@@ -1587,12 +1905,22 @@ function render(p,d){
   c.buildings.forEach(function(b){
    var x=byB[b]||{orders:[]};
    h+='<div class=bld>'+esc(b)+' <span class=n>('+x.stops+' stop'+(x.stops==1?'':'s')+')</span></div>';
-   h+='<table><thead><tr><th>Student</th><th>Room</th><th>Order</th><th>Service</th></tr></thead><tbody>';
-   (x.orders||[]).forEach(function(o){h+='<tr><td>'+esc(o.student)+'</td><td>'+esc(o.room)+'</td><td>'+esc(o.order_id)+'</td><td>'+esc(o.service)+'</td></tr>';});
+   h+='<table><thead><tr><th>#</th><th>Student</th><th>Room</th><th>Order</th><th>Service</th></tr></thead><tbody>';
+   (x.orders||[]).forEach(function(o){h+='<tr><td>'+(o.seq||'')+'</td><td>'+esc(o.student)+'</td><td>'+esc(o.room)+'</td><td>'+esc(o.order_id)+'</td><td>'+esc(o.service)+'</td></tr>';});
    h+='</tbody></table>';
   });
   h+='</div>';});
  document.getElementById('out').innerHTML=h;}
+function exportCSV(){
+ if(!LASTP||!LASTP.total_stops)return;
+ var byB={};(LASTP.route||[]).forEach(function(x){byB[x.building]=x;});
+ var rows=[['Crew','Building','Seq','Student','Room','Order','Service']];
+ (LASTP.crew_plan||[]).forEach(function(c){(c.buildings||[]).forEach(function(b){
+  var x=byB[b]||{orders:[]};(x.orders||[]).forEach(function(o){
+   rows.push([c.crew,b,o.seq||'',o.student||'',o.room||'',o.order_id||'',o.service||'']);});});});
+ var csv=rows.map(function(r){return r.map(function(c){c=String(c==null?'':c);return /[",\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(',');}).join('\n');
+ var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+ a.download='utrucking-runsheet-'+(LASTD||'')+'.csv';a.click();}
 (function(){var d=document.getElementById('day');d.value='2026-05-07';})();
 </script></body></html>"""
 
@@ -1601,6 +1929,99 @@ function render(p,d){
 async def ops_page(request: Request):
     """Staff-only ops view over /dispatch_plan (that endpoint enforces the staff key when set)."""
     return HTMLResponse(_OPS_HTML)
+
+
+_STAFF_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Staff Console - UTrucking</title><style>
+:root{--navy:#14335f;--orange:#f5a623;--line:#e3e9f2;--mut:#5b6b7f;--space0:#070d1a;--space1:#16305c}
+*{box-sizing:border-box}body{margin:0;font-family:'Segoe UI',system-ui,Arial,sans-serif;background:#f5f7fb;color:#1f2933}
+header{background:linear-gradient(150deg,var(--space0),#122a52 65%,var(--space1));color:#fff;padding:16px 18px}
+header .ey{display:block;text-transform:uppercase;letter-spacing:.28em;font-size:10px;font-weight:700;color:var(--orange)}
+header b{font-size:17px}header .s{display:block;color:#aebfda;font-size:12px}
+main{max-width:900px;margin:0 auto;padding:16px}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:12px}
+.controls label{font-size:13px;color:var(--mut)}
+input[type=date],input[type=password]{border:1px solid #cdd6e4;border-radius:8px;padding:8px 10px;font:inherit;font-size:15px}
+button{background:var(--navy);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px}
+button.ghost{background:#eef3fb;color:var(--navy)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:12px 0}
+.stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}
+.stat .n{font-size:20px;font-weight:800;color:var(--navy)}.stat .l{color:var(--mut);font-size:12px;margin-top:2px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
+.card h3{margin:0 0 10px;color:var(--navy);font-size:15px;display:flex;justify-content:space-between}
+.row{display:flex;gap:8px;margin:4px 0;font-size:13px}.row .lab{flex:1}.row .val{color:var(--mut);text-align:right}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-size:11px;text-transform:uppercase}.mut{color:var(--mut);font-size:12.5px}.err{color:#b23b3b}
+#keybox{display:none}
+</style></head><body>
+<header><span class=ey>University Trucking</span><b>Staff Console</b><span class=s>One glance: today's pickups, revenue to recover, forecast, data health (staff only)</span></header>
+<main>
+ <div class=controls>
+  <label>Pickup day</label><input type=date id=day>
+  <button onclick=load()>Refresh</button>
+  <a href="/ops" style="text-decoration:none"><button class=ghost>Full run sheets &rsaquo;</button></a>
+  <span class=mut id=msg></span>
+ </div>
+ <div class=controls id=keybox>
+  <label>Staff key</label><input type=password id=key placeholder="x-utrucking-key">
+  <button onclick=saveKey()>Unlock</button><span class=mut>Ask the admin for the ops key.</span>
+ </div>
+ <div id=out></div>
+</main><script>
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function money(n){return '$'+Number(n||0).toLocaleString();}
+function hdrs(){var h={'Content-Type':'application/json'};var k=localStorage.getItem('utk');if(k)h['x-utrucking-key']=k;return h;}
+function saveKey(){localStorage.setItem('utk',document.getElementById('key').value.trim());document.getElementById('keybox').style.display='none';load();}
+async function load(){
+ var day=document.getElementById('day').value;var m=document.getElementById('msg');m.textContent='Loading...';
+ try{
+  var pr=fetch('/dispatch_plan',{method:'POST',headers:hdrs(),body:JSON.stringify({args:{date:day}})});
+  var br=fetch('/billing_audit',{method:'POST',headers:hdrs(),body:JSON.stringify({args:{}})});
+  var ir=fetch('/insights_api');
+  var p=await pr;
+  if(p.status===401){document.getElementById('keybox').style.display='flex';m.textContent='Staff key required.';return;}
+  var plan=await p.json();var bill=await (await br).json();var ins=await (await ir).json();
+  m.textContent='';render(plan,bill,ins,day);
+ }catch(e){m.innerHTML='<span class=err>Could not load - try again.</span>';}}
+function render(plan,bill,ins,day){
+ var h='';var util=plan.utilization_pct||0,uc=(util>100?'#b23b3b':'#14335f');
+ h+='<div class=card><h3>Pickup day <span class=mut>'+esc(day||plan.date||'')+'</span></h3><div class=grid>'
+  +'<div class=stat><div class=n>'+(plan.total_stops||0)+'</div><div class=l>Stops booked</div></div>'
+  +'<div class=stat><div class=n>'+(plan.buildings||0)+'</div><div class=l>Buildings</div></div>'
+  +'<div class=stat><div class=n>'+(plan.crews_available||0)+'</div><div class=l>Crews</div></div>'
+  +'<div class=stat><div class=n style="color:'+uc+'">'+util+'%</div><div class=l>Capacity used</div></div>'
+  +'</div>'+(plan.total_stops?'':'<p class=mut>No pickups booked that day.</p>')+'</div>';
+ // revenue leak
+ var bs=bill.summary||{};
+ h+='<div class=card><h3>Revenue to recover <span class=mut>'+(bill.count||0)+' flagged</span></h3>'
+  +'<div class=row><div class=lab>$0 / missing total</div><div class=val>'+(bs.zero_or_missing_total||0)+'</div></div>'
+  +'<div class=row><div class=lab>Missing invoice</div><div class=val>'+(bs.missing_invoice||0)+'</div></div>'
+  +'<div class=row><div class=lab>Missing order #</div><div class=val>'+(bs.missing_order_id||0)+'</div></div>';
+ var fl=(bill.flagged||[]).slice(0,8);
+ if(fl.length){h+='<table><thead><tr><th>Student</th><th>Order</th><th>Issue</th></tr></thead><tbody>'
+  +fl.map(function(x){return '<tr><td>'+esc(x.student)+'</td><td>'+esc(x.order||'-')+'</td><td>'+esc((x.reasons||[]).join(', '))+'</td></tr>';}).join('')
+  +'</tbody></table><div class=mut style="margin-top:6px">Fix these in the sheet to close the leak.</div>';}
+ h+='</div>';
+ // forecast
+ var fc=(ins.forecast||{});var pw=(fc.peak_window||[]).slice(0,3);
+ if(pw.length){h+='<div class=card><h3>Next-season forecast</h3>'
+  +pw.map(function(x){return '<div class=row><div class=lab>'+esc(x.label)+'</div><div class=val>'+x.orders+' orders &middot; '+x.crews_needed+' crews</div></div>';}).join('')
+  +'<div class=mut style="margin-top:6px">Return season (Aug): '+((fc.return_season||{}).orders||0)+' orders.</div></div>';}
+ // data quality
+ var dq=ins.data_quality||{};
+ h+='<div class=card><h3>Data health</h3>'
+  +'<div class=row><div class=lab>Unknown building</div><div class=val>'+(dq.unknown_building||0)+' ('+(dq.unknown_building_pct||0)+'%)</div></div>'
+  +'<div class=row><div class=lab>Missing phone</div><div class=val>'+(dq.missing_phone||0)+' ('+(dq.missing_phone_pct||0)+'%)</div></div>'
+  +'<div class=row><div class=lab>Duplicate names</div><div class=val>'+(dq.duplicate_named_customers||0)+'</div></div></div>';
+ document.getElementById('out').innerHTML=h;}
+(function(){document.getElementById('day').value='2026-05-07';load();})();
+</script></body></html>"""
+
+
+@mcp.custom_route("/staff", methods=["GET"])
+async def staff_page(request: Request):
+    """Staff-only unified console (pulls the key-gated /dispatch_plan + /billing_audit + aggregate /insights_api)."""
+    return HTMLResponse(_STAFF_HTML)
 
 
 @mcp.custom_route("/ask", methods=["GET"])

@@ -179,6 +179,32 @@ def compute_metrics(dispatch, service):
         fc["note"] = ("At %d pickups per crew, the projected peak day needs %d crews — versus %d scheduled "
                       "this season. Either add crews for peak week or keep steering bookings to open days."
                       % (engines.JOBS_PER_CREW, -(-peak_orders // engines.JOBS_PER_CREW), engines.crews_for(peak)))
+        # revenue projection: value the projected volume at this season's average order
+        avg = m["overview"]["avg_order"]
+        fc["revenue_forecast"] = {
+            "avg_order": avg,
+            "peak_day_revenue": round(avg * peak_orders, 2),
+            "move_out_window_revenue": round(avg * window_total, 2),
+        }
+        # per-building peak timing: which building peaks when, relative to the overall peak day
+        bld_day = defaultdict(lambda: defaultdict(int))
+        for r in dispatch:
+            dd = engines._parse_date(r.get("Date", ""))
+            if dd:
+                bld_day[_norm_building(r.get("Building", ""))][dd] += 1
+        timing = []
+        for b, _c in bld.most_common(20):
+            if b in ("Unknown", "Off-Campus"):
+                continue
+            days = bld_day.get(b)
+            if not days:
+                continue
+            bpeak = max(days, key=days.get)
+            timing.append({"building": b, "peak_date": str(bpeak),
+                           "offset_days": (bpeak - peak).days, "peak_orders": days[bpeak]})
+            if len(timing) >= 8:
+                break
+        fc["building_peak_timing"] = timing
     m["forecast"] = fc
     # ---- repeat customers / LTV (idea #7) ----
     name_orders, name_rev = Counter(), defaultdict(float)
