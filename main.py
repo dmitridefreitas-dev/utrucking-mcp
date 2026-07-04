@@ -681,20 +681,31 @@ async def _ai_map_unmatched(result, book):
     # non-storage supplies skipped above stay listed as not-priced
     still = [(n, q) for n, q in allu if _e._canon(n) in _e.NON_STORAGE]
     still_names = [n for n, _ in still]
+    ai_pairs = []
     for name, qty in todo:
         target = mapping.get(name.lower())
         k = _e.resolve_item(target, book) if isinstance(target, str) else None
         if k is None:
             still.append((name, qty)); still_names.append(name); continue
-        price = book[k]
-        result["line_items"].append({"item": k.title(), "qty": qty, "unit_price": round(price, 2),
-                                     "amount": round(price * qty, 2), "matched_from": name, "ai_matched": True})
+        price = book[k]; title = k.title()
+        existing = next((l for l in result["line_items"] if l["item"] == title), None)
+        if existing:                                    # merge into the existing line, don't emit a duplicate
+            existing["qty"] += qty
+            existing["amount"] = round(existing["unit_price"] * existing["qty"], 2)
+        else:
+            result["line_items"].append({"item": title, "qty": qty, "unit_price": round(price, 2),
+                                         "amount": round(price * qty, 2), "matched_from": name, "ai_matched": True})
         result["total"] = round(result["total"] + price * qty, 2)
+        ai_pairs.append({"from": name, "to": title})
     result["unmatched"] = still_names
     if still: result["unmatched_items"] = still
     else: result.pop("unmatched_items", None)
-    result["matched"] = [{"from": l["matched_from"], "to": l["item"]} for l in result["line_items"] if l.get("matched_from")]
-    if not result["matched"]: result.pop("matched", None)
+    matched = [{"from": l["matched_from"], "to": l["item"]} for l in result["line_items"] if l.get("matched_from")]
+    for mp in ai_pairs:                                 # a map that merged into an existing line isn't on a line — keep it in the summary
+        if not any(x["from"] == mp["from"] for x in matched):
+            matched.append(mp)
+    if matched: result["matched"] = matched
+    else: result.pop("matched", None)
     return result
 
 

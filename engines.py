@@ -70,6 +70,7 @@ ALIASES = {
     "cart":"rolling cart","rolling cart":"rolling cart",
     "shelf":"bookshelf","bookshelf":"bookshelf","bookcase":"bookshelf","dresser":"dresser","drawers":"dresser",
     "hamper":"hamper/laundry basket","laundry basket":"hamper/laundry basket","laundry hamper":"hamper/laundry basket",
+    "hamper/laundry basket":"hamper/laundry basket","swivel/arm chair":"swivel/arm chair",   # self-maps: declare these history canonicals
     "mattress":"mattress","ottoman":"ottoman","footstool":"ottoman","foot stool":"ottoman",
     "shoe rack":"shoe rack","headboard":"headboard",
     # common synonyms that map onto items already in the learned price book
@@ -175,6 +176,28 @@ ALIASES = {
     "sewing machine":"small appliance","clothes steamer":"small appliance","steamer":"small appliance",
     "paper shredder":"small appliance","shredder":"small appliance","lockbox":"toolbox","file box":"filing cabinet",
     "router":"small appliance","modem":"small appliance","wifi router":"small appliance","power strip":"small appliance",
+    # compound-noun guards: phrases whose MODIFIER is itself an item alias (golf, ski, book, bean bag...)
+    # must resolve as ONE item, or the parser would emit the modifier AND the head noun as two lines.
+    # Footwear -> boxed like any shoes; the rest map to their real single item.
+    "golf shoes":"utrucking box","golf cleats":"utrucking box","ski boots":"utrucking box",
+    "basketball shoes":"utrucking box","baseball cleats":"utrucking box","baseball shoes":"utrucking box",
+    "football cleats":"utrucking box","soccer cleats":"utrucking box","volleyball shoes":"utrucking box",
+    "tennis shoes":"utrucking box","running shoes":"utrucking box","hiking boots":"utrucking box",
+    "snow boots":"utrucking box","winter boots":"utrucking box","rain boots":"utrucking box",
+    "book shelf":"bookshelf","book case":"bookshelf","bean bag chair":"beanbag chair",
+    "bike helmet":"sports equipment","ski helmet":"sports equipment","football helmet":"sports equipment",
+    "bike pump":"sports equipment","bike lock":"sports equipment","bike rack":"sports equipment",
+    "floor mirror":"mirror","full length mirror":"mirror","storage ottoman":"ottoman","storage drawers":"dresser",
+    # more common household compounds whose head noun (lamp/fan/table/chair/mirror/hamper) is an alias
+    "table lamp":"lamp","bedside lamp":"lamp","reading lamp":"lamp",
+    "desk fan":"fan","ceiling fan":"fan","tower fan":"fan","floor fan":"fan","oscillating fan":"fan",
+    "night table":"nightstand","picnic table":"table",
+    "rocking chair":"swivel/arm chair","accent chair":"swivel/arm chair","lounge chair":"swivel/arm chair","dining chair":"swivel/arm chair",
+    "wall mirror":"mirror","standing mirror":"mirror","vanity mirror":"mirror",
+    "ski jacket":"utrucking box","winter jacket":"utrucking box","rain jacket":"utrucking box","letterman jacket":"utrucking box",
+    "shoe box":"utrucking box","book bag":"utrucking box","backpack":"utrucking box","gym bag":"camp duffel","tote bag":"plastic container",
+    "clothes hamper":"hamper/laundry basket","trash can":"plastic container","garbage can":"plastic container",
+    "waste basket":"plastic container","recycling bin":"plastic container",
 }
 
 # Things that show up in photos / descriptions but aren't stored items we price — never match these.
@@ -325,8 +348,9 @@ _SEPS_RE = re.compile(r'[,;/&]|\band\b|\bplus\b|\+|\n')
 def parse_freetext_ex(text, price_book):
     """Parse free text into a list of (name, qty). A quantity binds to the item it *precedes*, else the
     item it *follows*, within the same comma/'and' segment — and prefers a known item over a stray word.
-    So '6 utrucing box', 'box 6', '6 red box', and '6x box' all read as 6 boxes, while '3 desk lamp'
-    stays 3 desks + 1 lamp. Runs a domain spell-fix first so typos still resolve."""
+    So '6 utrucing box', 'box 6', '6 red box', and '6x box' all read as 6 boxes. Multi-word items that
+    are aliased (e.g. 'desk lamp', 'golf shoes') resolve as one item; two un-aliased adjacent knowns
+    (e.g. 'dresser mirror') stay separate. Runs a domain spell-fix first so typos still resolve."""
     low = " " + _fix_spelling(text or "", price_book).lower() + " "
     occ = [False] * len(low)
     seps = [m.start() for m in _SEPS_RE.finditer(low)]

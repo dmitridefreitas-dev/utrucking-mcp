@@ -120,3 +120,32 @@ def test_single_order_customer_has_no_choice():
     assert not r.get("needs_order_choice")
     assert "order_count" not in r
     assert r["building"] == "Eliot"
+
+
+# ---------- AI second-chance mapping merges, never duplicates a line ----------
+def test_ai_map_merges_into_existing_line(monkeypatch):
+    import asyncio
+    async def fake_gen(key, parts, temp=None, json_out=False):
+        return '{"kayak": "box"}'                      # maps onto an item already in the cart
+    monkeypatch.setattr(main, "_gemini_generate", fake_gen)
+    monkeypatch.setenv("GEMINI_API_KEY", "stub")
+    q = engines.quote("2 boxes, 1 kayak", BOOK)
+    q = asyncio.run(main._ai_map_unmatched(q, BOOK))
+    box = [l for l in q["line_items"] if l["item"] == "Utrucking Box"]
+    assert len(box) == 1 and box[0]["qty"] == 3        # merged, not a second line
+    assert abs(q["total"] - 66.0) < 0.01
+    assert any(mp["from"] == "kayak" and mp["to"] == "Utrucking Box" for mp in q.get("matched", []))
+    assert "kayak" not in (q.get("unmatched") or [])
+
+
+def test_ai_map_new_item_gets_its_own_line(monkeypatch):
+    import asyncio
+    async def fake_gen(key, parts, temp=None, json_out=False):
+        return '{"kayak": "mattress"}'                 # not already in the cart
+    monkeypatch.setattr(main, "_gemini_generate", fake_gen)
+    monkeypatch.setenv("GEMINI_API_KEY", "stub")
+    q = engines.quote("2 boxes, 1 kayak", BOOK)
+    q = asyncio.run(main._ai_map_unmatched(q, BOOK))
+    mat = [l for l in q["line_items"] if l["item"] == "Mattress"]
+    assert len(mat) == 1 and mat[0].get("matched_from") == "kayak" and mat[0].get("ai_matched")
+    assert "kayak" not in (q.get("unmatched") or [])
