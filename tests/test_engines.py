@@ -146,3 +146,21 @@ def test_no_orphan_alias_targets():
     known = set(engines.EXTRA_PRICES) | {v for k, v in engines.ALIASES.items() if k == v}
     orphans = sorted({t for t in engines.ALIASES.values() if t not in known})
     assert orphans == [], orphans
+
+
+# ---------- a quantity glued to an item must still bind (never silently drop it) ----------
+def test_qty_glued_to_item_splits():
+    b = {"utrucking box": 22.0, "mattress": 33.0}
+    assert {l["item"]: l["qty"] for l in engines.quote("3bed", b)["line_items"]} == {"Mattress": 3}
+    assert {l["item"]: l["qty"] for l in engines.quote("4box", b)["line_items"]} == {"Utrucking Box": 4}
+    assert {l["item"]: l["qty"] for l in engines.quote("2boxes", b)["line_items"]} == {"Utrucking Box": 2}
+    # letter->digit is preserved so model names / the x3 qty form survive
+    q = engines.quote("box x3", b)
+    assert q["line_items"][0]["qty"] == 3
+
+
+def test_reported_glued_input_prices_everything():
+    b = {"utrucking box": 22.0, "mattress": 33.0, "table": 33.0, "keyboard": 23.0}
+    q = engines.quote("keyboard, table, 3bed, 4u trucking box", b)
+    got = {l["item"]: l["qty"] for l in q["line_items"]}
+    assert got == {"Keyboard": 1, "Table": 1, "Mattress": 3, "Utrucking Box": 4}, got

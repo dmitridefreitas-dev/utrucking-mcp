@@ -62,6 +62,7 @@ def upsell_pairs(service_rows, item_col="Summer Storage Item List"):
 # spoken / written aliases -> canonical item name (used only if the canonical exists in the learned book)
 ALIASES = {
     "box":"utrucking box","boxes":"utrucking box","utrucking box":"utrucking box",
+    "trucking box":"utrucking box","u trucking box":"utrucking box","utruck box":"utrucking box",
     "fridge":"mini fridge","minifridge":"mini fridge","mini fridge":"mini fridge",
     "duffel":"camp duffel","duffel bag":"camp duffel","camp duffel":"camp duffel",
     "container":"plastic container","bin":"plastic container","tub":"plastic container",
@@ -351,7 +352,11 @@ def parse_freetext_ex(text, price_book):
     So '6 utrucing box', 'box 6', '6 red box', and '6x box' all read as 6 boxes. Multi-word items that
     are aliased (e.g. 'desk lamp', 'golf shoes') resolve as one item; two un-aliased adjacent knowns
     (e.g. 'dresser mirror') stay separate. Runs a domain spell-fix first so typos still resolve."""
-    low = " " + _fix_spelling(text or "", price_book).lower() + " "
+    # split a quantity glued to an item so it isn't lost: "3bed"->"3 bed", "4u"->"4 u", "2boxes"->"2 boxes".
+    # Only digit->letter (a leading number is almost always a count); letter->digit is left intact so
+    # model names like "ps5"/"mp3" and the "x3" qty form survive.
+    pre = re.sub(r'(?<=\d)(?=[a-zA-Z])', ' ', text or "")
+    low = " " + _fix_spelling(pre, price_book).lower() + " "
     occ = [False] * len(low)
     seps = [m.start() for m in _SEPS_RE.finditer(low)]
     hits = []   # [start, end, key_or_None, original_text]
