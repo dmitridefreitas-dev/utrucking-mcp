@@ -64,8 +64,14 @@ async def fetch_csv_rows(url: str, force: bool = False) -> list[dict]:
     if hit and not force and (now - hit[0]) < SHEET_TTL:
         return hit[1]
     try:
+        # Cache-buster so Google/CDN can't hand the server a stale export even after our own
+        # in-memory copy expires. Normal refreshes bucket by the TTL window (still CDN-friendly);
+        # a forced refresh (e.g. after a verification miss) gets a unique value to defeat any
+        # edge cache, so a just-edited order verifies right away.
+        bust = int(now * 1000) if force else int(now // SHEET_TTL)
+        sep = "&" if "?" in url else "?"
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url)
+            resp = await client.get(f"{url}{sep}_cb={bust}")
         if resp.status_code == 200:
             rows = list(csv.DictReader(io.StringIO(resp.text)))
             _SHEET_CACHE[url] = (now, rows)
@@ -291,6 +297,20 @@ async def do_get_order_details(name_heard: str, answer: str, order_hint: str = "
                 "confirmed_name": rec.get("confirmed_name", ""),
                 "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
     if not _verify_answer(rec, answer or ""):
+        # A cached sheet can lag a just-edited row (SHEET_TTL / CDN edge cache), which would make
+        # a correct answer look wrong. Before failing, re-pull the sheets FRESH once and re-check,
+        # so a recently updated order still verifies. This only runs on a miss and is bounded by
+        # the lockout; it never relaxes the check (same _verify_answer) so it can't leak.
+        try:
+            d2, s2 = await asyncio.gather(
+                fetch_csv_rows(DISPATCH_CSV_URL, force=True), fetch_csv_rows(SERVICE_CSV_URL, force=True))
+            rec2 = _build_order_result(name_heard, d2, s2, order_hint)
+            if rec2.get("status") == "found" and _verify_answer(rec2, answer or ""):
+                _VERIFY_FAILS.pop(nm, None)
+                rec2["verified"] = True
+                return rec2
+        except Exception:
+            pass                                         # fresh re-check failed → fall through to normal miss
         _verify_fail(nm)
         return {"status": "found", "verified": False,
                 "confirmed_name": rec.get("confirmed_name", ""),

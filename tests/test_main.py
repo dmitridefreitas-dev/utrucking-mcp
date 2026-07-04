@@ -374,6 +374,35 @@ def test_get_order_details_unknown_name(monkeypatch):
         assert pii not in r
 
 
+def test_get_order_details_force_refreshes_a_stale_cache(monkeypatch):
+    """A just-edited order can lag in the cached sheet (SHEET_TTL / CDN). On a verification
+    miss the endpoint re-pulls FRESH once and re-checks, so the correct answer still verifies —
+    without ever relaxing the check (a truly wrong answer still fails)."""
+    import asyncio
+    fresh_D, fresh_S = _id_data()
+    stale_D = [{**fresh_D[0], "Building": "", "Room": "", "Phone": "", "ID": ""}]  # cached copy missing the details
+    stale_S = [{"Student Name": "Jamie Rivers", "Order#:": "", "Building": ""}]
+    calls = {"forced": 0}
+    async def fake_fetch(url, force=False):
+        if url == main.DISPATCH_CSV_URL:
+            if force:
+                calls["forced"] += 1
+                return fresh_D
+            return stale_D
+        return fresh_S if force else stale_S
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+    main._VERIFY_FAILS.clear()
+    ok = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))   # correct, but stale-cache misses first
+    assert ok.get("verified") is True and ok.get("building") == "Northgate B"
+    assert calls["forced"] >= 1                                                   # it actually re-fetched fresh
+    # a genuinely wrong answer must STILL fail even after the fresh re-check
+    main._VERIFY_FAILS.clear()
+    bad = asyncio.run(main.do_get_order_details("Jamie Rivers", "Westwood Hall"))
+    assert bad.get("verified") is False
+    for pii in main._PII_FIELDS:
+        assert pii not in bad
+
+
 def test_phone_verify_has_bruteforce_lockout_like_chat(monkeypatch):
     """Parity: the chat locks a name after 5 wrong verify tries; get_order_details must too
     (shared _VERIFY_FAILS), else the open phone endpoint could be brute-forced."""
