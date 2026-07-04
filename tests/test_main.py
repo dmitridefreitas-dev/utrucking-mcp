@@ -9,10 +9,12 @@ BOOK = {"utrucking box": 22.0, "mini fridge": 23.0, "plastic container": 18.0,
 
 @pytest.fixture(autouse=True)
 def _clear_ai_cache():
-    # the AI-map cache is process-global by design; reset it so tests stay independent
+    # process-global by design; reset so tests stay independent
     main._AI_MAP_CACHE.clear()
+    main._VERIFY_FAILS.clear()
     yield
     main._AI_MAP_CACHE.clear()
+    main._VERIFY_FAILS.clear()
 
 
 # ---------- upsell attach ----------
@@ -250,37 +252,37 @@ def test_chat_api_spanish_roundtrip(monkeypatch):
     assert "días" in body["reply"].lower()                   # reply came back translated
 
 
-# ---------- chat identity flow: bare-name routing + fuzzy verification ----------
+# ---------- chat identity flow + phone verification (fictional data only, no real customers) ----------
 def _id_data():
     D = [
-        {"Student": "Dalen Ainsworth", "ID": "#13851-SS", "Service": "Summer Storage",
-         "Building": "Eliot A", "Room": "3091", "Date": "5/6/2026", "Phone": "3145551234", "Status": "Complete"},
-        {"Student": "Nora Vance", "ID": "#20777-SS", "Service": "Summer Storage",
+        {"Student": "Jamie Rivers", "ID": "#90001-TS", "Service": "Summer Storage",
+         "Building": "Northgate B", "Room": "1205", "Date": "5/6/2026", "Phone": "5550100200", "Status": "Complete"},
+        {"Student": "Morgan Ellis", "ID": "#90002-TS", "Service": "Summer Storage",
          "Building": "", "Room": "", "Date": "5/9/2026", "Phone": "", "Status": "Scheduled"},
     ]
-    S = [{"Student Name": "Dalen Ainsworth", "Order#:": "13851-SS", "Building": "Eliot A"},
-         {"Student Name": "Nora Vance", "Order#:": "20777-SS"}]
+    S = [{"Student Name": "Jamie Rivers", "Order#:": "90001-TS", "Building": "Northgate B"},
+         {"Student Name": "Morgan Ellis", "Order#:": "90002-TS"}]
     return D, S
 
 
 def test_bare_name_starts_verification():
     D, S = _id_data()
-    reply, state = main._chat_reply("Dalen Ainsworth", {}, D, S, BOOK)
+    reply, state = main._chat_reply("Jamie Rivers", {}, D, S, BOOK)
     assert state.get("step") == "verify"
     assert "building" in reply.lower()
-    assert state.get("name", "").lower() == "dalen ainsworth"
+    assert state.get("name", "").lower() == "jamie rivers"
 
 
 def test_bare_name_typo_still_routes_to_verify():
     D, S = _id_data()
-    _, state = main._chat_reply("Dalen Ainswrth", {}, D, S, BOOK)   # missing 'o'
+    _, state = main._chat_reply("Jamie Rivrs", {}, D, S, BOOK)      # missing 'e'
     assert state.get("step") == "verify"
 
 
 def test_quote_and_courtesy_are_not_treated_as_names():
     D, S = _id_data()
     _, s1 = main._chat_reply("mini fridge", {}, D, S, BOOK)
-    assert not s1                                                    # a quote, no lookup state
+    assert not s1
     _, s2 = main._chat_reply("thank you", {}, D, S, BOOK)
     assert s2.get("step") != "verify"
 
@@ -292,65 +294,98 @@ def test_unknown_nameish_goes_to_lookup_not_menu():
     assert "couldn't find" in reply.lower()
 
 
-@pytest.mark.parametrize("answer", ["Eliot A", "eliot", "Elliot A", "Elliott", " ELIOT  A "])
+@pytest.mark.parametrize("answer", ["Northgate B", "northgate", "Northgat B", "Northgate", " NORTHGATE  B "])
 def test_building_verify_tolerates_misspellings(answer):
     D, S = _id_data()
-    _, state = main._chat_reply("Dalen Ainsworth", {}, D, S, BOOK)
+    _, state = main._chat_reply("Jamie Rivers", {}, D, S, BOOK)
     reply, _ = main._lookup_flow(answer, state, D, S)
     assert "You're verified" in reply
 
 
-@pytest.mark.parametrize("answer", ["Umrath", "Gregg", "zzz", "the dorm"])
+@pytest.mark.parametrize("answer", ["Westwood", "Umrath", "zzz", "the dorm"])
 def test_building_verify_rejects_wrong_building(answer):
     D, S = _id_data()
-    _, state = main._chat_reply("Dalen Ainsworth", {}, D, S, BOOK)
+    _, state = main._chat_reply("Jamie Rivers", {}, D, S, BOOK)
     reply, _ = main._lookup_flow(answer, state, D, S)
     assert "You're verified" not in reply
 
 
-@pytest.mark.parametrize("answer", ["20777", "#20777-SS", "20777-ss", "order 20777"])
+@pytest.mark.parametrize("answer", ["90002", "#90002-TS", "90002-ts", "order 90002"])
 def test_order_number_verifies_when_no_building_or_phone(answer):
     D, S = _id_data()
-    ask, state = main._chat_reply("Nora Vance", {}, D, S, BOOK)
-    assert "order number" in ask.lower()                            # asked for the order #
+    ask, state = main._chat_reply("Morgan Ellis", {}, D, S, BOOK)
+    assert "order number" in ask.lower()
     reply, _ = main._lookup_flow(answer, state, D, S)
     assert "You're verified" in reply
 
 
 def test_order_number_wrong_is_rejected():
     D, S = _id_data()
-    _, state = main._chat_reply("Nora Vance", {}, D, S, BOOK)
+    _, state = main._chat_reply("Morgan Ellis", {}, D, S, BOOK)
     reply, _ = main._lookup_flow("00000", state, D, S)
     assert "You're verified" not in reply
 
 
-# ---------- verify_identity: the phone agent verifies with the SAME logic as the chat ----------
-def test_verify_identity_matches_chat_and_leaks_no_pii(monkeypatch):
-    import asyncio
+# ---- the phone gate: lookup returns NO PII; details come only after a correct answer ----
+def test_lookup_is_redacted_no_pii():
     D, S = _id_data()
+    full = main._build_order_result("Jamie Rivers", D, S)
+    red = main._redact_lookup(full)
+    assert red["status"] == "found" and red["confirmed_name"] == "Jamie Rivers"
+    assert red.get("verify_with")                                  # tells the agent what to ask
+    for pii in main._PII_FIELDS:                                   # none of the values leak
+        assert pii not in red, pii
+
+
+def _patch_rows(monkeypatch, D, S):
     async def fake_fetch(url, force=False):
         return D if url == main.DISPATCH_CSV_URL else S
     monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
 
-    ok = asyncio.run(main.do_verify_identity("Dalen Ainsworth", "Elliot A"))   # misspelled building
-    assert ok["status"] == "found" and ok["verified"] is True
-    assert ok["confirmed_name"].lower() == "dalen ainsworth"
-    for pii in ("building", "room", "phone", "order_id", "items_list"):        # gate returns no PII
-        assert pii not in ok
 
-    bad = asyncio.run(main.do_verify_identity("Dalen Ainsworth", "Umrath"))    # wrong building
-    assert bad["verified"] is False
-
-    byid = asyncio.run(main.do_verify_identity("Nora Vance", "20777"))         # no-building -> order #
-    assert byid["verified"] is True
-
-
-def test_verify_identity_unknown_name_is_not_verified(monkeypatch):
+def test_get_order_details_blocks_the_bypass(monkeypatch):
+    """The real bug: the agent answered 'Yes' (name confirm) and used a value it already knew.
+    Details must NOT come back unless the CALLER's answer actually matches."""
     import asyncio
-    D, S = _id_data()
-    async def fake_fetch(url, force=False):
-        return D if url == main.DISPATCH_CSV_URL else S
-    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
-    r = asyncio.run(main.do_verify_identity("Nobody McGhost", "Eliot A"))
-    assert r["verified"] is False
-    assert r["status"] in ("not_found", "confirm")
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    for bogus in ("Yes", "", "that's me", "sure"):
+        r = asyncio.run(main.do_get_order_details("Jamie Rivers", bogus))
+        assert r.get("verified") is False, bogus
+        for pii in main._PII_FIELDS:
+            assert pii not in r, (bogus, pii)
+
+
+def test_get_order_details_reveals_only_after_correct_answer(monkeypatch):
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    ok = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgat B"))   # misspelled but right
+    assert ok.get("verified") is True
+    assert ok.get("building") == "Northgate B" and ok.get("order_status") == "Complete"
+    byid = asyncio.run(main.do_get_order_details("Morgan Ellis", "order 90002"))
+    assert byid.get("verified") is True and byid.get("order_id") == "#90002-TS"
+
+
+def test_get_order_details_unknown_name(monkeypatch):
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    r = asyncio.run(main.do_get_order_details("Nobody McGhost", "Northgate B"))
+    assert r.get("verified") is not True
+    for pii in main._PII_FIELDS:
+        assert pii not in r
+
+
+def test_phone_verify_has_bruteforce_lockout_like_chat(monkeypatch):
+    """Parity: the chat locks a name after 5 wrong verify tries; get_order_details must too
+    (shared _VERIFY_FAILS), else the open phone endpoint could be brute-forced."""
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    for i in range(5):
+        r = asyncio.run(main.do_get_order_details("Jamie Rivers", "wrong%d" % i))
+        assert r.get("verified") is False
+    locked = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))  # correct but locked
+    assert locked.get("verified") is False and locked.get("locked") is True
+    for pii in main._PII_FIELDS:
+        assert pii not in locked
+    main._VERIFY_FAILS.clear()
+    ok = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))
+    assert ok.get("verified") is True

@@ -206,11 +206,98 @@ async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "")
                 "confirmed_name": rec.get("confirmed_name", ""),
                 "suggestions": rec.get("suggestions", []),
                 "message": rec.get("message", "")}
+    nm = " ".join((rec.get("confirmed_name") or name_heard).lower().split())
+    if _verify_locked(nm):                                    # same brute-force guard as the chat
+        return {"status": "found", "verified": False, "locked": True,
+                "confirmed_name": rec.get("confirmed_name", ""),
+                "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
     verified = _verify_answer(rec, answer or "")
+    if verified:
+        _VERIFY_FAILS.pop(nm, None)
+    else:
+        _verify_fail(nm)
     return {"status": "found", "verified": bool(verified),
             "confirmed_name": rec.get("confirmed_name", ""),
             "message": ("Identity confirmed." if verified
                         else "That detail doesn't match what we have on file.")}
+
+
+def _verify_prompt(rec):
+    """The detail the phone agent should ASK the caller for — chosen from what's on file,
+    phrased for speech. The value itself is never sent to the agent before verification."""
+    if rec.get("building"):
+        return "which building their pickup is at"
+    if rec.get("phone"):
+        return "the last 4 digits of the phone number on the order"
+    return "their order number"
+
+
+# Order PII that must NOT leave the server until the caller proves who they are.
+_PII_FIELDS = ("order_id", "service", "building", "room", "address", "date", "time_slot",
+               "order_status", "dispatch_status", "truck", "kits", "product", "phone",
+               "invoice_id", "items_list", "boxes", "luggage", "other", "other_description",
+               "notes", "date_completed")
+
+
+def _redact_lookup(rec):
+    """What the PHONE agent gets from lookup_student: enough to confirm the name and know
+    which detail to ask for, but NO order values (building/date/phone/items). Those are only
+    returned by get_order_details AFTER a correct, caller-provided answer — so the agent can't
+    self-verify with a value it already holds. Mirrors the chat's server-side gate."""
+    if not isinstance(rec, dict):
+        return rec
+    if rec.get("status") != "found":
+        # confirm / not_found / error: names + message only (no order PII)
+        return {k: rec[k] for k in ("status", "message", "suggestions", "confirmed_name") if k in rec}
+    out = {"status": "found",
+           "confirmed_name": rec.get("confirmed_name", ""),
+           "available_fields": rec.get("available_fields", []),
+           "verify_with": _verify_prompt(rec),
+           "message": ("I found an order under %s. Confirm the name, then verify their identity "
+                       "with get_order_details before sharing any detail." % rec.get("confirmed_name", ""))}
+    if rec.get("needs_order_choice"):
+        # let the agent disambiguate by service/date only — no order numbers before verifying
+        out["needs_order_choice"] = True
+        out["order_count"] = rec.get("order_count")
+        out["order_choices"] = [
+            {"service": c.get("service", ""), "date": c.get("date", ""),
+             "label": " ".join(x for x in [c.get("service", ""),
+                                            ("(" + c["date"] + ")") if c.get("date") else ""] if x)}
+            for c in (rec.get("order_choices") or [])]
+        out["message"] = ("%s has %d orders on file. Ask which one (by service or date), then verify "
+                          "identity." % (rec.get("confirmed_name", ""), rec.get("order_count", 0)))
+    return out
+
+
+async def do_get_order_details(name_heard: str, answer: str, order_hint: str = "") -> dict:
+    """Verify the caller, then reveal. Re-looks up by name and checks the caller's spoken answer
+    with the SAME tolerant matcher as the chat (fuzzy/partial building, phone last-4, or order
+    number). Returns the full order details ONLY when verified is true; otherwise no PII. This is
+    the gate that makes lookup_student safe to hand out without details."""
+    if not (name_heard or "").strip():
+        return {"status": "not_found", "verified": False, "message": "I didn't catch a name."}
+    try:
+        dispatch_rows, service_rows = await asyncio.gather(
+            fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
+    except Exception:
+        return {"status": "error", "verified": False,
+                "message": "I'm having trouble reaching our records right now."}
+    rec = _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
+    if rec.get("status") != "found":
+        return _redact_lookup(rec)                       # confirm / not_found — never any detail
+    nm = " ".join((rec.get("confirmed_name") or name_heard).lower().split())
+    if _verify_locked(nm):                               # same brute-force guard as the chat verify step
+        return {"status": "found", "verified": False, "locked": True,
+                "confirmed_name": rec.get("confirmed_name", ""),
+                "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
+    if not _verify_answer(rec, answer or ""):
+        _verify_fail(nm)
+        return {"status": "found", "verified": False,
+                "confirmed_name": rec.get("confirmed_name", ""),
+                "message": "That detail doesn't match what we have on file."}
+    _VERIFY_FAILS.pop(nm, None)                           # clear the counter on success, like the chat
+    rec["verified"] = True
+    return rec                                            # identity proven → full details
 
 
 def _order_label(row):
@@ -445,13 +532,13 @@ async def lookup_student_endpoint(request: Request):
         return JSONResponse({
             "endpoint": "/lookup_student",
             "method": "POST",
-            "expects": {"args": {"name_heard": "string", "order_hint": "optional - order #, service or month if the caller has multiple orders", "phone": "optional - caller's phone number; if given without a name, the caller is identified by their number"}},
+            "expects": {"args": {"name_heard": "string", "order_hint": "optional - service or month if the caller has multiple orders", "phone": "optional - caller's phone number; if given without a name, the caller is identified by their number"}},
             "returns": {
                 "status": "found | confirm | not_found | error",
                 "confirmed_name": "exact name from records",
-                "message": "short summary (name, order, service)",
                 "available_fields": ["order status", "pickup location", "..."],
-                "...": "all order fields for agent follow-up answers"
+                "verify_with": "the detail to ask the caller for before revealing anything",
+                "note": "NO order details are returned here - call get_order_details after the caller verifies"
             }
         })
     if not _authorized(request):
@@ -461,7 +548,33 @@ async def lookup_student_endpoint(request: Request):
     except Exception:
         body = {}
     args = _extract_args(body)
-    return JSONResponse(await do_lookup_student(args.get("name_heard", ""), args.get("order_hint", ""), args.get("phone", "")))
+    # PII is gated: lookup only confirms the name + says what to ask; details come from get_order_details
+    return JSONResponse(_redact_lookup(await do_lookup_student(args.get("name_heard", ""), args.get("order_hint", ""), args.get("phone", ""))))
+
+
+@mcp.custom_route("/get_order_details", methods=["POST", "GET"])
+async def get_order_details_endpoint(request: Request):
+    if request.method == "GET":
+        return JSONResponse({
+            "endpoint": "/get_order_details",
+            "method": "POST",
+            "expects": {"args": {
+                "name_heard": "string - the confirmed caller name",
+                "answer": "string - the ONE detail the caller gave to prove it's them: building, phone last 4, or order number",
+                "order_hint": "optional - service or month when they have multiple orders"}},
+            "returns": {"status": "found | confirm | not_found | error",
+                        "verified": "true | false",
+                        "note": "full order details are returned ONLY when verified is true"}
+        })
+    if not _authorized(request):
+        return _unauthorized()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    args = _extract_args(body)
+    return JSONResponse(await do_get_order_details(
+        args.get("name_heard", ""), args.get("answer", ""), args.get("order_hint", "")))
 
 
 @mcp.custom_route("/debug_sheets", methods=["GET"])
@@ -532,8 +645,19 @@ async def lookup_student(name_heard: str, order_hint: str = "", phone: str = "")
     caller's answer (order #, service type, or month) back as order_hint.
     If you have the caller's phone number (e.g. from caller ID) and no name yet,
     pass it as phone to identify them by their number.
+    Returns the confirmed name + which detail to verify, but NO order details — those come
+    from get_order_details once the caller proves who they are.
     """
-    return json.dumps(await do_lookup_student(name_heard, order_hint, phone))
+    return json.dumps(_redact_lookup(await do_lookup_student(name_heard, order_hint, phone)))
+
+
+@mcp.tool()
+async def get_order_details(name_heard: str, answer: str, order_hint: str = "") -> str:
+    """Verify the caller, then reveal their order. Pass the confirmed name and the ONE detail the
+    caller SAID to prove it's them — their building, the last 4 digits of their phone, or their
+    order number. Returns the full order details only when verified is true; otherwise no details.
+    Never pass a detail you already know — it must be what the caller just told you."""
+    return json.dumps(await do_get_order_details(name_heard, answer, order_hint))
 
 
 @mcp.custom_route("/verify_identity", methods=["POST", "GET"])
