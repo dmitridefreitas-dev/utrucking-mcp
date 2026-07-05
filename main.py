@@ -123,10 +123,15 @@ def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list
                     return last_matches[0], []
                 if len(last_matches) > 1:
                     return None, last_matches[:3]
-
-            if len(first_candidates) == 1:
-                return first_candidates[0], []
-            return None, first_candidates[:3]
+                # The caller gave a last name but it matches NONE of the first-name candidates'
+                # last names — do NOT confidently pull up a stranger who merely shares a fuzzy
+                # first name (this is how gibberish like "Zblargh Xyzptqq" used to match
+                # "Blair Wagner"). Fall through to the strict whole-name fuzzy, which needs 0.6 overall.
+            else:
+                # only a first name was given — can't narrow by last name
+                if len(first_candidates) == 1:
+                    return first_candidates[0], []
+                return None, first_candidates[:3]
 
     # 3. Full fuzzy fallback
     close = difflib.get_close_matches(q, all_names, n=3, cutoff=0.6)
@@ -1499,22 +1504,39 @@ def _id_matches(text, order_id):
     return len(dt) >= 4 and dt == do
 
 
+# filler / number / prompt words that must never, on their own, satisfy a building check —
+# otherwise a non-building sentence like "my last four are 3851" could fuzzy-match a building word.
+_BLD_STOP = {
+    "the", "my", "your", "our", "for", "and", "are", "its", "was", "were", "this", "that", "here",
+    "please", "tell", "call", "give", "last", "digit", "digits", "number", "numbers", "order",
+    "phone", "cell", "building", "pickup", "dorm", "hall", "room", "yes", "yeah", "okay", "sure",
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "hundred", "thousand", "confirm", "verify", "account", "info", "detail", "details", "status",
+}
+
 def _building_matches(text, building):
     """True if the caller's answer plausibly names their pickup building — tolerant of
-    misspellings, a missing/extra section letter, and abbreviations. Uses difflib (the same
-    family as the name matcher); buildings are short and distinct so a high ratio stays safe."""
+    misspellings, a missing/extra section letter, and abbreviations, but WITHOUT letting an
+    unrelated sentence (e.g. a phone-number answer) sneak through on a coincidental word."""
     b = re.sub(r"[^a-z0-9]+", " ", (building or "").lower()).strip()
     t = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
     if not b or len(t) < 3:
         return False
-    if t in b or b in t:                                  # exact / partial (kept from before)
+    b_tokens, t_tokens = b.split(), t.split()
+    if t == b or t in b:                                  # exact, or answer is part of the building name
         return True
-    if difflib.SequenceMatcher(None, t, b).ratio() >= 0.8:
+    b_core = [w for w in b_tokens if len(w) >= 3]         # caller said the whole building name (+ maybe extra)
+    if b_core and set(b_core).issubset(set(t_tokens)):
         return True
-    # token level: the main building word matching is enough (section letter optional)
-    bt = [w for w in b.split() if len(w) >= 3]
-    tt = [w for w in t.split() if len(w) >= 3]
-    return any(difflib.SequenceMatcher(None, x, y).ratio() >= 0.82 for x in tt for y in bt)
+    # whole-string fuzzy ONLY for a short, building-like answer — a long sentence must not
+    # fuzzy-match a short building name
+    if len(t_tokens) <= 3 and difflib.SequenceMatcher(None, t, b).ratio() >= 0.8:
+        return True
+    # token level: a SUBSTANTIVE answer word (alphabetic, >=4 chars, not a filler/number word)
+    # closely matching a building word — the optional section letter stays optional
+    bt = [w for w in b_tokens if len(w) >= 4 and w.isalpha()]
+    tt = [w for w in t_tokens if len(w) >= 4 and w.isalpha() and w not in _BLD_STOP]
+    return any(difflib.SequenceMatcher(None, x, y).ratio() >= 0.85 for x in tt for y in bt)
 
 
 def _verify_answer(rec, text):

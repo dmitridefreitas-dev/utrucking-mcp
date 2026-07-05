@@ -326,6 +326,43 @@ def test_order_number_wrong_is_rejected():
     assert "You're verified" not in reply
 
 
+# ---- name matcher must not confidently pull up a stranger who only shares a fuzzy first name ----
+_NAMES = ["Blair Wagner", "Diya Gupta", "Kennedy Brown", "Madison Elhaik"]
+
+@pytest.mark.parametrize("gibberish", ["Zblargh Xyzptqq", "Grumbo Snerptwang", "Aaaa Bbbb", "Qwerty Asdfgh"])
+def test_gibberish_full_name_not_confidently_matched(gibberish):
+    best, _sugg = main.smart_name_match(gibberish, _NAMES)
+    assert best is None, (gibberish, best)          # never a confident stranger match
+
+def test_real_typo_names_still_match():
+    assert main.smart_name_match("Diya Guta", _NAMES)[0] == "Diya Gupta"       # dropped a letter
+    assert main.smart_name_match("Kennedy Braun", _NAMES)[0] == "Kennedy Brown"  # misspelled surname
+    assert main.smart_name_match("Blair Wagner", _NAMES)[0] == "Blair Wagner"    # exact
+
+def test_first_name_only_still_offers_a_match():
+    best, sugg = main.smart_name_match("Diya", _NAMES)
+    assert best == "Diya Gupta" or "Diya Gupta" in sugg
+
+
+# ---- a non-building SENTENCE must never satisfy the building check (false-accept guard) ----
+@pytest.mark.parametrize("bldg", ["Danforth B", "Northgate", "Eliot A", "Umrath House", "Village East"])
+@pytest.mark.parametrize("sentence", [
+    "my last four are 3851", "the last four digits are 0200", "my order number is 12345",
+    "I don't know", "just tell me my status", "can you please look it up", "yes that's me",
+])
+def test_building_check_rejects_filler_sentences(bldg, sentence):
+    assert main._building_matches(sentence, bldg) is False, (sentence, bldg)
+
+@pytest.mark.parametrize("answer", ["Danforth", "danforth", "Danforth B", "Danfrth", "it's Danforth",
+                                    "I'm in Danforth", "Danforth, room 4405"])
+def test_building_check_still_accepts_real_answers(answer):
+    assert main._building_matches(answer, "Danforth B") is True, answer
+
+def test_building_check_rejects_other_buildings():
+    for wrong in ["Northgate", "Umrath", "Eliot", "the village"]:
+        assert main._building_matches(wrong, "Danforth B") is False, wrong
+
+
 # ---- the phone gate: lookup returns NO PII; details come only after a correct answer ----
 def test_lookup_is_redacted_no_pii():
     D, S = _id_data()
