@@ -266,8 +266,11 @@ def _redact_lookup(rec):
            "verify_with": _verify_prompt(rec),
            "message": ("I found an order under %s. Confirm the name, then verify their identity "
                        "with get_order_details before sharing any detail." % rec.get("confirmed_name", ""))}
-    if rec.get("needs_order_choice"):
-        # let the agent disambiguate by service/date only — no order numbers before verifying
+    if rec.get("needs_order_choice") and not rec.get("distinct_people"):
+        # ONE person with several orders: let the agent disambiguate by service/date only (no order
+        # numbers) before verifying. If the "orders" actually belong to DIFFERENT people who share a
+        # name (distinct_people), we do NOT list them — the caller just verifies, and get_order_details
+        # reveals only the order their answer matches, so a stranger's order is never disclosed.
         out["needs_order_choice"] = True
         out["order_count"] = rec.get("order_count")
         out["order_choices"] = [
@@ -280,11 +283,36 @@ def _redact_lookup(rec):
     return out
 
 
+def _verify_pick(name_heard, answer, dispatch_rows, service_rows, order_hint=""):
+    """Return (matching_rec, base_rec). Checks the caller's answer against EVERY candidate order
+    for this name and returns the one order whose verifier the answer matches — so a caller who
+    shares a name with someone else, or has several of their own orders, reveals only the row they
+    can actually verify (and never a stranger's). matching_rec is None if nothing verifies."""
+    base = _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
+    if base.get("status") != "found":
+        return None, base
+    if order_hint and _verify_answer(base, answer or ""):     # caller already narrowed to one order
+        return base, base
+    ids = [c.get("order_id", "") for c in (base.get("order_choices") or []) if c.get("order_id")]
+    cands = [_build_order_result(name_heard, dispatch_rows, service_rows, oid) for oid in ids] if ids else [base]
+    matches = [r for r in cands if r.get("status") == "found" and _verify_answer(r, answer or "")]
+    if not matches:
+        return None, base
+    # AMBIGUOUS: the answer matches orders belonging to more than one distinct person (e.g. two people
+    # who share a name AND a building). A weak verifier can't tell them apart, so reveal NOTHING and
+    # let the agent ask for a stronger identifier (phone last-4 or order number).
+    who = {_last4(r.get("phone") or "") for r in matches}
+    who.discard("")
+    if base.get("distinct_people") and len(who) > 1:
+        return None, base
+    return matches[0], base
+
+
 async def do_get_order_details(name_heard: str, answer: str, order_hint: str = "") -> dict:
-    """Verify the caller, then reveal. Re-looks up by name and checks the caller's spoken answer
-    with the SAME tolerant matcher as the chat (fuzzy/partial building, phone last-4, or order
-    number). Returns the full order details ONLY when verified is true; otherwise no PII. This is
-    the gate that makes lookup_student safe to hand out without details."""
+    """Verify the caller, then reveal. Checks the caller's spoken answer with the SAME tolerant
+    matcher as the chat (fuzzy/partial building, phone last-4, or order number) against every order
+    filed under this name, and returns the full details of the ONE order it matches — only when
+    verified; otherwise no PII. This is the gate that makes lookup_student safe to hand out."""
     if not (name_heard or "").strip():
         return {"status": "not_found", "verified": False, "message": "I didn't catch a name."}
     try:
@@ -293,36 +321,33 @@ async def do_get_order_details(name_heard: str, answer: str, order_hint: str = "
     except Exception:
         return {"status": "error", "verified": False,
                 "message": "I'm having trouble reaching our records right now."}
-    rec = _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
-    if rec.get("status") != "found":
-        return _redact_lookup(rec)                       # confirm / not_found — never any detail
-    nm = " ".join((rec.get("confirmed_name") or name_heard).lower().split())
+    match, base = _verify_pick(name_heard, answer, dispatch_rows, service_rows, order_hint)
+    if base.get("status") != "found":
+        return _redact_lookup(base)                      # confirm / not_found — never any detail
+    nm = " ".join((base.get("confirmed_name") or name_heard).lower().split())
     if _verify_locked(nm):                               # same brute-force guard as the chat verify step
         return {"status": "found", "verified": False, "locked": True,
-                "confirmed_name": rec.get("confirmed_name", ""),
+                "confirmed_name": base.get("confirmed_name", ""),
                 "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
-    if not _verify_answer(rec, answer or ""):
+    if match is None:
         # A cached sheet can lag a just-edited row (SHEET_TTL / CDN edge cache), which would make
-        # a correct answer look wrong. Before failing, re-pull the sheets FRESH once and re-check,
-        # so a recently updated order still verifies. This only runs on a miss and is bounded by
-        # the lockout; it never relaxes the check (same _verify_answer) so it can't leak.
+        # a correct answer look wrong. Before failing, re-pull the sheets FRESH once and re-check
+        # every candidate, so a recently updated order still verifies. Only runs on a miss, bounded
+        # by the lockout, and never relaxes the check (same _verify_answer) so it can't leak.
         try:
             d2, s2 = await asyncio.gather(
                 fetch_csv_rows(DISPATCH_CSV_URL, force=True), fetch_csv_rows(SERVICE_CSV_URL, force=True))
-            rec2 = _build_order_result(name_heard, d2, s2, order_hint)
-            if rec2.get("status") == "found" and _verify_answer(rec2, answer or ""):
-                _VERIFY_FAILS.pop(nm, None)
-                rec2["verified"] = True
-                return rec2
+            match, _ = _verify_pick(name_heard, answer, d2, s2, order_hint)
         except Exception:
             pass                                         # fresh re-check failed → fall through to normal miss
+    if match is None:
         _verify_fail(nm)
         return {"status": "found", "verified": False,
-                "confirmed_name": rec.get("confirmed_name", ""),
+                "confirmed_name": base.get("confirmed_name", ""),
                 "message": "That detail doesn't match what we have on file."}
     _VERIFY_FAILS.pop(nm, None)                           # clear the counter on success, like the chat
-    rec["verified"] = True
-    return rec                                            # identity proven → full details
+    match["verified"] = True
+    return match                                         # identity proven → the ONE order they matched
 
 
 def _order_label(row):
@@ -514,6 +539,12 @@ def _build_order_result(name_heard: str, dispatch_rows, service_rows, order_hint
     if order_choices:
         result["order_count"] = len(order_choices)
         result["order_choices"] = order_choices
+        # Different last-4 phones across the orders => almost certainly DIFFERENT people who happen
+        # to share a name, not one repeat customer. Flagged so the redacted lookup doesn't list a
+        # stranger's orders before the caller has proven who they are (the verifier picks the row).
+        phones4 = {_last4(clean(r.get("Phone") or "")) for r in distinct}
+        phones4.discard("")
+        result["distinct_people"] = len(phones4) > 1
         if not order_hint:
             result["needs_order_choice"] = True
             result["message"] = ("Got it — %s. I found %d orders: %s. Which one do you mean?"
@@ -1557,15 +1588,15 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
         nm = " ".join((state.get("name") or "").lower().split())
         if _verify_locked(nm):
             return ("Too many verification attempts for that name. For security, please call the team at (314) 266-8878.", {})
-        rec = _build_order_result(state.get("name", ""), dispatch_rows, service_rows, state.get("hint", ""))
-        if rec.get("status") != "found":
+        # accept ANY on-file identifier, each fuzzy-tolerant: building (misspelled/partial), phone
+        # last-4, or the order number — checked against EVERY order under this name so a shared name
+        # reveals only the order the caller can verify (the SAME check the phone agent runs).
+        match, base = _verify_pick(state.get("name", ""), text, dispatch_rows, service_rows, state.get("hint", ""))
+        if base.get("status") != "found":
             return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
-        # accept ANY on-file identifier, each fuzzy-tolerant: building (misspelled/partial),
-        # phone last-4, or the order number — the SAME check the phone agent runs.
-        ok = _verify_answer(rec, text)
-        if ok:
+        if match is not None:
             _VERIFY_FAILS.pop(nm, None)
-            return (_reveal_order(rec), {})
+            return (_reveal_order(match), {})
         _verify_fail(nm)
         return ("That doesn't match what we have, so I can't share the order details. Please call the team at (314) 266-8878.", {})
     if state.get("step") == "order":

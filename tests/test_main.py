@@ -363,6 +363,79 @@ def test_building_check_rejects_other_buildings():
         assert main._building_matches(wrong, "Danforth B") is False, wrong
 
 
+# ---- two DIFFERENT people share a name: reveal only the order the caller can verify ----
+def _dup_data():
+    D = [
+        {"Student": "John Smith", "ID": "#70001-TS", "Service": "Summer Storage",
+         "Building": "Danforth", "Room": "100", "Date": "5/6/2026", "Phone": "5550001111", "Status": "Complete"},
+        {"Student": "John Smith", "ID": "#70002-TS", "Service": "Summer Storage",
+         "Building": "Eliot", "Room": "200", "Date": "5/7/2026", "Phone": "5550002222", "Status": "Scheduled"},
+    ]
+    S = [{"Student Name": "John Smith", "Order#:": "70001-TS", "Building": "Danforth"},
+         {"Student Name": "John Smith", "Order#:": "70002-TS", "Building": "Eliot"}]
+    return D, S
+
+def test_same_name_reveals_only_the_matching_person(monkeypatch):
+    import asyncio
+    D, S = _dup_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    a = asyncio.run(main.do_get_order_details("John Smith", "Danforth"))
+    assert a.get("verified") is True and a.get("order_id") == "#70001-TS" and a.get("building") == "Danforth"
+    main._VERIFY_FAILS.clear()
+    b = asyncio.run(main.do_get_order_details("John Smith", "Eliot"))
+    assert b.get("verified") is True and b.get("order_id") == "#70002-TS" and b.get("building") == "Eliot"
+
+def test_same_name_by_phone_last4_picks_right_person(monkeypatch):
+    import asyncio
+    D, S = _dup_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    r = asyncio.run(main.do_get_order_details("John Smith", "my last four are 2222"))
+    assert r.get("verified") is True and r.get("order_id") == "#70002-TS"
+
+def test_same_name_wrong_building_reveals_nothing(monkeypatch):
+    import asyncio
+    D, S = _dup_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    r = asyncio.run(main.do_get_order_details("John Smith", "Umrath"))
+    assert r.get("verified") is not True
+    for pii in main._PII_FIELDS:
+        assert pii not in r
+
+def test_same_name_lookup_does_not_disclose_a_strangers_orders():
+    D, S = _dup_data()
+    full = main._build_order_result("John Smith", D, S)
+    assert full.get("distinct_people") is True                 # different phones => different people
+    red = main._redact_lookup(full)
+    assert "order_choices" not in red and not red.get("needs_order_choice")   # no pre-verify disclosure
+    for pii in main._PII_FIELDS:
+        assert pii not in red
+
+def _dup_same_building_data():
+    D = [
+        {"Student": "John Smith", "ID": "#71001-TS", "Service": "Summer Storage",
+         "Building": "Danforth", "Room": "100", "Date": "5/6/2026", "Phone": "5550001111", "Status": "Complete"},
+        {"Student": "John Smith", "ID": "#71002-TS", "Service": "Summer Storage",
+         "Building": "Danforth", "Room": "200", "Date": "5/7/2026", "Phone": "5550002222", "Status": "Scheduled"},
+    ]
+    S = [{"Student Name": "John Smith", "Order#:": "71001-TS", "Building": "Danforth"},
+         {"Student Name": "John Smith", "Order#:": "71002-TS", "Building": "Danforth"}]
+    return D, S
+
+def test_same_name_same_building_refuses_weak_verifier_but_phone_resolves(monkeypatch):
+    """Two different people share a name AND a building — the building can't tell them apart, so it
+    must reveal NOTHING; a distinguishing verifier (phone last-4) then reveals the right person."""
+    import asyncio
+    D, S = _dup_same_building_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    amb = asyncio.run(main.do_get_order_details("John Smith", "Danforth"))   # matches BOTH -> ambiguous
+    assert amb.get("verified") is not True
+    for pii in main._PII_FIELDS:
+        assert pii not in amb
+    main._VERIFY_FAILS.clear()
+    r = asyncio.run(main.do_get_order_details("John Smith", "the last four are 2222"))
+    assert r.get("verified") is True and r.get("order_id") == "#71002-TS"
+
+
 # ---- the phone gate: lookup returns NO PII; details come only after a correct answer ----
 def test_lookup_is_redacted_no_pii():
     D, S = _id_data()
