@@ -1610,13 +1610,23 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
                 {"intent": "lookup", "step": "verify", "name": rec["confirmed_name"], "hint": text})
     rec = _build_order_result(text, dispatch_rows, service_rows)
     if rec.get("status") == "found":
-        if rec.get("needs_order_choice"):
-            return ("I found %d orders under %s: %s. Which one do you mean?"
-                    % (rec["order_count"], rec["confirmed_name"],
-                       "; ".join(c["label"] for c in rec["order_choices"][:4])),
-                    {"intent": "lookup", "step": "order", "name": rec["confirmed_name"]})
         ask = ("what building is your pickup at" if rec.get("building")
                else ("the last 4 digits of your phone" if rec.get("phone") else "your order number"))
+        # One person with several of their OWN orders: list them by SERVICE + DATE only — never the
+        # order number (it is itself a valid verifier) and never for DIFFERENT people who share a
+        # name (that would disclose a stranger's order). Mirrors the phone's redacted lookup
+        # (_redact_lookup) so chat and voice reveal exactly the same before identity is proven.
+        if rec.get("needs_order_choice") and not rec.get("distinct_people"):
+            labels = "; ".join(
+                " ".join(x for x in [c.get("service", ""),
+                                     ("(" + c["date"] + ")") if c.get("date") else ""] if x)
+                for c in rec["order_choices"][:4])
+            return ("I found %d orders under %s: %s. Which one do you mean?"
+                    % (rec["order_count"], rec["confirmed_name"], labels),
+                    {"intent": "lookup", "step": "order", "name": rec["confirmed_name"]})
+        # Single order, OR different people sharing a name: go straight to verify. _verify_pick then
+        # reveals only the order the caller can actually prove, and refuses when a weak verifier
+        # (e.g. a shared building) can't tell shared-name people apart — same as the phone.
         return ("I found an order under %s. To confirm it's you, %s?" % (rec["confirmed_name"], ask),
                 {"intent": "lookup", "step": "verify", "name": rec["confirmed_name"]})
     if rec.get("status") == "confirm" and rec.get("suggestions"):
@@ -1631,6 +1641,16 @@ _RE_HOURS = re.compile(r"\b(hours?|located|location|address|where are you|contac
 _RE_LOOKUP = re.compile(r"\b(my order|order status|status of|where.?s my|where is my|track|my stuff|my pickup|my booking|look ?up|account|invoice|balance|do i owe|did you (?:pick|get))\b", re.I)
 _RE_LIST = re.compile(r"\b(other|another|others|list|what days|which days|when are|any (?:other )?day|days? (?:are )?(?:open|available|free)|options|else)\b", re.I)
 _RE_AVAIL = re.compile(r"\b(available|availab|book|booking|pickup|pick up|schedul|slot|reschedul|move-?out)\b", re.I)
+# Account CHANGES the assistant does NOT do itself (cancel / reschedule / change a detail / add-remove
+# items / email-or-text my details) — routed to the team, mirroring the phone agent's v42 prompt so
+# chat and voice handle these identically. Matched BEFORE lookup so "cancel my pickup" isn't taken as
+# an order-status request. A read-only "my order status" has no change verb, so it still reaches lookup.
+_RE_ACCT_CHANGE = re.compile(
+    r"\b(cancel\w*|reschedul\w*|re-?schedul\w*|change|edit|update|modif\w*|correct)\b[\w\s',.-]*?"
+    r"\b(order|pickup|pick ?up|booking|appointment|reservation|address|date|time ?slot|room|detail\w*)\b"
+    r"|\b(e-?mail|text|send)\b[\w\s',.-]*?\b(me|my)\b[\w\s',.-]*?"
+    r"\b(order|detail\w*|invoice|info|receipt|confirmation|summary)\b"
+    r"|\b(add|remove|take off)\b[\w\s',.-]*?\b(item\w*|box\w*)\b[\w\s',.-]*?\b(order|to my|from my)\b", re.I)
 
 # A bare name looks like "Firstname Lastname" (2-3 alpha words) and isn't a command/courtesy word.
 _NAME_STOP = {"thanks", "thank", "you", "please", "yes", "no", "nope", "yeah", "yep", "ok", "okay",
@@ -1715,6 +1735,13 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
             return _lookup_flow(text, state, dispatch_rows, service_rows)
     if not text or _RE_GREET.match(low):
         return (_CHAT_MENU, {})
+    # Account changes we don't do here (cancel / reschedule / change a detail / add-remove items /
+    # email-or-text my details) route to the team — same as the phone agent. We can still look up
+    # and read the order, so we offer that; the change itself always goes to the team.
+    if _RE_ACCT_CHANGE.search(low):
+        return ("Our team handles changes like that — the quickest way is to call them at "
+                "(314) 266-8878 or email info@utrucking.com. I can still pull up your current order "
+                "status if you'd like — what's the name on the order?", {})
     if _RE_LOOKUP.search(low):
         return ("Sure — I can check your order. What's the name on the order?", {"intent": "lookup", "step": "name"})
     if _RE_HOURS.search(low) and not _find_date(low) and not _find_month(low):
@@ -1799,8 +1826,14 @@ async def chat_api(request: Request):
     except Exception: body = {}
     args = _extract_args(body)
     state = args.get("state") if isinstance(args.get("state"), dict) else {}
-    dispatch_rows, service_rows = await asyncio.gather(
-        fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
+    try:
+        dispatch_rows, service_rows = await asyncio.gather(
+            fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
+    except Exception:
+        # Graceful degradation, same as the phone tools: never 500 the chat if a sheet is unreachable.
+        return JSONResponse({"reply": "I'm having trouble reaching our records right now — please try "
+                                      "again in a moment, or call the team at (314) 266-8878.",
+                             "state": state})
     book = build_price_book(service_rows) if service_rows else {}
     ip = (request.client.host if request.client else "") or "?"
     if state.get("step") == "verify" and _ip_locked(ip):
@@ -1824,7 +1857,19 @@ async def chat_api(request: Request):
         except Exception: brain_msg = msg_in
     reply, new_state = _chat_reply(brain_msg, state, dispatch_rows, service_rows, book)
     if state.get("step") == "verify" and reply.startswith("That doesn't match"):
-        _ip_fail(ip)
+        # Freshness parity with the phone line: a just-edited row can lag in the sheet cache and make
+        # a correct answer look wrong. Re-pull the sheets FRESH once and re-verify (same tolerant
+        # check — never relaxed) before counting a failure, so a recently updated order still verifies.
+        try:
+            d2, s2 = await asyncio.gather(
+                fetch_csv_rows(DISPATCH_CSV_URL, force=True), fetch_csv_rows(SERVICE_CSV_URL, force=True))
+            r2, ns2 = _chat_reply(brain_msg, state, d2, s2, book)
+        except Exception:
+            r2, ns2 = reply, new_state
+        if not r2.startswith("That doesn't match"):
+            reply, new_state = r2, ns2      # fresh data verified it; the success path cleared the counter
+        else:
+            _ip_fail(ip)
     # parity with /estimate and the phone line: if the quote had unpriceable items,
     # give the AI mapper a shot and re-render the reply when it places something
     if not new_state and ("Couldn't price:" in reply or "couldn't find a price for" in reply):

@@ -1,4 +1,5 @@
 """Offline unit tests for main.py helpers — upsell attach, phone match, multi-order, pretty items."""
+import re
 import pytest
 import engines
 import main
@@ -528,3 +529,119 @@ def test_phone_verify_has_bruteforce_lockout_like_chat(monkeypatch):
     main._VERIFY_FAILS.clear()
     ok = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))
     assert ok.get("verified") is True
+
+
+# ---------- chat <-> voice architecture PARITY (the web chat must gate/route like the phone) ----------
+def _oid_re(s):
+    """Any order-number-looking token in a string (e.g. '#13851-SS' or '70002-TS')."""
+    return re.search(r"#?\d{4,6}-?[A-Za-z]{2}\b", s)
+
+
+def test_chat_multi_order_lists_no_order_numbers():
+    """PARITY (security): a repeat customer's own multiple orders are listed by service+date only —
+    never the order number, which is itself a valid verifier. Mirrors the phone's _redact_lookup."""
+    D, S = _mo_data()                                            # one person, two orders (same phone)
+    reply, state = main._lookup_flow("Jordan Miles", {}, D, S)
+    assert state.get("step") == "order"                          # still asks which order
+    assert _oid_re(reply) is None, "chat leaked an order number pre-verification: %r" % reply
+    assert "13851" not in reply and "14990" not in reply
+
+
+def test_chat_shared_name_different_people_lists_nothing():
+    """PARITY (security): when a name matches DIFFERENT people, the chat must NOT list their orders
+    (that discloses a stranger's order + a valid verifier). It goes straight to a verify prompt,
+    exactly like the phone's _redact_lookup (which drops order_choices when distinct_people)."""
+    D, S = _dup_data()                                           # two DIFFERENT John Smiths
+    assert main._build_order_result("John Smith", D, S).get("distinct_people") is True
+    reply, state = main._lookup_flow("John Smith", {}, D, S)
+    assert state.get("step") == "verify"                         # NOT "order" — no listing
+    assert _oid_re(reply) is None and "70001" not in reply and "70002" not in reply
+
+
+def test_chat_and_voice_reveal_the_same_thing_pre_verify():
+    """The redacted phone lookup and the chat's first reply must disclose the SAME set of order
+    numbers pre-verification: none. Direct 1:1 comparison over both multi-order shapes."""
+    for D, S, name in ((_mo_data() + ("Jordan Miles",)), (_dup_data() + ("John Smith",))):
+        vred = main._redact_lookup(main._build_order_result(name, D, S))
+        creply, _ = main._lookup_flow(name, {}, D, S)
+        assert _oid_re(str(vred)) is None                        # voice: no order # (already guarded)
+        assert _oid_re(creply) is None                           # chat: no order # (now guarded too)
+
+
+def test_chat_shared_name_verify_reveals_only_the_matching_person(monkeypatch):
+    """PARITY: after going straight to verify, a building answer reveals ONLY the order it matches —
+    the same guarantee do_get_order_details gives the phone."""
+    D, S = _dup_data()
+    reply, state = main._lookup_flow("John Smith", {}, D, S)     # -> verify
+    r1, _ = main._lookup_flow("Danforth", state, D, S)
+    assert "verified" in r1.lower() and "Danforth" in r1 and "Eliot" not in r1
+    main._VERIFY_FAILS.clear()
+    reply2, state2 = main._lookup_flow("John Smith", {}, D, S)
+    r2, _ = main._lookup_flow("Eliot", state2, D, S)
+    assert "verified" in r2.lower() and "Eliot" in r2 and "Danforth" not in r2
+
+
+@pytest.mark.parametrize("msg", [
+    "I need to cancel my pickup",
+    "cancel my order please",
+    "Can I reschedule my pickup to next week?",
+    "I moved — can you change my address on file?",
+    "please update the date on my order",
+    "Can you email me all my order details?",
+    "text me my invoice",
+])
+def test_chat_routes_account_changes_to_team(msg):
+    """PARITY with the phone agent's v42 prompt: cancel / reschedule / change-a-detail /
+    email-or-text-my-details go to the team — the assistant never implies it makes the change."""
+    D, S = _id_data()
+    reply, state = main._chat_reply(msg, {}, D, S, BOOK)
+    assert "266-8878" in reply or "info@utrucking.com" in reply, "did not route to team: %r" % reply
+    assert state == {}                                           # not pulled into a make-the-change flow
+
+
+@pytest.mark.parametrize("msg", [
+    "my order status", "where is my order", "look up my order", "what's the status of my order",
+])
+def test_chat_readonly_status_still_reaches_lookup(msg):
+    """The account-change router must NOT swallow a read-only status request (no change verb)."""
+    D, S = _id_data()
+    reply, state = main._chat_reply(msg, {}, D, S, BOOK)
+    assert state.get("intent") == "lookup" and state.get("step") == "name"
+
+
+@pytest.mark.parametrize("msg", [
+    "quote 5 boxes and a mini fridge", "what days are open?", "hi", "Jamie Rivers",
+])
+def test_chat_account_change_router_does_not_hijack_other_intents(msg):
+    """Quotes, availability, greetings and bare names must still work — the change router is targeted."""
+    D, S = _id_data()
+    reply, _ = main._chat_reply(msg, {}, D, S, BOOK)
+    assert "handles changes like that" not in reply
+
+
+def test_chat_api_force_refreshes_a_stale_cache_on_verify(monkeypatch):
+    """PARITY with the phone: on a verify miss the chat re-pulls the sheets FRESH once and re-checks,
+    so a just-edited order still verifies in chat — never relaxing the check."""
+    import asyncio
+    fresh_D, fresh_S = _id_data()
+    stale_D = [{**fresh_D[0], "Building": "", "Room": "", "Phone": "", "ID": ""}]
+    stale_S = [{"Student Name": "Jamie Rivers", "Order#:": "", "Building": ""}]
+    calls = {"forced": 0}
+    async def fake_fetch(url, force=False):
+        if url == main.DISPATCH_CSV_URL:
+            if force: calls["forced"] += 1; return fresh_D
+            return stale_D
+        return fresh_S if force else stale_S
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+    main._VERIFY_FAILS.clear()
+
+    class Req:
+        client = type("C", (), {"host": "7.7.7.7"})()
+        def __init__(self, msg, state): self._b = {"args": {"message": msg, "state": state}}
+        async def json(self): return self._b
+
+    verify_state = {"intent": "lookup", "step": "verify", "name": "Jamie Rivers"}
+    r = asyncio.run(main.chat_api(Req("Northgate B", verify_state)))
+    body = r[1][0]
+    assert "verified" in body["reply"].lower(), body["reply"]   # fresh re-check verified it
+    assert calls["forced"] >= 1                                 # it actually re-fetched fresh
