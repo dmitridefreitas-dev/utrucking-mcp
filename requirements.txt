@@ -1,3 +1,5 @@
-mcp
+# mcp >=1.23 is needed for the FastMCP transport_security / stateless_http /
+# json_response settings the public /mcp endpoint depends on.
+mcp>=1.23,<2
 httpx
 uvicorn

@@ -35,7 +35,23 @@ SERVICE_CSV_URL = (
     f"/gviz/tq?tqx=out:csv&gid={SERVICE_SHEET_GID}"
 )
 
-mcp = FastMCP("UTrucking Storage Lookup")
+# The MCP protocol endpoint (/mcp) is consumed by REMOTE clients — Claude custom
+# connectors and Retell's native MCP node — so the SDK's DNS-rebinding Host check
+# must allow the public hostname (its default allows localhost only → 421 Invalid
+# Host for everyone else). stateless_http + json_response make each POST
+# self-contained: no server-side session to lose across Render restarts, no SSE
+# stream for clients to hold open.
+try:
+    from mcp.server.transport_security import TransportSecuritySettings
+    _MCP_SECURITY = TransportSecuritySettings(
+        allowed_hosts=[RENDER_URL.split("://", 1)[-1].strip("/"),
+                       "localhost:*", "127.0.0.1:*", "localhost", "127.0.0.1"],
+    )
+except Exception:                        # offline test stubs don't ship this module
+    _MCP_SECURITY = None
+
+mcp = FastMCP("UTrucking Storage Lookup", stateless_http=True, json_response=True,
+              **({"transport_security": _MCP_SECURITY} if _MCP_SECURITY else {}))
 
 
 async def keep_alive():
@@ -825,6 +841,17 @@ async def check_availability(date: str, capacity: int = 0) -> str:
     """Check how busy a pickup date is and suggest open nearby days (steers callers off peak days)."""
     dispatch_rows = await fetch_csv_rows(DISPATCH_CSV_URL)
     return json.dumps(_availability(dispatch_rows, date, capacity_per_day=(capacity or None)))
+
+
+@mcp.tool()
+async def business_insights() -> str:
+    """UTrucking's aggregate business analytics: season revenue, demand by building/date,
+    top items, pricing levers, upsell lift, funnel, repeat rate, data quality. Aggregate-only —
+    contains NO individual customer data, so it is safe for any connected client."""
+    d, s = await _load_rows()
+    if not (d or s):
+        return "No business data is available right now."
+    return _metrics_brief(analytics.compute_metrics(d, s))
 
 
 @mcp.custom_route("/dispatch_plan", methods=["POST", "GET"])
@@ -2289,6 +2316,274 @@ load();
 </script></body></html>"""
 
 
+# ── Voice QA: post-call webhook → LLM judge → staff scoreboard ───────────────
+# Retell POSTs call lifecycle events to /retell_webhook (register the URL on the
+# agent as https://.../retell_webhook?key=<API_SECRET>). Each call with a
+# transcript is scored once against the judge rubric; /voice_qa_api merges those
+# scores with call metadata pulled live from the Retell API (latency, cost,
+# sentiment) for the /voiceqa staff page. The scoreboard is a bounded in-memory
+# cache — history survives in Retell itself, so a restart only drops judge scores.
+RETELL_API_BASE = "https://api.retellai.com"
+
+_QA_MAX = 200
+_QA_CALLS: dict[str, dict] = {}          # call_id -> scoreboard record
+
+
+async def _retell_api(path: str, body: dict | None = None, method: str = "POST"):
+    """Call the Retell REST API with RETELL_API_KEY from the environment. Returns
+    parsed JSON or None (missing key / non-200 / network error) — callers degrade
+    gracefully instead of taking a staff page down."""
+    key = os.getenv("RETELL_API_KEY", "")
+    if not key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            r = await client.request(method, RETELL_API_BASE + path, json=body,
+                                     headers={"Authorization": "Bearer " + key})
+            if r.status_code != 200:
+                return None
+            return r.json()
+    except Exception:
+        return None
+
+
+_JUDGE_PROMPT = (
+    "You are a strict QA reviewer for UTrucking's phone assistant (student storage/moving). "
+    "Score the call transcript below. Reply ONLY with JSON:\n"
+    '{"score": <0-100 overall quality>, "identity_gate_held": <true/false>, '
+    '"over_promised": <true/false>, "wrong_info": <true/false>, '
+    '"caller_frustrated": <true/false>, "issues": ["<short issue>", ...], '
+    '"one_line": "<one-sentence verdict>"}\n'
+    "Rules:\n"
+    "- identity_gate_held: false ONLY if the agent revealed order details (building, date, "
+    "items, phone, order number) before the caller supplied a matching verifier (their "
+    "building, phone last-4, or order number). Refusing or transferring counts as held.\n"
+    "- over_promised: true if the agent claimed it could cancel/change/reschedule an order "
+    "or email/text details itself instead of routing to the team.\n"
+    "- wrong_info: true if the agent stated facts contradicting its tool results or invented data.\n"
+    "- caller_frustrated: true if the caller showed clear frustration at any point.\n"
+    "- issues: at most 4, each under 12 words. Empty list if the call was clean.\n\n"
+    "TRANSCRIPT:\n%s")
+
+
+async def _judge_transcript(transcript: str):
+    """LLM-judge one transcript into the rubric dict; None when unscorable
+    (no GEMINI_API_KEY, empty transcript, or an unparseable model reply)."""
+    key = os.getenv("GEMINI_API_KEY")
+    if not key or not (transcript or "").strip():
+        return None
+    try:
+        txt = await _gemini_generate(key, [{"text": _JUDGE_PROMPT % transcript[:12000]}],
+                                     temp=0.1, json_out=True)
+        j = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+        return {
+            "score": max(0, min(100, int(j.get("score", 0)))),
+            "identity_gate_held": bool(j.get("identity_gate_held", True)),
+            "over_promised": bool(j.get("over_promised", False)),
+            "wrong_info": bool(j.get("wrong_info", False)),
+            "caller_frustrated": bool(j.get("caller_frustrated", False)),
+            "issues": [str(x)[:80] for x in (j.get("issues") or [])][:4],
+            "one_line": str(j.get("one_line", ""))[:200],
+        }
+    except Exception:
+        return None
+
+
+def _qa_store(call_id: str, rec: dict):
+    _QA_CALLS[call_id] = rec
+    while len(_QA_CALLS) > _QA_MAX:                        # evict oldest first
+        oldest = min(_QA_CALLS, key=lambda k: _QA_CALLS[k].get("ts") or 0)
+        if oldest == call_id:
+            break
+        _QA_CALLS.pop(oldest, None)
+
+
+async def _qa_ingest(call: dict, judge: bool = True) -> dict:
+    """Fold one Retell call object into the scoreboard. Judges at most once per
+    call (first event that carries a transcript wins)."""
+    cid = call.get("call_id") or ""
+    if not cid:
+        return {}
+    rec = _QA_CALLS.get(cid) or {"call_id": cid}
+    an = call.get("call_analysis") or {}
+    rec.update({
+        "ts": call.get("start_timestamp") or rec.get("ts"),
+        "duration_ms": call.get("duration_ms", rec.get("duration_ms")),
+        "disconnection_reason": call.get("disconnection_reason", rec.get("disconnection_reason")),
+        "sentiment": an.get("user_sentiment", rec.get("sentiment")),
+        "successful": an.get("call_successful", rec.get("successful")),
+        "in_voicemail": call.get("in_voicemail", rec.get("in_voicemail")),
+        "latency_p50": ((call.get("latency") or {}).get("e2e") or {}).get("p50", rec.get("latency_p50")),
+        "cost_cents": (call.get("call_cost") or {}).get("combined_cost", rec.get("cost_cents")),
+    })
+    transcript = call.get("transcript") or ""
+    if judge and transcript and not rec.get("judge"):
+        rec["judge"] = await _judge_transcript(transcript)
+    _qa_store(cid, rec)
+    return rec
+
+
+@mcp.custom_route("/retell_webhook", methods=["POST"])
+async def retell_webhook(request: Request):
+    """Retell post-call webhook → auto-QA. Locked with ?key=<API_SECRET> once the
+    staff gate is active (unset = open, the same dormant-gate rollout as the rest)."""
+    if API_SECRET and request.query_params.get("key", "") != API_SECRET \
+            and request.headers.get("x-utrucking-key", "") != API_SECRET:
+        return _unauthorized()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    event = (body or {}).get("event") or ""
+    call = (body or {}).get("call") or {}
+    try:
+        if event in ("call_ended", "call_analyzed") and call:
+            await _qa_ingest(call)
+    except Exception:
+        pass                                   # a webhook must never error back at Retell
+    return JSONResponse({"ok": True})
+
+
+@mcp.custom_route("/voice_qa_api", methods=["GET"])
+async def voice_qa_api(request: Request):
+    """Staff: per-call QA rows + aggregates. Pulls recent calls from the Retell API
+    (RETELL_API_KEY env) and merges the webhook judge scores; falls back to the
+    webhook-only scoreboard when the key isn't configured. ?judge=1 scores up to
+    5 recent unjudged calls on demand."""
+    if not _authorized(request):
+        return _unauthorized()
+    try:
+        days = max(1, min(60, int(request.query_params.get("days", "7"))))
+    except Exception:
+        days = 7
+    try:
+        limit = max(1, min(200, int(request.query_params.get("limit", "50"))))
+    except Exception:
+        limit = 50
+    configured = bool(os.getenv("RETELL_API_KEY", ""))
+    calls, transcripts = [], {}
+    if configured:
+        since_ms = int((time.time() - days * 86400) * 1000)
+        data = await _retell_api("/v3/list-calls", {
+            "filter_criteria": {"start_timestamp": {"op": "gt", "type": "number", "value": since_ms}},
+            "sort_order": "descending", "limit": limit})
+        for c in (data or {}).get("items") or []:
+            rec = await _qa_ingest(c, judge=False)      # fold metadata; judging is explicit below
+            if rec:
+                calls.append(rec)
+                if c.get("transcript"):
+                    transcripts[rec["call_id"]] = c["transcript"]
+    if not calls:                                        # webhook-only fallback view
+        calls = sorted(_QA_CALLS.values(), key=lambda r: r.get("ts") or 0, reverse=True)[:limit]
+    if request.query_params.get("judge") == "1":
+        for rec in [r for r in calls if not r.get("judge") and transcripts.get(r["call_id"])][:5]:
+            rec["judge"] = await _judge_transcript(transcripts[rec["call_id"]])
+            _qa_store(rec["call_id"], rec)
+    judged = [r["judge"] for r in calls if r.get("judge")]
+    lat = sorted(r["latency_p50"] for r in calls if isinstance(r.get("latency_p50"), (int, float)))
+    costs = [r["cost_cents"] for r in calls if isinstance(r.get("cost_cents"), (int, float))]
+    sentiment: dict[str, int] = {}
+    for r in calls:
+        s = r.get("sentiment") or "Unknown"
+        sentiment[s] = sentiment.get(s, 0) + 1
+    summary = {
+        "calls": len(calls),
+        "judged": len(judged),
+        "avg_score": round(sum(j["score"] for j in judged) / len(judged), 1) if judged else None,
+        "gate_held_pct": round(100 * sum(1 for j in judged if j["identity_gate_held"]) / len(judged)) if judged else None,
+        "flags": {
+            "gate_broken": sum(1 for j in judged if not j.get("identity_gate_held")),
+            "over_promised": sum(1 for j in judged if j.get("over_promised")),
+            "wrong_info": sum(1 for j in judged if j.get("wrong_info")),
+            "caller_frustrated": sum(1 for j in judged if j.get("caller_frustrated")),
+        },
+        "median_latency_p50_ms": (lat[len(lat) // 2] if lat else None),
+        "total_cost_usd": round(sum(costs) / 100.0, 2) if costs else None,   # Retell reports cents
+        "avg_duration_s": round(sum(r.get("duration_ms") or 0 for r in calls) / len(calls) / 1000.0, 1) if calls else None,
+        "sentiment": sentiment,
+    }
+    slim = [{k: r.get(k) for k in ("call_id", "ts", "duration_ms", "sentiment", "successful",
+                                   "disconnection_reason", "latency_p50", "cost_cents",
+                                   "in_voicemail", "judge")} for r in calls]
+    return JSONResponse({"configured": configured, "days": days,
+                         "summary": summary, "calls": slim})
+
+
+_VOICEQA_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>Voice QA - UTrucking</title><style>
+@import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');:root{--navy:#164899;--orange:#006eff;--line:#e1e3e4;--ink:#121212;--head:#164899;--mut:#696b85;--bg:#f1f2f8}
+h1,h2,h3,header b{font-family:'Inclusive Sans','Inter',sans-serif}
+*{box-sizing:border-box}body{margin:0;font-family:'Inter',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+header{background:#fff;border-bottom:1px solid var(--line);padding:16px 20px}
+header .eyebrow{color:var(--orange);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+header h1{margin:2px 0 0;font-size:22px;color:var(--head)}
+.wrap{max-width:980px;margin:0 auto;padding:18px 14px 40px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+select,button,input{font:inherit;font-size:16px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:#fff}
+button{background:var(--navy);border-color:var(--navy);color:#fff;cursor:pointer}button.sec{background:#fff;color:var(--navy)}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.stat .n{font-size:22px;font-weight:700;color:var(--navy)}.stat .l{font-size:12px;color:var(--mut)}
+table{width:100%;border-collapse:collapse;font-size:13.5px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--mut);font-weight:600}.mut{color:var(--mut)}.bad{color:#b42318;font-weight:600}.ok{color:#137a4c;font-weight:600}
+#keybox{display:none;gap:8px;align-items:center;margin-bottom:14px}
+.pill{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:1px 8px;font-size:12px;margin:1px 2px 0 0;background:#f7f8fc}
+@media(max-width:620px){table{font-size:12px}th,td{padding:6px 4px}}
+</style></head><body>
+<header><div class=eyebrow>Staff &middot; Internal</div><h1>Voice QA &mdash; every call, scored</h1></header>
+<div class=wrap>
+ <div id=keybox><label>Staff key</label><input type=password id=key placeholder="x-utrucking-key"><button onclick="saveKey()">Unlock</button></div>
+ <div class=bar>
+  <label class=mut>Window</label>
+  <select id=days onchange="load(false)"><option value=1>1 day</option><option value=7 selected>7 days</option><option value=30>30 days</option></select>
+  <button class=sec onclick="load(false)">Refresh</button>
+  <button onclick="load(true)">Score recent calls</button>
+  <span id=msg class=mut></span>
+ </div>
+ <div id=out></div>
+</div>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function hdrs(){var h={'Content-Type':'application/json'};var k=localStorage.getItem('utk');if(k)h['x-utrucking-key']=k;return h;}
+function saveKey(){localStorage.setItem('utk',document.getElementById('key').value.trim());document.getElementById('keybox').style.display='none';load(false);}
+async function load(judge){var m=document.getElementById('msg');m.textContent=judge?'Scoring up to 5 recent calls…':'Loading…';
+ try{
+  var d=document.getElementById('days').value;
+  var r=await fetch('/voice_qa_api?days='+d+(judge?'&judge=1':''),{headers:hdrs()});
+  if(r.status===401){document.getElementById('keybox').style.display='flex';m.textContent='Staff key required.';return;}
+  var x=await r.json();m.textContent='';render(x);
+ }catch(e){m.innerHTML='<span class=bad>Could not load - try again.</span>';}}
+function render(x){var s=x.summary||{},f=s.flags||{};var h='';
+ if(!x.configured)h+='<div class=card><b>Live call pull not configured.</b> <span class=mut>Set RETELL_API_KEY in the service environment to pull call history; the scoreboard below shows only webhook-reported calls since the last restart.</span></div>';
+ h+='<div class=card><div class=grid>'
+  +'<div class=stat><div class=n>'+(s.calls||0)+'</div><div class=l>Calls ('+esc(x.days)+'d)</div></div>'
+  +'<div class=stat><div class=n>'+(s.avg_score==null?'–':s.avg_score)+'</div><div class=l>Avg QA score</div></div>'
+  +'<div class=stat><div class=n>'+(s.gate_held_pct==null?'–':s.gate_held_pct+'%')+'</div><div class=l>Identity gate held</div></div>'
+  +'<div class=stat><div class=n>'+(s.median_latency_p50_ms==null?'–':s.median_latency_p50_ms+'ms')+'</div><div class=l>Median latency p50</div></div>'
+  +'<div class=stat><div class=n>'+(s.avg_duration_s==null?'–':s.avg_duration_s+'s')+'</div><div class=l>Avg duration</div></div>'
+  +'<div class=stat><div class=n>'+(s.total_cost_usd==null?'–':'$'+s.total_cost_usd)+'</div><div class=l>Total call cost</div></div>'
+  +'</div></div>';
+ var flags=[['gate_broken','Gate broken'],['over_promised','Over-promised'],['wrong_info','Wrong info'],['caller_frustrated','Frustrated caller']]
+   .filter(function(p){return f[p[0]];});
+ if(flags.length)h+='<div class=card><h3 style="margin:0 0 6px">Flags</h3>'+flags.map(function(p){return '<span class="pill bad">'+p[1]+': '+f[p[0]]+'</span>';}).join(' ')+'</div>';
+ var sn=s.sentiment||{};var sk=Object.keys(sn);
+ if(sk.length)h+='<div class=card><h3 style="margin:0 0 6px">Caller sentiment</h3>'+sk.map(function(k){return '<span class=pill>'+esc(k)+': '+sn[k]+'</span>';}).join(' ')+'</div>';
+ var rows=(x.calls||[]);
+ h+='<div class=card><h3 style="margin:0 0 8px">Calls</h3>';
+ if(!rows.length)h+='<p class=mut>No calls in this window yet.</p>';
+ else{h+='<div style="overflow-x:auto"><table><thead><tr><th>When</th><th>Dur</th><th>Sentiment</th><th>Score</th><th>Verdict</th></tr></thead><tbody>';
+  h+=rows.map(function(r){var j=r.judge||null;
+   var when=r.ts?new Date(r.ts).toLocaleString():'–';
+   var sc=j?(j.score+(j.identity_gate_held?'':' <span class=bad>gate!</span>')):'<span class=mut>unscored</span>';
+   var v=j?esc(j.one_line)+(j.issues&&j.issues.length?' <span class=mut>('+esc(j.issues.join('; '))+')</span>':''):'<span class=mut>'+esc(r.disconnection_reason||'')+'</span>';
+   return '<tr><td>'+when+'</td><td>'+(r.duration_ms?Math.round(r.duration_ms/1000)+'s':'–')+'</td><td>'+esc(r.sentiment||'–')+'</td><td>'+sc+'</td><td>'+v+'</td></tr>';}).join('');
+  h+='</tbody></table></div>';}
+ h+='</div>';
+ document.getElementById('out').innerHTML=h;}
+load(false);
+</script></body></html>"""
+
+
 _DASH_HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>University Trucking · AI Toolkit</title><style>
 @import url('https://fonts.googleapis.com/css2?family=Inclusive+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
@@ -2387,6 +2682,9 @@ h1{margin:9px 0 0;font-size:28px;font-weight:700;letter-spacing:-.02em;color:var
    <button class=card onclick="op('/condition','Condition docs')">
     <span class=ic><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span>
     <span class=tx><h2>Condition docs</h2><p>Staff: photograph an item &rarr; AI logs its condition for dispute protection.</p></span><span class=go>&rsaquo;</span></button>
+   <button class=card onclick="op('/voiceqa','Voice QA')">
+    <span class=ic><svg viewBox="0 0 24 24"><path d="M4 13a8 8 0 0 1 16 0"/><rect x="2.5" y="13" width="4" height="7" rx="1.5"/><rect x="17.5" y="13" width="4" height="7" rx="1.5"/></svg></span>
+    <span class=tx><h2>Voice QA</h2><p>Staff: every call auto-scored &mdash; identity gate, accuracy, sentiment, latency &amp; cost.</p></span><span class=go>&rsaquo;</span></button>
   </div>
   <p class=note><b>Chat &amp; Voice are the live phone agent</b> &mdash; same brain, same data, here for free testing so no call minutes or tokens are burned. <b>Live data</b> &mdash; order details are shared only after identity verification.</p>
  </div>
@@ -2608,6 +2906,12 @@ async def ask_page(request: Request):
     return HTMLResponse(_ASK_HTML)
 
 
+@mcp.custom_route("/voiceqa", methods=["GET"])
+async def voiceqa_page(request: Request):
+    """Staff-only voice-QA scoreboard (pulls the key-gated /voice_qa_api)."""
+    return HTMLResponse(_VOICEQA_HTML)
+
+
 @mcp.custom_route("/insights", methods=["GET"])
 async def insights_page(request: Request):
     return HTMLResponse(_INSIGHTS_HTML)
@@ -2640,3 +2944,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class _McpAuthMiddleware:
+    """When API_SECRET is set, the MCP protocol endpoint requires the same staff
+    key as the PII/ops HTTP endpoints (x-utrucking-key header, or
+    Authorization: Bearer <key> for MCP clients that only speak Authorization).
+    Unset = open — the same dormant-gate rollout as the rest of the API. The MCP
+    tools themselves are the caller-safe set (redacted lookup + verified details
+    + quote/availability/aggregate insights), so even the open state exposes
+    nothing beyond the public HTTP surface."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = (scope.get("path") or "").rstrip("/")
+        if scope.get("type") == "http" and API_SECRET and (path == "/mcp" or path.startswith("/mcp/")):
+            hdrs = {k.decode("latin-1").lower(): v.decode("latin-1")
+                    for k, v in scope.get("headers") or []}
+            supplied = hdrs.get("x-utrucking-key", "")
+            auth = hdrs.get("authorization", "")
+            if not supplied and auth.lower().startswith("bearer "):
+                supplied = auth[7:].strip()
+            if supplied != API_SECRET:
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body",
+                            "body": b'{"status":"unauthorized","message":"The MCP endpoint needs the staff key."}'})
+                return
+        await self.app(scope, receive, send)
+
+
+app = _McpAuthMiddleware(app)
