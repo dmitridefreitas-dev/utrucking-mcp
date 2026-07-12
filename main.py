@@ -89,12 +89,20 @@ async def fetch_csv_rows(url: str, force: bool = False) -> list[dict]:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(f"{url}{sep}_cb={bust}")
         if resp.status_code == 200:
-            rows = list(csv.DictReader(io.StringIO(resp.text)))
-            _SHEET_CACHE[url] = (now, rows)
-            return rows
+            reader = csv.DictReader(io.StringIO(resp.text))
+            rows = list(reader)
+            cols = set(reader.fieldnames or [])
+            # Only trust a 200 that actually LOOKS like one of our sheets. A transient empty body or an
+            # HTML error/sign-in page (reachable via follow_redirects) parses to [] / one garbage column;
+            # caching that would evict the last-good copy the fallback below exists to preserve, and blank
+            # every lookup for a full TTL. On a bad body we fall through and serve the last good copy.
+            if rows and ({"Student", "ID", "Student Name", "Service", "Building",
+                          "Summer Storage Item List", "Order#:"} & cols):
+                _SHEET_CACHE[url] = (now, rows)
+                return rows
     except Exception:
         pass
-    # fetch failed / non-200 → serve last-good rows if we have any (resilience), else empty
+    # fetch failed / non-200 / empty-or-non-CSV 200 → serve last-good rows if we have any, else empty
     return hit[1] if hit else []
 
 
@@ -226,25 +234,29 @@ async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "")
     except Exception:
         return {"status": "error", "verified": False,
                 "message": "I'm having trouble reaching our records right now."}
-    rec = _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
-    if rec.get("status") != "found":
+    # Check the answer against EVERY order under this name (via _verify_pick), exactly like
+    # get_order_details and the chat — so a shared-name / multi-order caller is verified against the
+    # order they can actually prove, not just the most-recent one. Returns only verified + the name,
+    # never any PII, so it stays a clean gate.
+    match, base = _verify_pick(name_heard, answer, dispatch_rows, service_rows, order_hint)
+    if base.get("status") != "found":
         # pass confirm/not_found through so the agent can re-ask or offer suggestions
-        return {"status": rec.get("status", "not_found"), "verified": False,
-                "confirmed_name": rec.get("confirmed_name", ""),
-                "suggestions": rec.get("suggestions", []),
-                "message": rec.get("message", "")}
-    nm = " ".join((rec.get("confirmed_name") or name_heard).lower().split())
+        return {"status": base.get("status", "not_found"), "verified": False,
+                "confirmed_name": base.get("confirmed_name", ""),
+                "suggestions": base.get("suggestions", []),
+                "message": base.get("message", "")}
+    nm = " ".join((base.get("confirmed_name") or name_heard).lower().split())
     if _verify_locked(nm):                                    # same brute-force guard as the chat
         return {"status": "found", "verified": False, "locked": True,
-                "confirmed_name": rec.get("confirmed_name", ""),
+                "confirmed_name": base.get("confirmed_name", ""),
                 "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
-    verified = _verify_answer(rec, answer or "")
+    verified = match is not None
     if verified:
         _VERIFY_FAILS.pop(nm, None)
     else:
         _verify_fail(nm)
     return {"status": "found", "verified": bool(verified),
-            "confirmed_name": rec.get("confirmed_name", ""),
+            "confirmed_name": base.get("confirmed_name", ""),
             "message": ("Identity confirmed." if verified
                         else "That detail doesn't match what we have on file.")}
 
@@ -307,7 +319,11 @@ def _verify_pick(name_heard, answer, dispatch_rows, service_rows, order_hint="")
     base = _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
     if base.get("status") != "found":
         return None, base
-    if order_hint and _verify_answer(base, answer or ""):     # caller already narrowed to one order
+    if order_hint and not base.get("distinct_people") and _verify_answer(base, answer or ""):
+        # caller narrowed to one of THEIR OWN orders. Only short-circuit when the name isn't shared by
+        # DIFFERENT people (distinct_people): otherwise a weak verifier (e.g. a shared building) plus a
+        # non-secret hint would hand back one specific stranger's PII, bypassing the ambiguity guard
+        # below. When names are shared we fall through to the candidate loop, which refuses on ambiguity.
         return base, base
     ids = [c.get("order_id", "") for c in (base.get("order_choices") or []) if c.get("order_id")]
     cands = [_build_order_result(name_heard, dispatch_rows, service_rows, oid) for oid in ids] if ids else [base]
@@ -1452,9 +1468,17 @@ def _find_date(text):
     return None
 
 
+_MAY_MODAL = re.compile(
+    r"\bmay\s+(i|we|you|he|she|it|they|the|this|that|not|be|been|being|have|has|had|"
+    r"need|want|wish|just|also|please|get|see|ask|know|help|speak|talk|come|call)\b", re.I)
+
 def _find_month(text):
     for name, mo in _MONTH_NAMES.items():
         if re.search(r"\b" + name + r"\b", text, re.I):
+            # "may" is also the English modal verb — don't read "May I…" / "I may need…" as the
+            # month May and hijack the request. "May 12" still parses through _find_date.
+            if name == "may" and _MAY_MODAL.search(text):
+                continue
             return mo
     return None
 
@@ -1765,7 +1789,9 @@ def _chat_reply(msg, state, dispatch_rows, service_rows, book):
     # Account changes we don't do here (cancel / reschedule / change a detail / add-remove items /
     # email-or-text my details) route to the team — same as the phone agent. We can still look up
     # and read the order, so we offer that; the change itself always goes to the team.
-    if _RE_ACCT_CHANGE.search(low):
+    # "any update ON my order" / "update for my order" is a read-only STATUS ask, not a change —
+    # don't let the bare "update" change-verb deflect it; let it reach the order lookup below.
+    if _RE_ACCT_CHANGE.search(low) and not re.search(r"\bupdate\s+(on|about|for|regarding)\b", low):
         return ("Our team handles changes like that — the quickest way is to call them at "
                 "(314) 266-8878 or email info@utrucking.com. I can still pull up your current order "
                 "status if you'd like — what's the name on the order?", {})
@@ -1886,15 +1912,19 @@ async def chat_api(request: Request):
     if state.get("step") == "verify" and reply.startswith("That doesn't match"):
         # Freshness parity with the phone line: a just-edited row can lag in the sheet cache and make
         # a correct answer look wrong. Re-pull the sheets FRESH once and re-verify (same tolerant
-        # check — never relaxed) before counting a failure, so a recently updated order still verifies.
+        # check — never relaxed) before the failure stands. Re-verify with _verify_pick DIRECTLY (not
+        # a second _chat_reply) so we don't double-increment the name fail counter — the first
+        # _chat_reply already counted this miss once, matching the phone's single count per attempt.
+        nm = " ".join((state.get("name") or "").lower().split())
         try:
             d2, s2 = await asyncio.gather(
                 fetch_csv_rows(DISPATCH_CSV_URL, force=True), fetch_csv_rows(SERVICE_CSV_URL, force=True))
-            r2, ns2 = _chat_reply(brain_msg, state, d2, s2, book)
+            match2, _ = _verify_pick(state.get("name", ""), brain_msg, d2, s2, state.get("hint", ""))
         except Exception:
-            r2, ns2 = reply, new_state
-        if not r2.startswith("That doesn't match"):
-            reply, new_state = r2, ns2      # fresh data verified it; the success path cleared the counter
+            match2 = None
+        if match2 is not None:
+            _VERIFY_FAILS.pop(nm, None)      # fresh data verified it — clear the miss counted above
+            reply, new_state = (_reveal_order(match2), {})
         else:
             _ip_fail(ip)
     # parity with /estimate and the phone line: if the quote had unpriceable items,
@@ -2281,7 +2311,7 @@ function render(m){
  var fc=m.forecast||{};
  if(fc.peak_window){
   var rv=fc.revenue_forecast||{};
-  var rvline=rv.peak_day_revenue?'<div class=mut style="margin-top:6px">Projected peak-day revenue &asymp; '+money(rv.peak_day_revenue)+' &middot; move-out window &asymp; '+money(rv.move_out_window_revenue)+' (at '+money(rv.avg_order)+'/order).</div>':'';
+  var rvline=rv.peak_day_revenue?'<div class=mut style="margin-top:6px">Projected peak-day revenue &asymp; '+money(rv.peak_day_revenue)+' &middot; move-out window &asymp; '+money(rv.move_out_window_revenue)+' (at '+money(rv.rev_per_dispatch_order||rv.avg_order)+'/dispatch order).</div>':'';
   var tm=fc.building_peak_timing||[];
   var tmline=tm.length?'<div class=mut style="margin-top:6px"><b>Building peak timing:</b> '+tm.map(function(x){var o=x.offset_days,w=(o===0?'peak day':(Math.abs(o)+'d '+(o<0?'before':'after')));return esc(x.building)+' ('+w+')';}).join(' &middot; ')+'</div>':'';
   h+=card('Next-season planner (projected from this season)',
@@ -2309,7 +2339,7 @@ function exportCSV(){
  (LAST.pricing||[]).forEach(function(x){rows.push(['pricing',x.item,x.unit_price+' x '+x.units_sold+' = '+x.revenue]);});
  ((LAST.demand||{}).by_month||[]).forEach(function(x){rows.push(['demand_by_month',x.month,x.orders]);});
  (LAST.billing_flags?Object.keys(LAST.billing_flags):[]).forEach(function(k){rows.push(['billing_flags',k,LAST.billing_flags[k]]);});
- var csv=rows.map(function(r){return r.map(function(c){c=String(c==null?'':c);return /[",\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(',');}).join('\n');
+ var csv=rows.map(function(r){return r.map(function(c){c=String(c==null?'':c);if(/^[=+\-@\t\r]/.test(c))c="'"+c;return /[",\r\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(',');}).join('\n');
  var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
  a.download='utrucking-insights'+(LAST.date_range?'-'+(LAST.date_range.from||'')+'_'+(LAST.date_range.to||''):'')+'.csv';a.click();}
 load();
@@ -2793,7 +2823,7 @@ function exportCSV(){
  (LASTP.crew_plan||[]).forEach(function(c){(c.buildings||[]).forEach(function(b){
   var x=byB[b]||{orders:[]};(x.orders||[]).forEach(function(o){
    rows.push([c.crew,b,o.seq||'',o.student||'',o.room||'',o.order_id||'',o.service||'']);});});});
- var csv=rows.map(function(r){return r.map(function(c){c=String(c==null?'':c);return /[",\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(',');}).join('\n');
+ var csv=rows.map(function(r){return r.map(function(c){c=String(c==null?'':c);if(/^[=+\-@\t\r]/.test(c))c="'"+c;return /[",\r\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c;}).join(',');}).join('\n');
  var a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
  a.download='utrucking-runsheet-'+(LASTD||'')+'.csv';a.click();}
 (function(){var d=document.getElementById('day');d.value='2026-05-07';})();

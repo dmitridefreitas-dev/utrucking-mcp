@@ -12,6 +12,14 @@ def _f(x):
     return " ".join((x or "").split())
 
 
+def _median(xs):
+    """True median: average of the two central values for an even count (not the upper-middle)."""
+    s = sorted(xs); n = len(s)
+    if not n:
+        return 0.0
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
 _UNKNOWN_BLD = {"", "unknown", "n/a", "na", "tbd", "none", "null", "xxx", "?", "-"}
 
 def _is_unknown_building(b):
@@ -91,7 +99,7 @@ def compute_metrics(dispatch, service):
         "orders_with_revenue": len(totals),
         "revenue": revenue,
         "avg_order": round(revenue / len(totals), 2) if totals else 0.0,
-        "median_order": round(sorted(totals)[len(totals) // 2], 2) if totals else 0.0,
+        "median_order": round(_median(totals), 2) if totals else 0.0,
     }
     m["revenue_by_building"] = [{"building": b, "revenue": round(v, 2)}
                                for b, v in sorted(rev_by_building.items(), key=lambda kv: -kv[1])[:12]]
@@ -194,12 +202,18 @@ def compute_metrics(dispatch, service):
         fc["note"] = ("At %d pickups per crew, the projected peak day needs %d crews — versus %d scheduled "
                       "this season. Either add crews for peak week or keep steering bookings to open days."
                       % (engines.JOBS_PER_CREW, -(-peak_orders // engines.JOBS_PER_CREW), engines.crews_for(peak)))
-        # revenue projection: value the projected volume at this season's average order
+        # revenue projection: value the projected VOLUME at this season's revenue per dispatch order.
+        # peak_orders / window_total are ALL-service dispatch counts (storage + rental returns + home
+        # shipping + …); rental returns carry no storage invoice, so multiplying them by the per-PAID-
+        # storage-order AOV inflates the projection ~2.5x. rev_per_dispatch spreads real revenue across
+        # every dispatched order, keeping the projection in line with actual season revenue.
         avg = m["overview"]["avg_order"]
+        rev_per_dispatch = round(revenue / max(len(dispatch), 1), 2)
         fc["revenue_forecast"] = {
             "avg_order": avg,
-            "peak_day_revenue": round(avg * peak_orders, 2),
-            "move_out_window_revenue": round(avg * window_total, 2),
+            "rev_per_dispatch_order": rev_per_dispatch,
+            "peak_day_revenue": round(rev_per_dispatch * peak_orders, 2),
+            "move_out_window_revenue": round(rev_per_dispatch * window_total, 2),
         }
         # per-building peak timing: which building peaks when, relative to the overall peak day
         bld_day = defaultdict(lambda: defaultdict(int))

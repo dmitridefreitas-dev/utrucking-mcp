@@ -40,9 +40,9 @@ def test_cache_hits_within_ttl_then_serves_stale_on_failure(monkeypatch):
     main._SHEET_CACHE.clear()
     url = "http://sheet"
 
-    _FakeClient.seq = [_Resp(200, "a,b\n1,2\n")]
+    _FakeClient.seq = [_Resp(200, "Student,ID\nAlice,001\n")]
     r1 = asyncio.run(main.fetch_csv_rows(url))
-    assert r1 == [{"a": "1", "b": "2"}]
+    assert r1 == [{"Student": "Alice", "ID": "001"}]
 
     # within TTL: served from cache (seq is empty; a network call would IndexError)
     r2 = asyncio.run(main.fetch_csv_rows(url))
@@ -56,9 +56,37 @@ def test_cache_hits_within_ttl_then_serves_stale_on_failure(monkeypatch):
 
     # force=True bypasses the cache and picks up new data
     clock["t"] += 1
-    _FakeClient.seq = [_Resp(200, "a,b\n9,9\n")]
+    _FakeClient.seq = [_Resp(200, "Student,ID\nBob,002\n")]
     r4 = asyncio.run(main.fetch_csv_rows(url, force=True))
-    assert r4 == [{"a": "9", "b": "9"}]
+    assert r4 == [{"Student": "Bob", "ID": "002"}]
+
+
+def test_bad_200_body_does_not_poison_cache(monkeypatch):
+    """A 200 with an empty body or an HTML error/sign-in page must NOT evict the last-good copy."""
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(main, "time", types.SimpleNamespace(time=lambda: clock["t"]))
+    monkeypatch.setattr(main, "httpx", types.SimpleNamespace(AsyncClient=_FakeClient))
+    main._SHEET_CACHE.clear()
+    url = "http://sheet"
+
+    _FakeClient.seq = [_Resp(200, "Student,ID\nAlice,001\n")]
+    good = asyncio.run(main.fetch_csv_rows(url))
+    assert good == [{"Student": "Alice", "ID": "001"}]
+
+    # transient empty-body 200 (force to bypass TTL) -> keep serving last good, don't cache []
+    clock["t"] += main.SHEET_TTL + 5
+    _FakeClient.seq = [_Resp(200, "")]
+    assert asyncio.run(main.fetch_csv_rows(url, force=True)) == good
+
+    # HTML sign-in / error page (follow_redirects can land here) -> still last good, not garbage rows
+    clock["t"] += main.SHEET_TTL + 5
+    _FakeClient.seq = [_Resp(200, "<!DOCTYPE html><html><body>Sign in to continue</body></html>")]
+    assert asyncio.run(main.fetch_csv_rows(url, force=True)) == good
+
+    # a real refresh still updates
+    clock["t"] += main.SHEET_TTL + 5
+    _FakeClient.seq = [_Resp(200, "Student,ID\nBob,002\n")]
+    assert asyncio.run(main.fetch_csv_rows(url, force=True)) == [{"Student": "Bob", "ID": "002"}]
 
 
 def test_cache_empty_when_no_prior_and_fetch_fails(monkeypatch):

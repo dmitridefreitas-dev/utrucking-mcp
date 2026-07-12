@@ -645,3 +645,100 @@ def test_chat_api_force_refreshes_a_stale_cache_on_verify(monkeypatch):
     body = r[1][0]
     assert "verified" in body["reply"].lower(), body["reply"]   # fresh re-check verified it
     assert calls["forced"] >= 1                                 # it actually re-fetched fresh
+
+
+# ==================== round 17 review regressions ====================
+class _Req:
+    def __init__(self, msg, state, host="8.8.8.8"):
+        self._b = {"args": {"message": msg, "state": state}}
+        self.client = type("C", (), {"host": host})()
+    async def json(self):
+        return self._b
+
+
+def test_order_hint_does_not_bypass_shared_name_guard(monkeypatch):
+    """A non-secret order_hint + a weak shared verifier (building) must NOT short-circuit the
+    distinct_people ambiguity guard and hand back one specific stranger's PII."""
+    import asyncio
+    D, S = _dup_same_building_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    leaked = asyncio.run(main.do_get_order_details("John Smith", "Danforth", "storage"))
+    assert leaked.get("verified") is not True
+    for pii in main._PII_FIELDS:
+        assert pii not in leaked, pii
+    # a DISTINGUISHING verifier (phone last-4) + the same hint still resolves the right person
+    main._VERIFY_FAILS.clear()
+    ok = asyncio.run(main.do_get_order_details("John Smith", "the last four are 2222", "storage"))
+    assert ok.get("verified") is True and ok.get("order_id") == "#71002-TS"
+
+
+def test_verify_identity_checks_every_order_for_shared_name(monkeypatch):
+    """verify_identity must check the answer against EVERY order under a shared name (via _verify_pick),
+    so each real person verifies with THEIR own detail — and it never returns order PII."""
+    import asyncio
+    D, S = _dup_data(); _patch_rows(monkeypatch, D, S)     # two John Smiths, different buildings/phones
+    main._VERIFY_FAILS.clear()
+    a = asyncio.run(main.do_verify_identity("John Smith", "Danforth"))
+    assert a.get("verified") is True                        # person A's building
+    main._VERIFY_FAILS.clear()
+    b = asyncio.run(main.do_verify_identity("John Smith", "Eliot"))
+    assert b.get("verified") is True                        # person B's building (was False before fix)
+    main._VERIFY_FAILS.clear()
+    p = asyncio.run(main.do_verify_identity("John Smith", "my last four are 1111"))
+    assert p.get("verified") is True                        # person A's phone
+    for pii in main._PII_FIELDS:                            # the gate never returns order values
+        assert pii not in a and pii not in b and pii not in p, pii
+
+
+def test_find_month_ignores_the_modal_may():
+    assert main._find_month("May I get a quote for 10 boxes?") is None
+    assert main._find_month("I may need a couple boxes") is None
+    assert main._find_month("may i speak to a representative") is None
+    assert main._find_month("what days are open in may?") == 5        # real month use still works
+    assert main._find_month("may 12") == 5
+
+
+def test_status_update_phrasing_reaches_lookup_not_change_deflection():
+    D, S = _id_data()
+    book = engines.build_price_book(S)
+    reply, state = main._chat_reply("any update on my order?", {}, D, S, book)
+    assert "team handles changes" not in reply.lower()
+    assert state.get("intent") == "lookup"                            # routed to order lookup
+    for change in ("cancel my pickup", "update my address"):          # genuine changes still deflect
+        r, _ = main._chat_reply(change, {}, D, S, book)
+        assert "team handles changes" in r.lower(), change
+
+
+def test_chat_freshness_recheck_counts_a_miss_only_once(monkeypatch):
+    """On a genuine verify miss the chat re-pulls fresh sheets once; that re-check must NOT double-
+    count the failure — parity with the phone's single count per attempt (else chat locks out early)."""
+    import asyncio
+    D, S = _id_data()
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else S
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+    main._VERIFY_FAILS.clear(); main._IP_FAILS.clear()
+    state = {"intent": "lookup", "step": "verify", "name": "Jamie Rivers"}
+    body = asyncio.run(main.chat_api(_Req("Umrath", state)))[1][0]    # wrong building -> genuine miss
+    assert "doesn't match" in body["reply"].lower()
+    assert main._VERIFY_FAILS.get("jamie rivers", [0])[0] == 1        # counted once, not twice
+
+
+def test_ip_bruteforce_lockout_across_rotating_names(monkeypatch):
+    """The per-IP limiter must stop one connection rotating through many names — the per-name limiter
+    resets per name, so this is the only cross-name defense (previously untested)."""
+    import asyncio
+    names = ["Cust%02d Tester" % i for i in range(main._IP_MAX + 4)]
+    D = [{"Student": n, "ID": "#82%03d-TS" % i, "Service": "Summer Storage", "Building": "Marlow",
+          "Room": str(100 + i), "Date": "5/6/2026", "Phone": "555%07d" % i, "Status": "Booked"}
+         for i, n in enumerate(names)]
+    S = [{"Student Name": n, "Order#:": "82%03d-TS" % i, "Building": "Marlow"} for i, n in enumerate(names)]
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else S
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+    main._VERIFY_FAILS.clear(); main._IP_FAILS.clear()
+    last = None
+    for i in range(main._IP_MAX + 1):                                # one wrong verify per fresh name
+        state = {"intent": "lookup", "step": "verify", "name": names[i]}
+        last = asyncio.run(main.chat_api(_Req("Zzzref Place", state, host="6.6.6.6")))[1][0]
+    assert "too many verification attempts from this connection" in last["reply"].lower()

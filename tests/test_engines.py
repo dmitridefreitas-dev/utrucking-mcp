@@ -189,3 +189,37 @@ def test_space_estimate_overflows_smaller_truck_first():
     s = engines.space_estimate([{"item": "Utrucking Box", "qty": 200, "unit_price": 22.0}])  # 600 cu ft
     assert s["trucks"]["sprinter"]["loads"] > 1.0          # needs more than one Sprinter
     assert s["trucks"]["uhaul26"]["loads"] < 1.0           # still one U-Haul
+
+
+# ---------- round 17 review regressions: quantity + spell-fix hardening ----------
+PB = dict(engines.EXTRA_PRICES)
+PB.update({"utrucking box": 22.0, "mattress": 33.0, "lamp": 15.0, "desk": 39.0,
+           "swivel/arm chair": 33.0})
+
+
+def test_article_plus_count_not_undercounted():
+    # "a couple / a few X" must keep the count, not collapse to 1 (silent under-quote)
+    assert engines.parse_freetext_ex("a couple of boxes", PB) == [("utrucking box", 2)]
+    assert engines.parse_freetext_ex("a few lamps", PB) == [("lamp", 3)]
+    both = dict(engines.parse_freetext_ex("a couple of boxes and a few lamps", PB))
+    assert both.get("utrucking box") == 2 and both.get("lamp") == 3
+    assert engines.parse_freetext_ex("a box", PB) == [("utrucking box", 1)]   # bare article unchanged
+
+
+def test_nx_prefix_count_not_applied_to_the_next_item():
+    # "3x box lamp" is 3 boxes + 1 lamp, not 3 of each (phantom double-count / overcharge)
+    got = dict(engines.parse_freetext_ex("3x box lamp", PB))
+    assert got.get("utrucking box") == 3 and got.get("lamp") == 1
+    got2 = dict(engines.parse_freetext_ex("2x lamp desk", PB))
+    assert got2.get("lamp") == 2 and got2.get("desk") == 1
+    assert engines.parse_freetext_ex("6x box", PB) == [("utrucking box", 6)]   # plain Nx still fine
+
+
+def test_real_word_not_snapped_to_confident_lookalike():
+    # "tablet" must NOT become a confident exact "Table" — it falls through instead of a silent misprice
+    key, kind = engines.resolve_item_ex("tablet", PB)
+    assert not (key == "table" and kind in ("exact", "alias"))
+    q = engines.quote("2 tablets", PB)
+    assert not [l for l in q["line_items"] if l["item"] == "Table" and l.get("confidence") == "exact"]
+    # genuine typos still resolve confidently
+    assert engines.resolve_item_ex("matress", PB) == ("mattress", "exact")

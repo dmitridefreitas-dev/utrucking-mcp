@@ -291,6 +291,11 @@ ALIASES = {
     "waste basket":"plastic container","recycling bin":"plastic container",
 }
 
+# Everyday words that sit within spell-fix / fuzzy distance of a catalog word or alias but mean
+# something DIFFERENT — never silently snap these to a confident catalog price. They fall through to
+# the approximate path so the mapping is shown and staff-reviewable (e.g. tablet≠table, coaster≠toaster).
+_FUZZY_BLOCK = {"tablet", "tablets", "coaster", "coasters", "plant", "plants", "planter", "planters"}
+
 # Things that show up in photos / descriptions but aren't stored items we price — never match these.
 NON_STORAGE = {
     "tape","packing tape","masking tape","duct tape","moving strap","strap","straps","dolly",
@@ -314,11 +319,14 @@ def resolve_item_ex(name, price_book, approx_floor=0.84):
     for k in (key, sing):
         if k in price_book: return (k, "exact")
         if k in ALIASES and ALIASES[k] in price_book: return (ALIASES[k], "alias")
-    # tight fuzzy — an obvious typo of a real catalog name or alias
-    m = difflib.get_close_matches(key, list(price_book), n=1, cutoff=0.82)
-    if m: return (m[0], "exact")
-    ma = difflib.get_close_matches(key, list(ALIASES), n=1, cutoff=0.82)
-    if ma and ALIASES[ma[0]] in price_book: return (ALIASES[ma[0]], "alias")
+    # tight fuzzy — an obvious typo of a real catalog name or alias. Skipped for _FUZZY_BLOCK words
+    # (tablet/coaster/…): a real word must not become a CONFIDENT lookalike; it falls through to the
+    # loose approx pass below, which tags it 'approx' so the mapping is surfaced instead of hidden.
+    if key not in _FUZZY_BLOCK and sing not in _FUZZY_BLOCK:
+        m = difflib.get_close_matches(key, list(price_book), n=1, cutoff=0.82)
+        if m: return (m[0], "exact")
+        ma = difflib.get_close_matches(key, list(ALIASES), n=1, cutoff=0.82)
+        if ma and ALIASES[ma[0]] in price_book: return (ALIASES[ma[0]], "alias")
     # word containment — the catalog item is literally named inside the phrase
     # ("microwave oven" contains "microwave", "storage ottoman" contains "ottoman")
     words = set(key.split())
@@ -387,6 +395,7 @@ _TEENS = {"ten":10,"eleven":11,"twelve":12,"thirteen":13,"fourteen":14,"fifteen"
           "sixteen":16,"seventeen":17,"eighteen":18,"nineteen":19}
 _TENS  = {"twenty":20,"thirty":30,"forty":40,"fifty":50,"sixty":60,"seventy":70,"eighty":80,"ninety":90}
 _WORDS = {"a":1,"an":1,"couple":2,"few":3,"several":3,"dozen":12,"a dozen":12,
+          "a couple":2,"a few":3,"a several":3,
           "half dozen":6,"half a dozen":6, **_ONES, **_TEENS, **_TENS}
 
 def _word_to_int(q):
@@ -405,7 +414,9 @@ _QTY = (r'\d+'
         r'|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen'
         r'|one|two|three|four|five|six|seven|eight|nine'
         r'|half a dozen|half dozen|a dozen|dozen'
-        r'|an|a|couple|few|several')
+        # article+count as ONE token (before the bare article) so "a couple/a few X" isn't split
+        # into "a"=1 + "couple"=2, which used to drop the real count and price just 1.
+        r'|a couple|a few|a several|an|a|couple|few|several')
 
 _STOP = set(("and or with plus the a an of for from i im we you my me our your his her their some couple few "
              "several dozen half please thanks thank about also just around approximately roughly maybe more "
@@ -434,7 +445,7 @@ def _fix_spelling(text, price_book):
     toks = re.findall(r"[a-z]+|\d+|[^a-z\d]+", (text or "").lower())
     for i, tok in enumerate(toks):
         if (tok.isalpha() and len(tok) >= 4 and tok not in vocab
-                and tok not in _STOP and tok not in _WORDS):
+                and tok not in _STOP and tok not in _WORDS and tok not in _FUZZY_BLOCK):
             m = difflib.get_close_matches(tok, vocab, n=1, cutoff=0.82)
             if m:
                 toks[i] = m[0]
@@ -480,11 +491,17 @@ def parse_freetext_ex(text, price_book):
     hits.sort(key=lambda h: h[0])
     # quantity tokens: number-words / digits, plus "x3" and "3x" forms
     qtys = []
+    # collect the "x3"/"3x" forms first; the pre-split turned "3x" into "3 x", so the plain-digit
+    # scan below would ALSO match that "3" — dedupe by skipping any plain match overlapping an x-form
+    # span, so one number yields one qty token (not the count applied to two items).
+    xforms = [(m.start(), m.end(), int(m.group(1) or m.group(2)))
+              for m in re.finditer(r'\bx\s*(\d+)\b|\b(\d+)\s*x\b', low)]
+    def _overlaps_x(s, e):
+        return any(s < xe and xs < e for xs, xe, _ in xforms)
     for m in re.finditer(r'\b(' + _QTY + r')\b', low):
-        if not any(occ[m.start():m.end()]):
+        if not any(occ[m.start():m.end()]) and not _overlaps_x(m.start(), m.end()):
             qtys.append([m.start(), m.end(), _word_to_int(m.group(1))])
-    for m in re.finditer(r'\bx\s*(\d+)\b|\b(\d+)\s*x\b', low):
-        qtys.append([m.start(), m.end(), int(m.group(1) or m.group(2))])
+    qtys.extend([list(x) for x in xforms])
     def crosses(a, b):
         lo, hi = min(a, b), max(a, b)
         return any(lo <= p < hi for p in seps)
