@@ -252,7 +252,7 @@ async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "")
                 "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
     verified = match is not None
     if verified:
-        _VERIFY_FAILS.pop(nm, None)
+        _verify_clear(nm)
     else:
         _verify_fail(nm)
     return {"status": "found", "verified": bool(verified),
@@ -261,14 +261,39 @@ async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "")
                         else "That detail doesn't match what we have on file.")}
 
 
+def _verify_field(rec):
+    """Which detail to ASK for, strongest first. Single source of truth so the phone and the web
+    chat ask for the same thing (parity).
+
+    Order matters for security, not convenience. All three are still ACCEPTED by _verify_answer,
+    but the building is a weak secret — there are only ~60 of them across the whole customer base,
+    the top 5 cover ~30% of orders, and a classmate simply knows which dorm someone lives in. The
+    phone's last 4 digits are a 10,000-value space and are genuinely private, so that is what we
+    ask for whenever the order has a phone on file."""
+    if rec.get("phone"):
+        return "phone"
+    if rec.get("order_id"):
+        return "order_id"
+    return "building"
+
+
+_VERIFY_ASK_VOICE = {"phone": "the last 4 digits of the phone number on the order",
+                     "order_id": "their order number",
+                     "building": "which building their pickup is at"}
+_VERIFY_ASK_CHAT = {"phone": "what are the last 4 digits of your phone number",
+                    "order_id": "what's your order number",
+                    "building": "what building is your pickup at"}
+
+
 def _verify_prompt(rec):
     """The detail the phone agent should ASK the caller for — chosen from what's on file,
     phrased for speech. The value itself is never sent to the agent before verification."""
-    if rec.get("building"):
-        return "which building their pickup is at"
-    if rec.get("phone"):
-        return "the last 4 digits of the phone number on the order"
-    return "their order number"
+    return _VERIFY_ASK_VOICE[_verify_field(rec)]
+
+
+def _verify_ask_chat(rec):
+    """Same choice as the phone, phrased for the web chat."""
+    return _VERIFY_ASK_CHAT[_verify_field(rec)]
 
 
 # Order PII that must NOT leave the server until the caller proves who they are.
@@ -377,7 +402,7 @@ async def do_get_order_details(name_heard: str, answer: str, order_hint: str = "
         return {"status": "found", "verified": False,
                 "confirmed_name": base.get("confirmed_name", ""),
                 "message": "That detail doesn't match what we have on file."}
-    _VERIFY_FAILS.pop(nm, None)                           # clear the counter on success, like the chat
+    _verify_clear(nm)                                     # clear the counter on success, like the chat
     match["verified"] = True
     return match                                         # identity proven → the ONE order they matched
 
@@ -1536,6 +1561,29 @@ def _reveal_order(rec):
 _VERIFY_FAILS = {}                 # canonical name -> [fail_count, first_fail_epoch]
 _VERIFY_MAX, _VERIFY_WINDOW = 5, 15 * 60
 
+# A FIXED window is not enough on its own: the accepted verifiers form a small space (~60
+# buildings), so a patient script that just waits out each 15-minute lock sweeps every building
+# against one name in a few hours and is then guaranteed a reveal. So each lock a name actually
+# serves earns a STRIKE, and the next lock lasts twice as long (15m, 30m, 1h, … capped at 24h).
+# Strikes decay after a full quiet day, and any successful verification clears them outright, so a
+# genuine caller who fumbles their details is never punished beyond the first short lock.
+_VERIFY_STRIKES = {}               # canonical name -> [strikes, last_lock_epoch]
+_STRIKE_MAX, _STRIKE_DECAY, _VERIFY_WINDOW_CAP = 8, 24 * 60 * 60, 24 * 60 * 60
+
+
+def _strikes(name):
+    ent = _VERIFY_STRIKES.get(name)
+    if not ent:
+        return 0
+    if time.time() - ent[1] > _STRIKE_DECAY:      # a full quiet day → forgiven
+        _VERIFY_STRIKES.pop(name, None)
+        return 0
+    return ent[0]
+
+
+def _lock_window(name):
+    return min(_VERIFY_WINDOW * (2 ** _strikes(name)), _VERIFY_WINDOW_CAP)
+
 # Second layer: per-IP. Stops one machine from rotating through MANY names.
 _IP_FAILS = {}                     # ip -> [fail_count, first_fail_epoch]
 _IP_MAX, _IP_WINDOW = 15, 60 * 60
@@ -1559,14 +1607,27 @@ def _verify_locked(name):
     ent = _VERIFY_FAILS.get(name)
     if not ent:
         return False
-    if time.time() - ent[1] > _VERIFY_WINDOW:
-        _VERIFY_FAILS.pop(name, None); return False
+    if time.time() - ent[1] > _lock_window(name):
+        # Window aged out. If it was a REAL lock (they hit the cap), bank a strike first so the
+        # next one is twice as long — otherwise a script just sleeps and retries forever.
+        if ent[0] >= _VERIFY_MAX:
+            s = _VERIFY_STRIKES.setdefault(name, [0, time.time()])
+            s[0] = min(s[0] + 1, _STRIKE_MAX); s[1] = time.time()
+        _VERIFY_FAILS.pop(name, None)
+        return False
     return ent[0] >= _VERIFY_MAX
 
 
 def _verify_fail(name):
     ent = _VERIFY_FAILS.setdefault(name, [0, time.time()])
     ent[0] += 1
+
+
+def _verify_clear(name):
+    """Proven identity wipes the slate — fail count AND strikes. Used by both the phone tool and
+    the chat verify step so a real caller who fumbled a couple of details isn't left throttled."""
+    _VERIFY_FAILS.pop(name, None)
+    _VERIFY_STRIKES.pop(name, None)
 
 
 def _norm_id(s):
@@ -1646,7 +1707,7 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
         if base.get("status") != "found":
             return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
         if match is not None:
-            _VERIFY_FAILS.pop(nm, None)
+            _verify_clear(nm)
             return (_reveal_order(match), {})
         _verify_fail(nm)
         return ("That doesn't match what we have, so I can't share the order details. Please call the team at (314) 266-8878.", {})
@@ -1655,14 +1716,12 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
         rec = _build_order_result(state.get("name", ""), dispatch_rows, service_rows, text)
         if rec.get("status") != "found":
             return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
-        ask = ("what building is your pickup at" if rec.get("building")
-               else ("the last 4 digits of your phone" if rec.get("phone") else "your order number"))
+        ask = _verify_ask_chat(rec)
         return ("Got it — %s. To confirm it's you, %s?" % (_cv(rec.get("service")) or "that order", ask),
                 {"intent": "lookup", "step": "verify", "name": rec["confirmed_name"], "hint": text})
     rec = _build_order_result(text, dispatch_rows, service_rows)
     if rec.get("status") == "found":
-        ask = ("what building is your pickup at" if rec.get("building")
-               else ("the last 4 digits of your phone" if rec.get("phone") else "your order number"))
+        ask = _verify_ask_chat(rec)
         # One person with several of their OWN orders: list them by SERVICE + DATE only — never the
         # order number (it is itself a valid verifier) and never for DIFFERENT people who share a
         # name (that would disclose a stranger's order). Mirrors the phone's redacted lookup
@@ -1923,7 +1982,7 @@ async def chat_api(request: Request):
         except Exception:
             match2 = None
         if match2 is not None:
-            _VERIFY_FAILS.pop(nm, None)      # fresh data verified it — clear the miss counted above
+            _verify_clear(nm)                # fresh data verified it — clear the miss counted above
             reply, new_state = (_reveal_order(match2), {})
         else:
             _ip_fail(ip)
@@ -2044,7 +2103,7 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  (function(){var box=document.getElementById('ids'),bd=document.getElementById('idsbd'),tog=document.getElementById('idst'),DATA=[];
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function set(open){box.classList.toggle('collapsed',!open);tog.innerHTML=open?'&#9662;':'&#9656;';}
-  function render(){bd.innerHTML=DATA.map(function(x,i){return '<div class=it data-i="'+i+'" title="tap to fill the box"><div class=nm>'+esc(x.name)+'</div><div class=mt>'+esc(x.building)+(x.room?' &middot; Rm '+esc(x.room):'')+'</div></div>';}).join('');
+  function render(){bd.innerHTML=DATA.map(function(x,i){return '<div class=it data-i="'+i+'" title="tap to fill the box"><div class=nm>'+esc(x.name)+'</div><div class=mt>'+esc(x.service||'')+'</div></div>';}).join('');
    Array.prototype.forEach.call(bd.querySelectorAll('.it'),function(el){el.addEventListener('click',function(){var x=DATA[+el.getAttribute('data-i')];var inp=document.getElementById('t');inp.value=x.name;inp.focus();});});}
   function load(sh){bd.innerHTML='<div class=it>Loading…</div>';
    fetch('/sample_ids?n=8'+(sh?'&shuffle=1':'')).then(function(r){return r.json();}).then(function(j){
@@ -2068,11 +2127,14 @@ async def chat_page(request: Request):
 
 @mcp.custom_route("/sample_ids", methods=["GET"])
 async def sample_ids(request: Request):
-    """Testing aid: a handful of REAL {name, building, room, id} pulled live from the DISPATCH sheet,
-    so a tester can exercise the identity gate + order lookups without opening the spreadsheet. These
-    are customer names (PII), so this rides the SAME staff-key gate as /lookup_student — it locks the
-    moment API_SECRET is set. Names live only in the sheet, never in source. Params: n (1-15, default
-    8), shuffle=1 for a fresh random draw."""
+    """Testing aid: a handful of REAL customer names pulled live from the DISPATCH sheet, so a tester
+    can exercise the identity gate without opening the spreadsheet. Rides the staff-key gate.
+
+    Returns the NAME ONLY — never the building, room or order number. Those three are exactly what
+    _verify_answer accepts as proof of identity, so returning them beside the name would hand out the
+    answer key and defeat the gate for anyone who can reach this endpoint. Service type is safe (it
+    verifies nothing). A tester who needs a verifier reads it from the sheet deliberately.
+    Params: n (1-15, default 8), shuffle=1 for a fresh random draw."""
     if not _authorized(request):
         return _unauthorized()
     import random
@@ -2087,10 +2149,7 @@ async def sample_ids(request: Request):
         if not nm or nm.lower() in seen:
             continue
         seen.add(nm.lower())
-        pool.append({"name": nm, "building": (r.get("Building") or "").strip() or "—",
-                     "room": (r.get("Room") or "").strip(),
-                     "id": (r.get("ID") or "").strip(),
-                     "service": (r.get("Service") or "").strip()})
+        pool.append({"name": nm, "service": (r.get("Service") or "").strip()})
     if request.query_params.get("shuffle") == "1":
         random.shuffle(pool)
     return JSONResponse({"count": min(n, len(pool)), "total": len(pool), "sample": pool[:n]})

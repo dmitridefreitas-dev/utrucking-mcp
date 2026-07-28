@@ -1,5 +1,6 @@
 """Offline unit tests for main.py helpers — upsell attach, phone match, multi-order, pretty items."""
 import re
+import time
 import pytest
 import engines
 import main
@@ -13,9 +14,11 @@ def _clear_ai_cache():
     # process-global by design; reset so tests stay independent
     main._AI_MAP_CACHE.clear()
     main._VERIFY_FAILS.clear()
+    main._VERIFY_STRIKES.clear()
     yield
     main._AI_MAP_CACHE.clear()
     main._VERIFY_FAILS.clear()
+    main._VERIFY_STRIKES.clear()
 
 
 # ---------- upsell attach ----------
@@ -270,7 +273,9 @@ def test_bare_name_starts_verification():
     D, S = _id_data()
     reply, state = main._chat_reply("Jamie Rivers", {}, D, S, BOOK)
     assert state.get("step") == "verify"
-    assert "building" in reply.lower()
+    # This record has a phone on file, so the STRONGEST verifier is asked for — not the building,
+    # which is a weak secret (a classmate knows the dorm). Building is still accepted, just not asked.
+    assert "last 4" in reply.lower()
     assert state.get("name", "").lower() == "jamie rivers"
 
 
@@ -742,3 +747,88 @@ def test_ip_bruteforce_lockout_across_rotating_names(monkeypatch):
         state = {"intent": "lookup", "step": "verify", "name": names[i]}
         last = asyncio.run(main.chat_api(_Req("Zzzref Place", state, host="6.6.6.6")))[1][0]
     assert "too many verification attempts from this connection" in last["reply"].lower()
+
+
+# ── Round 18: the verifier itself must not be handed out, and guessing must get expensive ──
+
+def test_sample_ids_never_returns_a_verifier(monkeypatch):
+    """/sample_ids is a test aid that returns REAL customer names. It must never return the
+    building, room or order number beside the name: those are exactly what _verify_answer accepts,
+    so shipping them together hands out the answer key and defeats the identity gate for anyone who
+    can reach the endpoint. Regression for the Round-18 finding."""
+    import asyncio, json
+    D = [{"Student": "Jamie Rivers", "ID": "#90001-TS", "Service": "Summer Storage",
+          "Building": "Northgate B", "Room": "1205", "Phone": "5550100200"}]
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else []
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+    monkeypatch.setattr(main, "API_SECRET", "")            # open == today's default; still no verifier
+
+    class _GetReq:
+        query_params = {}
+        headers = {}
+    res = asyncio.run(main.sample_ids(_GetReq()))
+    body = json.dumps(res[1][0] if isinstance(res, tuple) else res)
+    assert "Jamie Rivers" in body                          # the name is the point of the endpoint
+    for verifier in ("Northgate", "1205", "90001", "5550100200"):
+        assert verifier not in body, "sample_ids leaked a verifier: %s" % verifier
+
+
+def test_verify_field_prefers_the_strong_secret():
+    """Ask for the 10,000-value phone last-4 over the ~60-value building whenever one is on file."""
+    assert main._verify_field({"phone": "5550100200", "building": "Northgate B",
+                               "order_id": "#90001-TS"}) == "phone"
+    assert main._verify_field({"building": "Northgate B", "order_id": "#90001-TS"}) == "order_id"
+    assert main._verify_field({"building": "Northgate B"}) == "building"
+    # a building-only record still gets asked something usable, on both channels
+    assert "building" in main._verify_prompt({"building": "Northgate B"})
+    assert "building" in main._verify_ask_chat({"building": "Northgate B"})
+
+
+def test_chat_and_voice_ask_for_the_same_verifier():
+    """Parity: the phone and the web chat must choose the SAME detail, or one channel is weaker."""
+    for rec in ({"phone": "5550100200", "building": "Northgate B"},
+                {"building": "Northgate B", "order_id": "#90001-TS"},
+                {"building": "Northgate B"}):
+        f = main._verify_field(rec)
+        assert main._verify_prompt(rec) == main._VERIFY_ASK_VOICE[f]
+        assert main._verify_ask_chat(rec) == main._VERIFY_ASK_CHAT[f]
+
+
+def test_lockout_escalates_so_waiting_it_out_stops_working():
+    """A fixed 15-minute lock is sweepable: ~60 buildings / 5 tries per window = a few hours to a
+    guaranteed reveal. Each served lock must earn a strike that doubles the next window."""
+    main._VERIFY_FAILS.clear(); main._VERIFY_STRIKES.clear()
+    n = "jamie rivers"
+    assert main._lock_window(n) == main._VERIFY_WINDOW
+    for cycle in range(3):
+        for _ in range(main._VERIFY_MAX):
+            main._verify_fail(n)
+        assert main._verify_locked(n), "should be locked after MAX fails"
+        # age the window out — the lock is served, and banks a strike on the way out
+        main._VERIFY_FAILS[n][1] = time.time() - main._lock_window(n) - 1
+        assert not main._verify_locked(n)
+        assert main._strikes(n) == cycle + 1
+    assert main._lock_window(n) == main._VERIFY_WINDOW * 8       # 15m → 2h after three locks
+    main._VERIFY_FAILS.clear(); main._VERIFY_STRIKES.clear()
+
+
+def test_lock_window_is_capped_and_strikes_decay():
+    main._VERIFY_FAILS.clear(); main._VERIFY_STRIKES.clear()
+    n = "someone else"
+    main._VERIFY_STRIKES[n] = [main._STRIKE_MAX, time.time()]
+    assert main._lock_window(n) == main._VERIFY_WINDOW_CAP        # never grows past the cap
+    main._VERIFY_STRIKES[n] = [4, time.time() - main._STRIKE_DECAY - 1]
+    assert main._strikes(n) == 0                                  # a quiet day forgives
+    assert main._lock_window(n) == main._VERIFY_WINDOW
+    main._VERIFY_STRIKES.clear()
+
+
+def test_successful_verification_clears_strikes():
+    """A real caller who fumbled a couple of details must not stay throttled once they prove it."""
+    main._VERIFY_FAILS.clear(); main._VERIFY_STRIKES.clear()
+    n = "jamie rivers"
+    main._VERIFY_FAILS[n] = [3, time.time()]
+    main._VERIFY_STRIKES[n] = [2, time.time()]
+    main._verify_clear(n)
+    assert n not in main._VERIFY_FAILS and main._strikes(n) == 0
