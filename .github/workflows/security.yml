@@ -1,0 +1,57 @@
+name: security
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # gitleaks needs history, not just the tip
+
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+  no-hardcoded-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Targeted guard for the classes of value that have actually leaked from this repo before:
+      # Google Sheet IDs (which locate the customer database), Retell LLM/agent IDs, and the
+      # staff key. gitleaks does not know these shapes, so they get their own check.
+      - name: Reject hardcoded sheet / agent IDs and keys
+        run: |
+          set -e
+          fail=0
+
+          # Google Sheet/Drive file IDs are 44-char base64url. Allow them in docs and in
+          # SECURITY.md (which has to name what was exposed) but never in application code.
+          if grep -rInE '"[A-Za-z0-9_-]{44}"' --include='*.py' . ; then
+            echo "::error::A 44-char Google file ID is hardcoded. Move it to an env var."
+            fail=1
+          fi
+
+          if grep -rInE '(llm|agent)_[a-f0-9]{20,}' --include='*.py' . ; then
+            echo "::error::A Retell llm_/agent_ ID is hardcoded. Read it from the environment."
+            fail=1
+          fi
+
+          # The staff key has appeared in a webhook query string before.
+          if grep -rInE '[?&]key=[A-Za-z0-9]{16,}' --include='*.py' --include='*.md' . ; then
+            echo "::error::A secret looks pasted into a URL query string. Use a header."
+            fail=1
+          fi
+
+          if [ "$fail" -ne 0 ]; then
+            echo "See SECURITY.md for how configuration is supposed to be supplied."
+            exit 1
+          fi
+          echo "No hardcoded sheet IDs, agent IDs or in-URL keys found."

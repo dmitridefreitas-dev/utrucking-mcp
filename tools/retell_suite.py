@@ -20,7 +20,10 @@ import time
 import urllib.request
 
 API = "https://api.retellai.com"
-LLM_ID = os.getenv("RETELL_LLM_ID", "llm_9f9849c5acc548fb83c81d4867d7")
+# From the environment, with no default: the literal used to sit here, and this repo is public
+# (the same ID is still exposed in the utrucking-ai mirror). It identifies the live phone agent,
+# so anyone holding it plus a leaked API key could read or rewrite the production prompt.
+LLM_ID = os.getenv("RETELL_LLM_ID", "")
 
 # ── shared fictional fixtures ────────────────────────────────────────────────
 _REDACTED_FOUND = json.dumps({
@@ -213,6 +216,8 @@ def _api(path, body=None, method=None):
     key = os.environ.get("RETELL_API_KEY", "")
     if not key:
         sys.exit("RETELL_API_KEY is not set")
+    if not LLM_ID:
+        sys.exit("RETELL_LLM_ID is not set (see .env.example)")
     req = urllib.request.Request(
         API + path, method=method or ("POST" if body is not None else "GET"),
         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},

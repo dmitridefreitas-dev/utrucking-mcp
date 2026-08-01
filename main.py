@@ -20,20 +20,38 @@ from engines import build_price_book, quote as _quote_items, availability as _av
 
 RENDER_URL = os.getenv("RENDER_URL", "https://utrucking-mcp.onrender.com")
 
-DISPATCH_SHEET_ID = "1x5MQbsCFMJX5eafA6uoFF0nU4qfvCaK-2EyZNPs__kM"
-DISPATCH_SHEET_GID = "602263013"
+# Sheet IDs are CONFIG, not code. They used to be literals here, which meant this public repo
+# advertised the location of every customer record: the sheets are readable with no login, so
+# anyone reading main.py could download all ~2,500 dispatch rows (name, phone, building, room)
+# as CSV. Moving them to the environment stops the repo pointing at the data.
+#
+# It does NOT revoke access already granted. These exact IDs remain in this repo's git history
+# and in the public utruckingai / utrucking-ai mirrors. Treat them as disclosed: the fix is to
+# restrict the sheets' sharing (and re-issue them if they must stay link-shared), not to hide
+# the IDs. See SECURITY.md.
+DISPATCH_SHEET_ID = os.getenv("DISPATCH_SHEET_ID", "")
+DISPATCH_SHEET_GID = os.getenv("DISPATCH_SHEET_GID", "602263013")
 DISPATCH_CSV_URL = (
     f"https://docs.google.com/spreadsheets/d/{DISPATCH_SHEET_ID}"
     f"/export?format=csv&gid={DISPATCH_SHEET_GID}"
 )
 
-SERVICE_SHEET_ID = "1m43ijcOmxAnFt54mLos6dLlwvYnMOlwSTZkQWHg0D54"
-SERVICE_SHEET_GID = "1320217925"
+SERVICE_SHEET_ID = os.getenv("SERVICE_SHEET_ID", "")
+SERVICE_SHEET_GID = os.getenv("SERVICE_SHEET_GID", "1320217925")
 SERVICE_CSV_URL = (
     f"https://docs.google.com/spreadsheets/d/{SERVICE_SHEET_ID}"
     # NOTE: this sheet 400s on /export?format=csv; the gviz endpoint serves the same public CSV reliably.
     f"/gviz/tq?tqx=out:csv&gid={SERVICE_SHEET_GID}"
 )
+
+# A missing ID builds a well-formed URL pointing at nothing, and every tool would then degrade
+# to "no records found" — which reads like an empty season rather than a broken deploy. Say so
+# loudly at boot and surface it on /health so a misconfigured service is diagnosable in one look.
+SHEETS_CONFIGURED = bool(DISPATCH_SHEET_ID and SERVICE_SHEET_ID)
+if not SHEETS_CONFIGURED:
+    print("WARNING: DISPATCH_SHEET_ID / SERVICE_SHEET_ID are unset. Order lookup, quoting, "
+          "availability and analytics will all return empty. Set them in the environment "
+          "(see .env.example).", flush=True)
 
 # The MCP protocol endpoint (/mcp) is consumed by REMOTE clients — Claude custom
 # connectors and Retell's native MCP node — so the SDK's DNS-rebinding Host check
@@ -775,7 +793,8 @@ async def debug_sheets(request: Request):
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
-    return JSONResponse({"status": "ok"})
+    # sheets_configured is a boolean, never the IDs themselves — /health is unauthenticated.
+    return JSONResponse({"status": "ok", "sheets_configured": SHEETS_CONFIGURED})
 
 
 @mcp.custom_route("/", methods=["GET"])
