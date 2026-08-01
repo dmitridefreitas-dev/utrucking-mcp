@@ -106,10 +106,36 @@ async def fetch_csv_rows(url: str, force: bool = False) -> list[dict]:
     return hit[1] if hit else []
 
 
+# A "confident" name match has to actually BE confident. The token pass admits a first name at
+# 0.60 and narrows on a last name at 0.50, and a lone survivor used to be returned as a certain
+# match — so two scores sitting on the bare minimum were enough to put a caller onto a STRANGER's
+# record. Measured: "Jaime Rivera" (a perfectly ordinary name) matched "Aiden Rogers" outright —
+# first 0.60, last 0.50, both exactly at the floor, no ambiguity reported. Gibberish was already
+# blocked by the fall-through below; a PLAUSIBLE name was not, which is the dangerous half.
+# So a survivor must additionally clear a real bar on the last name OR on the whole string.
+_NAME_STRONG_LAST = 0.70
+_NAME_STRONG_FULL = 0.70
+_NAME_STRONG_FIRST = 0.80          # first-name-only queries have no surname to corroborate
+
+
+def _name_confident(q_lower: str, last_token: str, name: str) -> bool:
+    """Is `name` a strong enough match for the caller's words to be treated as certain?
+    True when the surname is a close variant (typo/spelling) OR the whole name reads as the
+    same person. Either alone is corroboration; neither means we ask instead of assume."""
+    nt = name.lower().split()
+    last_ratio = (difflib.SequenceMatcher(None, last_token, nt[-1]).ratio()
+                  if len(nt) >= 2 else 0.0)
+    full_ratio = difflib.SequenceMatcher(None, q_lower, name.lower()).ratio()
+    return last_ratio >= _NAME_STRONG_LAST or full_ratio >= _NAME_STRONG_FULL
+
+
 def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list[str]]:
     """
     Returns (best_match, suggestions).
     Tries: exact substring → first-name fuzzy + last-name narrow → full fuzzy fallback.
+
+    `suggestions` are real customers' names and are for SERVER-side use only — callers must not
+    read them back to an unidentified caller (see _build_order_result, which drops them).
     """
     q = query.strip()
     q_lower = q.lower()
@@ -144,7 +170,12 @@ def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list
                         if score >= 0.5:
                             last_matches.append(name)
                 if len(last_matches) == 1:
-                    return last_matches[0], []
+                    # ONE survivor is necessary but not sufficient — it only means the others were
+                    # filtered out, not that this one is right. Demand real corroboration before
+                    # calling it certain, or a marginal double-miss becomes a stranger's record.
+                    if _name_confident(q_lower, last_token, last_matches[0]):
+                        return last_matches[0], []
+                    return None, last_matches[:3]
                 if len(last_matches) > 1:
                     return None, last_matches[:3]
                 # The caller gave a last name but it matches NONE of the first-name candidates'
@@ -152,9 +183,13 @@ def smart_name_match(query: str, all_names: list[str]) -> tuple[str | None, list
                 # first name (this is how gibberish like "Zblargh Xyzptqq" used to match
                 # "Blair Wagner"). Fall through to the strict whole-name fuzzy, which needs 0.6 overall.
             else:
-                # only a first name was given — can't narrow by last name
+                # only a first name was given — can't narrow by last name, so there is no second
+                # signal to corroborate with. A lone 0.60 first-name hit is not proof of identity;
+                # require a near-exact first name before treating it as certain.
                 if len(first_candidates) == 1:
-                    return first_candidates[0], []
+                    ft = first_candidates[0].lower().split()[0]
+                    if difflib.SequenceMatcher(None, first_token, ft).ratio() >= _NAME_STRONG_FIRST:
+                        return first_candidates[0], []
                 return None, first_candidates[:3]
 
     # 3. Full fuzzy fallback
@@ -250,6 +285,17 @@ async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "")
         return {"status": "found", "verified": False, "locked": True,
                 "confirmed_name": base.get("confirmed_name", ""),
                 "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
+    if match is None:
+        # Same freshness re-check get_order_details and the chat already do: a cached sheet can lag a
+        # just-edited row, making a CORRECT answer look wrong — and this path also banks a fail, so a
+        # stale cache could lock a genuine customer out of BOTH channels (the counter is shared).
+        # Re-pull once and re-check before counting the miss. Never relaxes _verify_answer.
+        try:
+            d2, s2 = await asyncio.gather(
+                fetch_csv_rows(DISPATCH_CSV_URL, force=True), fetch_csv_rows(SERVICE_CSV_URL, force=True))
+            match, _ = _verify_pick(name_heard, answer, d2, s2, order_hint)
+        except Exception:
+            pass
     verified = match is not None
     if verified:
         _verify_clear(nm)
@@ -358,8 +404,13 @@ def _verify_pick(name_heard, answer, dispatch_rows, service_rows, order_hint="")
     # AMBIGUOUS: the answer matches orders belonging to more than one distinct person (e.g. two people
     # who share a name AND a building). A weak verifier can't tell them apart, so reveal NOTHING and
     # let the agent ask for a stronger identifier (phone last-4 or order number).
-    who = {_last4(r.get("phone") or "") for r in matches}
-    who.discard("")
+    # Same reasoning as distinct_people above: an order with no phone on file is an UNKNOWN identity,
+    # not a matching one. Treat each as distinct so a weak verifier that spans several unidentifiable
+    # orders refuses rather than picking one arbitrarily.
+    who = set()
+    for i, r in enumerate(matches):
+        l4 = _last4(r.get("phone") or "")
+        who.add(l4 or ("unknown:%s" % (r.get("order_id") or i)))
     if base.get("distinct_people") and len(who) > 1:
         return None, base
     return matches[0], base
@@ -460,11 +511,18 @@ def _build_order_result(name_heard: str, dispatch_rows, service_rows, order_hint
 
     if best is None:
         if suggestions:
-            names_str = ", ".join(suggestions)
+            # NEVER read the near-miss names back. They are real customers' full names and the
+            # caller has proven no relationship to any of them — a caller who merely misspeaks a
+            # name used to hear three strangers' names out loud (observed on a live demo call:
+            # "Jamie Rivers" returned Janae Crespo, Aiden Rogers, Miles Haider). Ask them to spell
+            # theirs instead, which is what an outright miss already does. `near_miss` keeps the
+            # signal for logs/QA without carrying any PII.
             return {
                 "status": "confirm",
-                "suggestions": suggestions,
-                "message": f"I didn't find an exact match. Did you mean {names_str}?"
+                "suggestions": [],
+                "near_miss": len(suggestions),
+                "message": ("I didn't find an exact match for that name. "
+                            "Could you spell your last name for me?")
             }
         return {
             "status": "not_found",
@@ -599,9 +657,16 @@ def _build_order_result(name_heard: str, dispatch_rows, service_rows, order_hint
         # Different last-4 phones across the orders => almost certainly DIFFERENT people who happen
         # to share a name, not one repeat customer. Flagged so the redacted lookup doesn't list a
         # stranger's orders before the caller has proven who they are (the verifier picks the row).
-        phones4 = {_last4(clean(r.get("Phone") or "")) for r in distinct}
-        phones4.discard("")
-        result["distinct_people"] = len(phones4) > 1
+        # A BLANK phone is not evidence of sameness — it is the absence of evidence. Discarding
+        # blanks here used to collapse "one known person + several unidentifiable orders" into a
+        # single identity, so the ambiguity guard never fired and a shared name + a shared building
+        # revealed a stranger's record (measured: 17 of 18 such clusters in live data). Count each
+        # unidentifiable order as its own unknown identity so the guard fails CLOSED instead.
+        ident = set()
+        for i, r in enumerate(distinct):
+            l4 = _last4(clean(r.get("Phone") or ""))
+            ident.add(l4 or ("unknown:%s" % (clean(r.get("ID")) or i)))
+        result["distinct_people"] = len(ident) > 1
         if not order_hint:
             result["needs_order_choice"] = True
             result["message"] = ("Got it — %s. I found %d orders: %s. Which one do you mean?"
@@ -1697,15 +1762,21 @@ def _verify_answer(rec, text):
 
 def _lookup_flow(text, state, dispatch_rows, service_rows):
     if state.get("step") == "verify":
-        nm = " ".join((state.get("name") or "").lower().split())
-        if _verify_locked(nm):
-            return ("Too many verification attempts for that name. For security, please call the team at (314) 266-8878.", {})
-        # accept ANY on-file identifier, each fuzzy-tolerant: building (misspelled/partial), phone
-        # last-4, or the order number — checked against EVERY order under this name so a shared name
-        # reveals only the order the caller can verify (the SAME check the phone agent runs).
+        # Resolve the record FIRST so the brute-force counter can be keyed on the server's canonical
+        # name. `state` is echoed back by the browser, so keying on state["name"] let a caller scatter
+        # failures across spelling variants that all resolve to the SAME record (voice never had this
+        # — it keys on confirmed_name). It also broke release: succeeding under a typo'd name left the
+        # canonical counter standing.
         match, base = _verify_pick(state.get("name", ""), text, dispatch_rows, service_rows, state.get("hint", ""))
         if base.get("status") != "found":
             return ("Sorry, I lost that record — what's the name again?", {"intent": "lookup", "step": "name"})
+        nm = " ".join((base.get("confirmed_name") or state.get("name") or "").lower().split())
+        if _verify_locked(nm):
+            return ("Too many verification attempts for that name. For security, please call the team at (314) 266-8878.", {})
+        # _verify_pick above accepted ANY on-file identifier, each fuzzy-tolerant: building
+        # (misspelled/partial), phone last-4, or the order number — checked against EVERY order under
+        # this name so a shared name reveals only the order the caller can verify (the SAME check the
+        # phone agent runs).
         if match is not None:
             _verify_clear(nm)
             return (_reveal_order(match), {})
@@ -1739,8 +1810,11 @@ def _lookup_flow(text, state, dispatch_rows, service_rows):
         # (e.g. a shared building) can't tell shared-name people apart — same as the phone.
         return ("I found an order under %s. To confirm it's you, %s?" % (rec["confirmed_name"], ask),
                 {"intent": "lookup", "step": "verify", "name": rec["confirmed_name"]})
-    if rec.get("status") == "confirm" and rec.get("suggestions"):
-        return ("I found a few possible matches: %s. Which name is exactly right?" % ", ".join(rec["suggestions"]),
+    if rec.get("status") == "confirm":
+        # PARITY with the phone: a near miss must NOT list the names it nearly matched — those are
+        # other customers. Ask for the spelling, exactly as _build_order_result now phrases it.
+        return (rec.get("message") or "I didn't find an exact match for that name. "
+                                      "Could you spell your last name for me?",
                 {"intent": "lookup", "step": "name"})
     return ("I couldn't find an order under that name. Want to try spelling the last name, or a different name?",
             {"intent": "lookup", "step": "name"})
@@ -2048,6 +2122,8 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  #ids .it:hover{background:#f6f8fb}
  #ids .it .nm{font-weight:600;color:var(--navy)}
  #ids .it .mt{color:var(--mut);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ #ids .it .vf{margin-top:3px;font-variant-numeric:tabular-nums;color:var(--brand);background:#eef3fb;border:1px solid #dbe6f7;border-radius:5px;padding:1px 5px;display:inline-block;font-size:11px}
+ #ids .it .vf:hover{background:#e2ebf9}
  @media (max-width:620px){#ids{width:172px}}
 </style></head><body>
 <header><img src="/brand/logo.jpg" alt="University Trucking" style="height:19px;width:auto;display:block;margin-bottom:6px"><b>Assistant</b><span class=s>SMS preview - test chat</span></header>
@@ -2103,13 +2179,25 @@ _CHAT_HTML = r"""<!doctype html><html lang=en><head>
  (function(){var box=document.getElementById('ids'),bd=document.getElementById('idsbd'),tog=document.getElementById('idst'),DATA=[];
   function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
   function set(open){box.classList.toggle('collapsed',!open);tog.innerHTML=open?'&#9662;':'&#9656;';}
-  function render(){bd.innerHTML=DATA.map(function(x,i){return '<div class=it data-i="'+i+'" title="tap to fill the box"><div class=nm>'+esc(x.name)+'</div><div class=mt>'+esc(x.service||'')+'</div></div>';}).join('');
-   Array.prototype.forEach.call(bd.querySelectorAll('.it'),function(el){el.addEventListener('click',function(){var x=DATA[+el.getAttribute('data-i')];var inp=document.getElementById('t');inp.value=x.name;inp.focus();});});}
+  function vline(v){ /* the ONE detail that will verify this record, shown only to staff */
+   if(!v)return '';
+   var p=v.phone_last4?('last 4: '+esc(v.phone_last4)):(v.order_id?('order '+esc(v.order_id)):esc(v.building||''));
+   return '<div class=vf title="tap to fill this answer">'+p+'</div>';}
+  function render(){bd.innerHTML=DATA.map(function(x,i){return '<div class=it data-i="'+i+'" title="tap to fill the box"><div class=nm>'+esc(x.name)+'</div><div class=mt>'+esc(x.service||'')+'</div>'+vline(x.verify)+'</div>';}).join('');
+   Array.prototype.forEach.call(bd.querySelectorAll('.it'),function(el){el.addEventListener('click',function(ev){
+    var x=DATA[+el.getAttribute('data-i')];var inp=document.getElementById('t');
+    /* tapping the verifier line fills the ANSWER; tapping the name fills the NAME */
+    if(ev.target&&ev.target.className==='vf'&&x.verify){inp.value=x.verify.phone_last4||x.verify.order_id||x.verify.building||x.name;}
+    else{inp.value=x.name;}
+    inp.focus();});});}
   function load(sh){bd.innerHTML='<div class=it>Loading…</div>';
-   fetch('/sample_ids?n=8'+(sh?'&shuffle=1':'')).then(function(r){return r.json();}).then(function(j){
+   var k=localStorage.getItem('utk');var h=k?{'x-utrucking-key':k}:{};
+   fetch('/sample_ids?n=8&verifiers=1'+(sh?'&shuffle=1':''),{headers:h}).then(function(r){return r.json();}).then(function(j){
     if(j&&j.status==='unauthorized'){bd.innerHTML='<div class=it>Staff key required</div>';return;}
-    DATA=(j&&j.sample)||[];if(!DATA.length){bd.innerHTML='<div class=it>No records</div>';return;}render();})
+    DATA=(j&&j.sample)||[];if(!DATA.length){bd.innerHTML='<div class=it>No records</div>';return;}render();
+    if(j.verifiers==='locked'){bd.insertAdjacentHTML('beforeend','<div class=it style="opacity:.7">Verifiers hidden — set API_SECRET and paste the staff key</div>');}})
    .catch(function(){bd.innerHTML='<div class=it>Could not load</div>';});}
+  window.utkSet=function(v){localStorage.setItem('utk',(v||'').trim());load(false);};  /* console helper */
   document.getElementById('idsh').addEventListener('click',function(){set(box.classList.contains('collapsed'));});
   document.getElementById('idsrf').addEventListener('click',function(e){e.stopPropagation();load(true);});
   set(window.innerWidth>=620);load(false);})();   /* desktop: open; mobile: compact chip, tap to reveal */
@@ -2133,8 +2221,14 @@ async def sample_ids(request: Request):
     Returns the NAME ONLY — never the building, room or order number. Those three are exactly what
     _verify_answer accepts as proof of identity, so returning them beside the name would hand out the
     answer key and defeat the gate for anyone who can reach this endpoint. Service type is safe (it
-    verifies nothing). A tester who needs a verifier reads it from the sheet deliberately.
-    Params: n (1-15, default 8), shuffle=1 for a fresh random draw."""
+    verifies nothing).
+
+    `verifiers=1` adds one usable verifier per record so a staff tester can drive an end-to-end
+    lookup without opening the spreadsheet. It is deliberately NOT covered by _authorized() alone,
+    because API_SECRET being unset makes _authorized() true for the whole internet — which is exactly
+    the configuration this data must never be served in. It requires the key to be SET **and**
+    correctly supplied, so it fails closed in the open configuration.
+    Params: n (1-15, default 8), shuffle=1 for a fresh random draw, verifiers=1 (staff key required)."""
     if not _authorized(request):
         return _unauthorized()
     import random
@@ -2142,6 +2236,10 @@ async def sample_ids(request: Request):
         n = max(1, min(15, int(request.query_params.get("n", "8"))))
     except Exception:
         n = 8
+    # Verifiers ride a STRICTER gate than the rest of the endpoint: the key must actually be armed.
+    want_verifiers = request.query_params.get("verifiers") == "1"
+    show_verifiers = bool(want_verifiers and API_SECRET
+                          and request.headers.get("x-utrucking-key", "") == API_SECRET)
     rows = await fetch_csv_rows(DISPATCH_CSV_URL)
     seen, pool = set(), []
     for r in rows:
@@ -2149,10 +2247,19 @@ async def sample_ids(request: Request):
         if not nm or nm.lower() in seen:
             continue
         seen.add(nm.lower())
-        pool.append({"name": nm, "service": (r.get("Service") or "").strip()})
+        rec = {"name": nm, "service": (r.get("Service") or "").strip()}
+        if show_verifiers:
+            # last 4 only — never the full phone number, which is not needed to drive a test
+            rec["verify"] = {"building": (r.get("Building") or "").strip(),
+                             "phone_last4": _last4(r.get("Phone") or ""),
+                             "order_id": (r.get("ID") or "").strip()}
+        pool.append(rec)
     if request.query_params.get("shuffle") == "1":
         random.shuffle(pool)
-    return JSONResponse({"count": min(n, len(pool)), "total": len(pool), "sample": pool[:n]})
+    out = {"count": min(n, len(pool)), "total": len(pool), "sample": pool[:n]}
+    if want_verifiers and not show_verifiers:
+        out["verifiers"] = "locked"      # lets the UI say WHY instead of silently showing names only
+    return JSONResponse(out)
 
 
 # ── Ideas #1-#7: analytics, Ask-your-data copilot, insights dashboard ──

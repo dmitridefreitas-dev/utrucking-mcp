@@ -1,4 +1,5 @@
 """Offline unit tests for main.py helpers — upsell attach, phone match, multi-order, pretty items."""
+import json
 import re
 import time
 import pytest
@@ -348,6 +349,103 @@ def test_real_typo_names_still_match():
 def test_first_name_only_still_offers_a_match():
     best, sugg = main.smart_name_match("Diya", _NAMES)
     assert best == "Diya Gupta" or "Diya Gupta" in sugg
+
+
+# ── Round 19: a PLAUSIBLE non-customer name must not land on a stranger, and near-miss
+#    names must never be read back to an unidentified caller ──────────────────────────
+_ROSTER = ["Janae Crespo", "Aiden Rogers", "Miles Haider", "Blair Wagner", "Diya Gupta",
+           "Kennedy Brown", "Madison Elhaik", "Jordan Miles", "Casey Nguyen", "Morgan Ellis"]
+
+
+@pytest.mark.parametrize("plausible", [
+    "Jaime Rivera",      # measured: matched "Aiden Rogers" outright (first .60 / last .50)
+    "Jamie Rivers",      # the live demo call that exposed this
+    "John Smith", "Maria Gonzalez", "Marcus Rogen",
+])
+def test_plausible_non_customer_name_never_confidently_matched(plausible):
+    """The gibberish guard only ever probed gibberish. A REAL-looking name that belongs to
+    nobody on file is the dangerous case: it used to be returned as a certain match, putting
+    the caller into the verification flow for someone else's order.
+
+    All of these sit at 0.46-0.67 whole-name similarity to their nearest record — far enough
+    to be a different person, which is exactly the band the floor now rejects."""
+    best, _sugg = main.smart_name_match(plausible, _ROSTER)
+    assert best is None, "%r confidently matched %r" % (plausible, best)
+
+
+@pytest.mark.parametrize("near,record", [("Janet Crespi", "Janae Crespo"),
+                                         ("Miles Harden", "Miles Haider")])
+def test_near_variant_still_matches_by_design(near, record):
+    """DELIBERATE, and the boundary of what the matcher can do. These sit at ~0.83 whole-name
+    similarity — indistinguishable by string distance from the real typos above (Kennedy Braun
+    0.85, Casey Nguyan 0.92), so any floor that rejected them would strand genuine callers.
+
+    That is acceptable precisely because the matcher is a CONVENIENCE, not the security
+    boundary: the agent still only says "I've got an order under X - is that you?", and
+    nothing about the order is revealed until _verify_answer passes. A wrong person here
+    costs one 'no, that's not me', not a disclosure."""
+    assert main.smart_name_match(near, _ROSTER)[0] == record
+    red = main._redact_lookup(main._build_order_result(near, *_roster_rows()))
+    for pii in main._PII_FIELDS:                 # still nothing beyond the name to confirm
+        assert pii not in red, pii
+
+
+def test_real_typos_still_match_after_the_floor():
+    """The floor must not cost genuine callers their match."""
+    assert main.smart_name_match("Diya Guta", _ROSTER)[0] == "Diya Gupta"
+    assert main.smart_name_match("Kennedy Braun", _ROSTER)[0] == "Kennedy Brown"
+    assert main.smart_name_match("Jordan Miles", _ROSTER)[0] == "Jordan Miles"
+    assert main.smart_name_match("Casey Nguyan", _ROSTER)[0] == "Casey Nguyen"
+
+
+def _roster_rows():
+    D = [{"Student": n, "ID": "#8%04d-TS" % i, "Service": "Summer Storage", "Building": "Marlow",
+          "Room": str(100 + i), "Date": "5/6/2026", "Phone": "555%07d" % i, "Status": "Booked"}
+         for i, n in enumerate(_ROSTER)]
+    S = [{"Student Name": n, "Order#:": "8%04d-TS" % i, "Building": "Marlow"}
+         for i, n in enumerate(_ROSTER)]
+    return D, S
+
+
+@pytest.mark.parametrize("miss", ["Jamie Rivers", "Jaime Rivera", "John Smith", "Marcus Rogen"])
+def test_near_miss_never_discloses_other_customers_names(miss):
+    """A caller who misspeaks a name must not hear three real students' names. Checked on the
+    raw record, the redacted phone payload AND the chat reply — all three used to leak."""
+    D, S = _roster_rows()
+    rec = main._build_order_result(miss, D, S)
+    assert rec.get("status") in ("confirm", "not_found")
+    assert rec.get("suggestions") == []
+    red = main._redact_lookup(rec)
+    chat, _ = main._lookup_flow(miss, {}, D, S)
+    for name in _ROSTER:
+        assert name not in json.dumps(rec), "raw record leaked %s" % name
+        assert name not in json.dumps(red), "redacted lookup leaked %s" % name
+        assert name not in chat, "chat reply leaked %s" % name
+    assert "spell" in chat.lower()
+
+
+def test_near_miss_keeps_a_pii_free_signal():
+    """Dropping the names must not drop the fact that it was a near miss (QA/logging)."""
+    D, S = _roster_rows()
+    rec = main._build_order_result("Jamie Rivers", D, S)
+    assert rec["status"] == "confirm" and rec.get("near_miss", 0) >= 1
+
+
+def test_caller_id_confirm_still_lists_names_from_their_own_number(monkeypatch):
+    """Regression guard on the FIX: names matched by the caller's OWN phone number are a
+    different case — the caller holds that number, so offering them is legitimate and must
+    keep working. Only the fuzzy NAME path is silenced."""
+    import asyncio
+    D = [{"Student": "Alex Reed", "ID": "#1-TS", "Service": "Summer Storage", "Building": "Marlow",
+          "Phone": "3145551234", "Date": "5/6/2026"},
+         {"Student": "Sam Reed", "ID": "#2-TS", "Service": "Summer Storage", "Building": "Marlow",
+          "Phone": "3145551234", "Date": "5/6/2026"}]
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else []
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+    r = asyncio.run(main.do_lookup_student("", phone="314-555-1234"))
+    assert r["status"] == "confirm"
+    assert set(r["suggestions"]) == {"Alex Reed", "Sam Reed"}
 
 
 # ---- a non-building SENTENCE must never satisfy the building check (false-accept guard) ----
@@ -832,3 +930,44 @@ def test_successful_verification_clears_strikes():
     main._VERIFY_STRIKES[n] = [2, time.time()]
     main._verify_clear(n)
     assert n not in main._VERIFY_FAILS and main._strikes(n) == 0
+
+
+def test_sample_ids_verifiers_require_an_ARMED_key(monkeypatch):
+    """The staff test panel may show a verifier, but only when the gate is genuinely armed.
+
+    _authorized() alone is NOT sufficient: with API_SECRET unset it returns True for the entire
+    internet, which is precisely the configuration this data must never be served in. So the
+    verifiers view must fail CLOSED whenever the key is unset, even if a caller asks for it.
+    """
+    import asyncio, json
+    D = [{"Student": "Jamie Rivers", "ID": "#90001-TS", "Service": "Summer Storage",
+          "Building": "Northgate B", "Room": "1205", "Phone": "5550100200"}]
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else []
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+
+    class _Q:
+        def __init__(self, q, h):
+            self.query_params, self.headers = q, h
+
+    def call(q, h, secret):
+        monkeypatch.setattr(main, "API_SECRET", secret)
+        return asyncio.run(main.sample_ids(_Q(q, h)))[1][0]
+
+    # gate UNSET (today's production) — asking for verifiers must not produce them
+    r = call({"verifiers": "1"}, {}, "")
+    assert "verify" not in r["sample"][0] and r.get("verifiers") == "locked"
+    r = call({"verifiers": "1"}, {"x-utrucking-key": "guessed"}, "")
+    assert "verify" not in r["sample"][0]
+
+    # gate ARMED, wrong/absent key → the whole endpoint 401s
+    assert call({"verifiers": "1"}, {}, "s3cret").get("status") == "unauthorized"
+
+    # gate ARMED + correct key → verifiers appear, but never the full phone number
+    r = call({"verifiers": "1"}, {"x-utrucking-key": "s3cret"}, "s3cret")
+    v = r["sample"][0]["verify"]
+    assert v["phone_last4"] == "0200" and "5550100200" not in json.dumps(r)
+    assert set(v) == {"building", "phone_last4", "order_id"}
+
+    # armed + correct key but NOT requested → still names only
+    assert "verify" not in call({}, {"x-utrucking-key": "s3cret"}, "s3cret")["sample"][0]
