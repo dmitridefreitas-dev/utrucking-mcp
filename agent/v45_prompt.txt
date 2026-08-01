@@ -49,7 +49,7 @@ IF status is "confirm" (a near miss - no exact match):
 - Say the message field out loud - it asks them to spell their last name. Ask them to spell it just ONCE, then call lookup_student again with that spelling.
 - Do NOT guess names, do NOT offer names, and do NOT say how many near matches there were.
 - If it still comes back confirm or not_found after the spelling, say "No problem, let me connect you with our team" and call transfer_to_office.
-- EXCEPTION - if the result DOES contain a suggestions list, it means we matched the caller's OWN phone number, so those names are safe to offer: "I see a couple of names on this number - which one is you?"
+- EXCEPTION - this applies ONLY when you looked the caller up by their phone number and passed NO name at all (caller ID). In that one case a suggestions list means every name on it belongs to the number the caller is already holding, so you may offer them: "I see a couple of names on this number - which one is you?" If you passed a name to lookup_student, this exception does NOT apply: read no name back, whatever the result contains.
 
 IF status is "not_found":
 - Say the message field out loud (it asks them to spell their last name). Ask them to spell it just ONCE, then call lookup_student again with that spelling.
