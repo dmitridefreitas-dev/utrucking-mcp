@@ -265,12 +265,78 @@ async def do_lookup_student(name_heard: str, order_hint: str = "", phone: str = 
                 res["identified_by"] = "phone"    # still identity-verified before any reveal
             return res
         if len(names) > 1:
-            return {"status": "confirm", "suggestions": names[:4],
-                    "message": "I see a few names on this number — %s. Which one is this?" % ", ".join(names[:4])}
+            # NEVER return the names here. This branch is only ever reached with a number the
+            # caller SPOKE: nothing in this service supplies the inbound caller ID (there is no
+            # from_number/ANI anywhere), so `phone` has exactly one source — digits read aloud.
+            # A number someone reads out is not evidence they hold it, and the prompt's "confirm"
+            # handler tells the agent to say `message` out loud, so returning names here handed
+            # a stranger a ready-to-speak list of real customers. Round 19 closed that door for
+            # name lookups; this is the same door on the phone rung.
+            return {"status": "confirm", "suggestions": [], "near_miss": len(names),
+                    "message": ("Several orders share that number, so I can't tell which is yours. "
+                                "What's the name on the order?")}
         return {"status": "not_found",
                 "message": "I couldn't find an order under that number. What's the name on the order?"}
 
     return _build_order_result(name_heard, dispatch_rows, service_rows, order_hint)
+
+
+# ── Why a verification did not pass ──────────────────────────────────
+# Three very different outcomes used to come back looking alike — a wrong answer, a lockout, and the
+# sheets being unreachable are all {"verified": false, "message": "..."}. A voice agent reading only
+# the prose cannot reliably tell them apart, and on a live call one did the worst possible thing with
+# a refusal: it asked "is that you?", sent the caller's "Yes" here as the verifier (it never asked for
+# the detail verify_with named), got the refusal, and told the caller "I'm having trouble reaching
+# your records right now" before transferring to a human. The records were fine. The caller was
+# simply never asked, and the agent turned that into an outage.
+#
+# `reason` is the machine-readable half of the answer, so a prompt can branch on a value instead of
+# paraphrasing a sentence. Exactly one is set on every non-verified return of do_get_order_details /
+# do_verify_identity, and only "error" ever means the system is at fault.
+_R_UNVERIFIED = "unverified"          # identity not established: wrong answer, or a name we can't resolve
+_R_NO_ANSWER = "no_answer_supplied"   # no verifier was ever obtained from the caller — ASK, then retry
+_R_LOCKED = "locked"                  # brute-force lockout; a refusal, not a records problem
+_R_ERROR = "error"                    # the records really are unreachable — the ONLY "system is down"
+
+# Words that CONFIRM A NAME ("is that you?" → "Yes") rather than answer the verifier question, plus
+# the empty string. Matched against the WHOLE normalised answer only: "yes, Danforth" or "yeah 0200"
+# carries a real guess and stays a real attempt. Every entry is a bare courtesy word that cannot hold
+# information about an order — which is what makes exempting them from the brute-force counter safe.
+_NON_ANSWERS = {
+    "", "yes", "yeah", "yep", "yup", "ya", "yes it is", "yes i am", "yes thats me", "yes that is me",
+    "yes maam", "yes sir", "yes please", "thats me", "that is me", "this is me", "its me", "it is me",
+    "speaking", "i am", "im", "correct", "thats correct", "that is correct", "right", "thats right",
+    "sure", "ok", "okay", "mhm", "mm hm", "uh huh", "uhhuh", "confirmed", "affirmative",
+}
+
+
+def _norm_answer(text):
+    """Lowercase, drop apostrophes, collapse everything else to single spaces:
+    "Yes, that's me!" -> "yes thats me"."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ",
+                           re.sub(r"['’ʼ]", "", (text or "").lower())).split())
+
+
+def _is_non_answer(text):
+    """True when nothing that could possibly be a verifier was supplied — an empty string or a bare
+    name-confirmation word.
+
+    This only ever LABELS a verification that has already failed; it never decides one. _verify_answer
+    runs first and its verdict is untouched, so a record whose building genuinely contains one of these
+    words ("Wright Hall" vs "right") still verifies exactly as it did before. That ordering is the
+    whole reason this can be a fixed word list instead of a careful exclusion of real verifier values."""
+    return _norm_answer(text) in _NON_ANSWERS
+
+
+def _ask_again(base):
+    """The 'you haven't asked yet' reply, for both tools. Names the detail to ask for (the same canned
+    phrase _redact_lookup already hands out — never a value) and says outright that the record is fine,
+    so the sentence cannot be paraphrased into an outage."""
+    ask = _verify_prompt(base)
+    return {"verified": False, "reason": _R_NO_ANSWER, "verify_with": ask,
+            "message": ("No verifier was supplied — that only confirms the name. Nothing is wrong "
+                        "with the record: ask the caller for %s, then call this tool again with "
+                        "what they say." % ask)}
 
 
 async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "") -> dict:
@@ -279,13 +345,13 @@ async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "")
     uses (fuzzy/partial building, phone last-4, or order number). Returns only a verified
     boolean + the confirmed name — never any order PII — so it's a clean gate for the phone."""
     if not (name_heard or "").strip():
-        return {"status": "not_found", "verified": False,
+        return {"status": "not_found", "verified": False, "reason": _R_UNVERIFIED,
                 "message": "I didn't catch a name to verify."}
     try:
         dispatch_rows, service_rows = await asyncio.gather(
             fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
     except Exception:
-        return {"status": "error", "verified": False,
+        return {"status": "error", "verified": False, "reason": _R_ERROR,
                 "message": "I'm having trouble reaching our records right now."}
     # Check the answer against EVERY order under this name (via _verify_pick), exactly like
     # get_order_details and the chat — so a shared-name / multi-order caller is verified against the
@@ -293,14 +359,17 @@ async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "")
     # never any PII, so it stays a clean gate.
     match, base = _verify_pick(name_heard, answer, dispatch_rows, service_rows, order_hint)
     if base.get("status") != "found":
-        # pass confirm/not_found through so the agent can re-ask or offer suggestions
+        # pass confirm/not_found through so the agent can re-ask or offer suggestions. Empty sheets
+        # surface as status "error" from _build_order_result — the one case here that IS a records
+        # failure; an unresolvable name is not, and must not be reported as one.
         return {"status": base.get("status", "not_found"), "verified": False,
+                "reason": _R_ERROR if base.get("status") == "error" else _R_UNVERIFIED,
                 "confirmed_name": base.get("confirmed_name", ""),
                 "suggestions": base.get("suggestions", []),
                 "message": base.get("message", "")}
     nm = " ".join((base.get("confirmed_name") or name_heard).lower().split())
     if _verify_locked(nm):                                    # same brute-force guard as the chat
-        return {"status": "found", "verified": False, "locked": True,
+        return {"status": "found", "verified": False, "locked": True, "reason": _R_LOCKED,
                 "confirmed_name": base.get("confirmed_name", ""),
                 "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
     if match is None:
@@ -314,18 +383,24 @@ async def do_verify_identity(name_heard: str, answer: str, order_hint: str = "")
             match, _ = _verify_pick(name_heard, answer, d2, s2, order_hint)
         except Exception:
             pass
-    verified = match is not None
-    if verified:
+    if match is not None:
         _verify_clear(nm)
-    else:
-        _verify_fail(nm)
-    return {"status": "found", "verified": bool(verified),
+        return {"status": "found", "verified": True,
+                "confirmed_name": base.get("confirmed_name", ""),
+                "message": "Identity confirmed."}
+    if _is_non_answer(answer):
+        # Nobody guessed anything, so nothing is banked against the name. The counter is shared with
+        # the chat and is the caller's, not the agent's: five "Yes"es from a confused agent must not
+        # spend a real customer's five attempts (that is this exact bug, five times over). Checked
+        # AFTER the fresh re-check above so the label can never change what verifies.
+        return {"status": "found", "confirmed_name": base.get("confirmed_name", ""), **_ask_again(base)}
+    _verify_fail(nm)
+    return {"status": "found", "verified": False, "reason": _R_UNVERIFIED,
             "confirmed_name": base.get("confirmed_name", ""),
-            "message": ("Identity confirmed." if verified
-                        else "That detail doesn't match what we have on file.")}
+            "message": "That detail doesn't match what we have on file."}
 
 
-def _verify_field(rec):
+def _verify_field(rec, exclude=()):
     """Which detail to ASK for, strongest first. Single source of truth so the phone and the web
     chat ask for the same thing (parity).
 
@@ -333,11 +408,19 @@ def _verify_field(rec):
     but the building is a weak secret — there are only ~60 of them across the whole customer base,
     the top 5 cover ~30% of orders, and a classmate simply knows which dorm someone lives in. The
     phone's last 4 digits are a 10,000-value space and are genuinely private, so that is what we
-    ask for whenever the order has a phone on file."""
-    if rec.get("phone"):
+    ask for whenever the order has a phone on file.
+
+    `exclude` exists for one case: the caller reached this record by reading a phone number out
+    loud. Asking them for the last 4 digits of the number they just recited is not a question —
+    it verifies whoever knows the number, which would turn "I know your phone number" into a full
+    name, building and room. On that path phone is excluded and we ask for something they have not
+    already said."""
+    if rec.get("phone") and "phone" not in exclude:
         return "phone"
-    if rec.get("order_id"):
+    if rec.get("order_id") and "order_id" not in exclude:
         return "order_id"
+    if rec.get("building") and "building" not in exclude:
+        return "building"
     return "building"
 
 
@@ -383,6 +466,20 @@ def _redact_lookup(rec):
            "verify_with": _verify_prompt(rec),
            "message": ("I found an order under %s. Confirm the name, then verify their identity "
                        "with get_order_details before sharing any detail." % rec.get("confirmed_name", ""))}
+    if rec.get("identified_by") == "phone":
+        # Resolved from a number the caller SPOKE (the only kind this service ever receives).
+        # do_lookup_student set this flag and the old whitelist dropped it, so the agent could not
+        # tell a phone-sourced hit from a name-sourced one and the default message actively told it
+        # to "Confirm the name" — i.e. to speak a stranger's name back. Carry the flag AND replace
+        # the instruction, so this is enforced by data rather than by the prompt remembering.
+        out["identified_by"] = "phone"
+        # Never ask for the phone here: they just read that number out, so its last 4 digits prove
+        # nothing about who is holding the handset.
+        out["verify_with"] = _VERIFY_ASK_VOICE[_verify_field(rec, exclude=("phone",))]
+        out["message"] = ("I have an order on that number. Do NOT say the name out loud - a number "
+                          "the caller read out is not proof they hold it. Ask them for %s, and do "
+                          "NOT accept the phone number for this one - they already said it."
+                          % out["verify_with"])
     if rec.get("needs_order_choice") and not rec.get("distinct_people"):
         # ONE person with several orders: let the agent disambiguate by service/date only (no order
         # numbers) before verifying. If the "orders" actually belong to DIFFERENT people who share a
@@ -431,6 +528,18 @@ def _verify_pick(name_heard, answer, dispatch_rows, service_rows, order_hint="")
         who.add(l4 or ("unknown:%s" % (r.get("order_id") or i)))
     if base.get("distinct_people") and len(who) > 1:
         return None, base
+    if len(matches) > 1 and len(who) == 1 and order_hint:
+        # Past the guard, every match answered the SAME verifier and resolves to ONE identity, so
+        # these are all the CALLER'S OWN orders — choosing between them is convenience, not
+        # disclosure. `base` was already scored against the caller's words by _build_order_result,
+        # so hand back that order when it is one of them. Without this a caller who says "the return
+        # delivery" gets matches[0] — an arbitrary one of their own orders — because the order_hint
+        # short-circuit at the top is skipped for anyone flagged distinct_people, which is exactly
+        # the caller who needs it: one person, several orders, more than one phone on file.
+        hinted = base.get("order_id")
+        for r in matches:
+            if hinted and r.get("order_id") == hinted:
+                return r, base
     return matches[0], base
 
 
@@ -440,19 +549,26 @@ async def do_get_order_details(name_heard: str, answer: str, order_hint: str = "
     filed under this name, and returns the full details of the ONE order it matches — only when
     verified; otherwise no PII. This is the gate that makes lookup_student safe to hand out."""
     if not (name_heard or "").strip():
-        return {"status": "not_found", "verified": False, "message": "I didn't catch a name."}
+        return {"status": "not_found", "verified": False, "reason": _R_UNVERIFIED,
+                "message": "I didn't catch a name."}
     try:
         dispatch_rows, service_rows = await asyncio.gather(
             fetch_csv_rows(DISPATCH_CSV_URL), fetch_csv_rows(SERVICE_CSV_URL))
     except Exception:
-        return {"status": "error", "verified": False,
+        return {"status": "error", "verified": False, "reason": _R_ERROR,
                 "message": "I'm having trouble reaching our records right now."}
     match, base = _verify_pick(name_heard, answer, dispatch_rows, service_rows, order_hint)
     if base.get("status") != "found":
-        return _redact_lookup(base)                      # confirm / not_found — never any detail
+        out = _redact_lookup(base)                       # confirm / not_found — never any detail
+        # Stamp the same contract on this path: every non-verified return says WHY. A name we
+        # couldn't resolve is "unverified" (ask the caller to spell it), not an outage — only an
+        # empty/unreadable sheet, which _build_order_result reports as status "error", is one.
+        out["verified"] = False
+        out["reason"] = _R_ERROR if base.get("status") == "error" else _R_UNVERIFIED
+        return out
     nm = " ".join((base.get("confirmed_name") or name_heard).lower().split())
     if _verify_locked(nm):                               # same brute-force guard as the chat verify step
-        return {"status": "found", "verified": False, "locked": True,
+        return {"status": "found", "verified": False, "locked": True, "reason": _R_LOCKED,
                 "confirmed_name": base.get("confirmed_name", ""),
                 "message": "Too many verification attempts. For security, please call the team at (314) 266-8878."}
     if match is None:
@@ -466,9 +582,18 @@ async def do_get_order_details(name_heard: str, answer: str, order_hint: str = "
             match, _ = _verify_pick(name_heard, answer, d2, s2, order_hint)
         except Exception:
             pass                                         # fresh re-check failed → fall through to normal miss
+    if match is None and _is_non_answer(answer):
+        # THE bug from the transcript: the agent asked "is that you?", the caller said "Yes", and that
+        # "Yes" was sent here as the verifier — the caller was never asked for the detail verify_with
+        # named. Nothing failed, so say what is actually true and what to do next, and bank NO failure:
+        # the counter is the caller's five attempts (shared with the chat), and an agent that repeats
+        # its own mistake must not lock a genuine customer out of both channels. Safe because the list
+        # is fixed courtesy words that carry no guess, and because this runs only after _verify_answer
+        # AND the fresh re-check have already said no — it re-words a refusal, it never grants one.
+        return {"status": "found", "confirmed_name": base.get("confirmed_name", ""), **_ask_again(base)}
     if match is None:
         _verify_fail(nm)
-        return {"status": "found", "verified": False,
+        return {"status": "found", "verified": False, "reason": _R_UNVERIFIED,
                 "confirmed_name": base.get("confirmed_name", ""),
                 "message": "That detail doesn't match what we have on file."}
     _verify_clear(nm)                                     # clear the counter on success, like the chat
@@ -508,6 +633,12 @@ def _pick_order_row(rows, hint):
 def _build_order_result(name_heard: str, dispatch_rows, service_rows, order_hint: str = "") -> dict:
     def clean(s: str) -> str:
         return " ".join((s or "").split())
+
+    # Cap the name before it reaches smart_name_match. difflib is O(n*m) against ~2.5k names, and
+    # nothing upstream bounded this: a 20k-character "name" posted to the unauthenticated /chat
+    # took ~8s and, on a single-threaded event loop, stalls the tool responses of live phone calls
+    # alongside it. No real name is anywhere near 80 characters.
+    name_heard = clean(name_heard)[:80]
 
     # Build deduplicated name list from both sheets
     name_to_source: dict[str, str] = {}
@@ -680,6 +811,21 @@ def _build_order_result(name_heard: str, dispatch_rows, service_rows, order_hint
         # single identity, so the ambiguity guard never fired and a shared name + a shared building
         # revealed a stranger's record (measured: 17 of 18 such clusters in live data). Count each
         # unidentifiable order as its own unknown identity so the guard fails CLOSED instead.
+        #
+        # KNOWN COST, investigated and deliberately kept. A real single customer with four orders —
+        # their own number on two, a parent's on a third, blank on the fourth — is flagged
+        # distinct_people here and is therefore never offered his own order list by _redact_lookup.
+        # He is one person and the flag says otherwise. It stays anyway, because nothing in these
+        # sheets separates "one student whose parent booked an order" from "two students who share a
+        # name": the columns are Student / Phone / Building / Room / Address / Service / Date, and
+        # the only ones that would merge those four orders are building, room and address — the
+        # WEAK, guessable attributes the gate already refuses to trust (a classmate knows your dorm).
+        # Merging on them would re-open exactly the disclosure Round 19 closed: shared name + shared
+        # building hands over a stranger's record. So the cost is paid in convenience — he verifies
+        # first, and _verify_pick then reveals only the order he actually proved (each of his real
+        # verifiers still works; the order_hint pass in _verify_pick gets him the RIGHT one of them).
+        # The clean fix is upstream, not here: give the sheets a stable per-customer key (email or a
+        # customer ID) and collapse on THAT. A second phone number will never be able to do this job.
         ident = set()
         for i, r in enumerate(distinct):
             l4 = _last4(clean(r.get("Phone") or ""))
@@ -694,6 +840,10 @@ def _build_order_result(name_heard: str, dispatch_rows, service_rows, order_hint
 
 
 def _extract_args(body: dict) -> dict:
+    # A JSON body is not necessarily an object. The callers only guard `await request.json()`,
+    # so a bare list/string/number/null used to raise straight out of here and 500 the endpoint.
+    if not isinstance(body, dict):
+        return {}
     if "args" in body and isinstance(body["args"], dict):
         return body["args"]
     return body
@@ -760,7 +910,10 @@ async def get_order_details_endpoint(request: Request):
                 "order_hint": "optional - service or month when they have multiple orders"}},
             "returns": {"status": "found | confirm | not_found | error",
                         "verified": "true | false",
-                        "note": "full order details are returned ONLY when verified is true"}
+                        "reason": "when verified is false: unverified | no_answer_supplied | locked | error",
+                        "note": "full order details are returned ONLY when verified is true. "
+                                "reason 'error' is the ONLY one that means the records are unreachable — "
+                                "'no_answer_supplied' means ask the caller for verify_with and call again"}
         })
     if not _authorized(request):
         return _unauthorized()
@@ -832,7 +985,8 @@ async def brand_icon(request: Request):
 
 
 @mcp.tool()
-async def lookup_student(name_heard: str, order_hint: str = "", phone: str = "") -> str:
+async def lookup_student(name_heard: str, order_hint: str | None = "",
+                         phone: str | None = "") -> str:
     """
     Look up a UTrucking student order by the name heard over the phone.
     Handles fuzzy/misspelled names. Returns a short message (name, order ID, service)
@@ -845,16 +999,30 @@ async def lookup_student(name_heard: str, order_hint: str = "", phone: str = "")
     Returns the confirmed name + which detail to verify, but NO order details — those come
     from get_order_details once the caller proves who they are.
     """
-    return json.dumps(_redact_lookup(await do_lookup_student(name_heard, order_hint, phone)))
+    # `| None` and the `or ""` are load-bearing, not defensive noise. Retell runs this agent with
+    # tool_call_strict_mode on, which makes the model send EVERY declared property — so an ordinary
+    # name lookup arrives as {"name_heard": "...", "order_hint": null, "phone": null}. Without null
+    # in the schema's type union, Pydantic rejects the call and the agent gets an MCP protocol error
+    # carrying no status and no reason: exactly the shapeless failure that made it tell a caller we
+    # were "having trouble reaching your records" when nothing was wrong.
+    return json.dumps(_redact_lookup(
+        await do_lookup_student(name_heard or "", order_hint or "", phone or "")))
 
 
 @mcp.tool()
-async def get_order_details(name_heard: str, answer: str, order_hint: str = "") -> str:
+async def get_order_details(name_heard: str, answer: str, order_hint: str | None = "") -> str:
     """Verify the caller, then reveal their order. Pass the confirmed name and the ONE detail the
     caller SAID to prove it's them — their building, the last 4 digits of their phone, or their
     order number. Returns the full order details only when verified is true; otherwise no details.
-    Never pass a detail you already know — it must be what the caller just told you."""
-    return json.dumps(await do_get_order_details(name_heard, answer, order_hint))
+    Never pass a detail you already know — it must be what the caller just told you.
+
+    When verified is false, `reason` says why, and only ONE of them means anything is wrong with us:
+      no_answer_supplied - you have not asked yet (e.g. you sent "Yes"). Ask for verify_with, call again.
+      unverified         - the caller's detail doesn't match. Ask them to try another detail.
+      locked             - too many attempts; give them the team's number.
+      error              - the records are genuinely unreachable. This is the ONLY reason you may
+                           tell the caller we're having trouble reaching their records."""
+    return json.dumps(await do_get_order_details(name_heard or "", answer or "", order_hint or ""))
 
 
 @mcp.custom_route("/verify_identity", methods=["POST", "GET"])
@@ -869,6 +1037,7 @@ async def verify_identity_endpoint(request: Request):
                 "order_hint": "optional - order # / service / month when they have multiple orders"}},
             "returns": {"status": "found | confirm | not_found | error",
                         "verified": "true | false",
+                        "reason": "when verified is false: unverified | no_answer_supplied | locked | error",
                         "confirmed_name": "exact name from records"}
         })
     if not _authorized(request):
@@ -883,13 +1052,18 @@ async def verify_identity_endpoint(request: Request):
 
 
 @mcp.tool()
-async def verify_identity(name_heard: str, answer: str, order_hint: str = "") -> str:
+async def verify_identity(name_heard: str, answer: str, order_hint: str | None = "") -> str:
     """Verify a caller before revealing any order detail. Pass the confirmed name and the ONE
     detail they gave to prove it's them — their building, the last 4 digits of their phone, or
     their order number. Returns verified: true/false using the same tolerant matching as the
     chat (a slightly misspelled or partial building still passes; a wrong detail fails). Only
-    read out order details when verified is true."""
-    return json.dumps(await do_verify_identity(name_heard, answer, order_hint))
+    read out order details when verified is true.
+
+    When verified is false, `reason` is one of no_answer_supplied (you haven't asked the caller for
+    verify_with yet — ask, then call again), unverified (their detail doesn't match), locked (too
+    many attempts) or error. Only reason "error" means the records are unreachable; never describe
+    any of the others to the caller as a problem reaching their records."""
+    return json.dumps(await do_verify_identity(name_heard or "", answer or "", order_hint or ""))
 
 
 # ── Wave A/B/C engine endpoints ─────────────────────────────────────
@@ -1739,31 +1913,54 @@ _BLD_STOP = {
     "phone", "cell", "building", "pickup", "dorm", "hall", "room", "yes", "yeah", "okay", "sure",
     "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
     "hundred", "thousand", "confirm", "verify", "account", "info", "detail", "details", "status",
+    # Generic residence words. These are part of a building's NAME, so they must be excluded on
+    # BOTH sides of the comparison: "hall" appears in most building names, which made it a
+    # universal verifier (see the substring note in _building_matches).
+    # Deliberately NOT here: "village", "college", "park", "north"/"south"/"east"/"west". Each of
+    # those can be the distinctive part of a real name ("The Village East"), and stopping one would
+    # shrink that building's core to a single generic token instead of requiring the caller to say
+    # both. Only words that identify NOTHING belong in this list.
+    "house", "apt", "apartment", "apartments", "residence", "suite", "suites",
 }
 
 def _building_matches(text, building):
     """True if the caller's answer plausibly names their pickup building — tolerant of
     misspellings, a missing/extra section letter, and abbreviations, but WITHOUT letting an
-    unrelated sentence (e.g. a phone-number answer) sneak through on a coincidental word."""
+    unrelated sentence (e.g. a phone-number answer) sneak through on a coincidental word.
+
+    The building is the WEAKEST of the three verifiers (a classmate knows which dorm you live in),
+    so it has to be the strictest about what counts as saying it.
+
+    This used to open with `if t == b or t in b`. That second test was a bare substring against the
+    whole building name, and it ran before _BLD_STOP was applied to anything — so the single word
+    "hall" verified against every building whose name ends in "Hall", roughly 6 in 10 records, and
+    "house" covered most of the rest. Two words defeated the identity gate for nearly every customer,
+    needing no secret at all: an attacker only had to know a name, which the agent confirms aloud.
+    The fix is to drop the substring test and require the caller to cover EVERY distinctive word in
+    the building name (all(), not any()) — generic residence words being distinctive of nothing."""
     b = re.sub(r"[^a-z0-9]+", " ", (building or "").lower()).strip()
     t = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
     if not b or len(t) < 3:
         return False
     b_tokens, t_tokens = b.split(), t.split()
-    if t == b or t in b:                                  # exact, or answer is part of the building name
-        return True
-    b_core = [w for w in b_tokens if len(w) >= 3]         # caller said the whole building name (+ maybe extra)
-    if b_core and set(b_core).issubset(set(t_tokens)):
+    # What actually identifies this building — its name minus the generic words every building shares.
+    b_core = [w for w in b_tokens if len(w) >= 3 and w not in _BLD_STOP]
+    if not b_core:
+        return False        # nothing distinctive on file: the building cannot prove anyone's identity
+    if t == b or set(b_core).issubset(set(t_tokens)):
         return True
     # whole-string fuzzy ONLY for a short, building-like answer — a long sentence must not
-    # fuzzy-match a short building name
-    if len(t_tokens) <= 3 and difflib.SequenceMatcher(None, t, b).ratio() >= 0.8:
+    # fuzzy-match a short building name. Compare against the DISTINCTIVE core, not the full name:
+    # against the full name "a house" scores 0.82 on "park house" purely on the generic word.
+    if len(t_tokens) <= 3 and difflib.SequenceMatcher(None, t, " ".join(b_core)).ratio() >= 0.8:
         return True
-    # token level: a SUBSTANTIVE answer word (alphabetic, >=4 chars, not a filler/number word)
-    # closely matching a building word — the optional section letter stays optional
-    bt = [w for w in b_tokens if len(w) >= 4 and w.isalpha()]
+    # token level: EVERY distinctive building word must be covered by a SUBSTANTIVE answer word
+    # (alphabetic, >=4 chars, not a filler/number/residence word). The optional section letter and
+    # the generic words stay optional; the name itself does not.
+    bt = [w for w in b_core if len(w) >= 4 and w.isalpha()]
     tt = [w for w in t_tokens if len(w) >= 4 and w.isalpha() and w not in _BLD_STOP]
-    return any(difflib.SequenceMatcher(None, x, y).ratio() >= 0.85 for x in tt for y in bt)
+    return bool(bt) and all(
+        any(difflib.SequenceMatcher(None, x, y).ratio() >= 0.85 for x in tt) for y in bt)
 
 
 def _verify_answer(rec, text):

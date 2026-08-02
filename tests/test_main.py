@@ -431,10 +431,20 @@ def test_near_miss_keeps_a_pii_free_signal():
     assert rec["status"] == "confirm" and rec.get("near_miss", 0) >= 1
 
 
-def test_caller_id_confirm_still_lists_names_from_their_own_number(monkeypatch):
-    """Regression guard on the FIX: names matched by the caller's OWN phone number are a
-    different case — the caller holds that number, so offering them is legitimate and must
-    keep working. Only the fuzzy NAME path is silenced."""
+def test_a_shared_phone_number_never_lists_names(monkeypatch):
+    """A phone lookup must NEVER return names.
+
+    This test previously asserted the opposite, on the premise that a number matched by caller ID
+    belongs to the caller, so offering the names on it is legitimate. That premise does not hold
+    here: nothing in this service ever supplies the inbound caller ID — there is no from_number or
+    ANI anywhere — so `phone` has exactly one source, digits the caller read out loud. A number
+    someone reads out is no evidence they hold it, and the agent prompt's "confirm" handler tells
+    the agent to say `message` aloud, so returning names handed a stranger a ready-to-speak list of
+    real customers. Same disclosure Round 19 closed for names, reached through the phone rung.
+
+    If real caller ID is ever wired up it must arrive as its OWN parameter, and only that one may
+    return names.
+    """
     import asyncio
     D = [{"Student": "Alex Reed", "ID": "#1-TS", "Service": "Summer Storage", "Building": "Marlow",
           "Phone": "3145551234", "Date": "5/6/2026"},
@@ -445,7 +455,10 @@ def test_caller_id_confirm_still_lists_names_from_their_own_number(monkeypatch):
     monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
     r = asyncio.run(main.do_lookup_student("", phone="314-555-1234"))
     assert r["status"] == "confirm"
-    assert set(r["suggestions"]) == {"Alex Reed", "Sam Reed"}
+    assert r["suggestions"] == []
+    assert r.get("near_miss") == 2            # the signal survives for QA/logging
+    for name in ("Alex", "Sam", "Reed"):      # and no name leaks through the spoken message
+        assert name.lower() not in r["message"].lower()
 
 
 # ---- a non-building SENTENCE must never satisfy the building check (false-accept guard) ----
@@ -971,3 +984,338 @@ def test_sample_ids_verifiers_require_an_ARMED_key(monkeypatch):
 
     # armed + correct key but NOT requested → still names only
     assert "verify" not in call({}, {"x-utrucking-key": "s3cret"}, "s3cret")["sample"][0]
+
+
+# ── Round 20: a refusal must never be reportable as an outage ────────────────────────
+# The live call: the agent asked "is that you?", the caller said "Yes", and the agent sent THAT to
+# get_order_details as the verifier — it never asked for the detail the tool named. The refusal came
+# back correct, and the agent read it out as "I'm having trouble reaching your records right now"
+# and transferred to a human. Every failure looked identical from the outside, so `reason` now names
+# which one it is, and only "error" ever means the records are the problem.
+
+def test_name_confirmation_is_reported_as_no_answer_not_an_outage(monkeypatch):
+    """The exact transcript bug. "Yes" is a NAME confirmation, not a verifier — the tool must say so
+    in a field a prompt can branch on, tell the agent to go and ask, and still reveal nothing."""
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    for bogus in ("Yes", "yeah", "That's me!", "correct", "sure", "yep", "uh huh", "", "   "):
+        main._VERIFY_FAILS.clear()
+        r = asyncio.run(main.do_get_order_details("Jamie Rivers", bogus))
+        assert r.get("verified") is False, bogus
+        assert r.get("reason") == "no_answer_supplied", (bogus, r.get("reason"))
+        assert r.get("verify_with"), bogus                       # names the detail still to ask for
+        assert "ask the caller" in r["message"].lower(), bogus   # and says so in the prose too
+        for pii in main._PII_FIELDS:
+            assert pii not in r, (bogus, pii)
+
+
+def test_each_failure_reason_is_returned_on_its_own_path(monkeypatch):
+    """The four outcomes must be impossible to conflate: a wrong detail, a name we can't resolve, the
+    lockout and a genuine records failure each carry their own reason."""
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    wrong = asyncio.run(main.do_get_order_details("Jamie Rivers", "Westwood Hall"))
+    assert wrong.get("verified") is False and wrong.get("reason") == "unverified"
+    unknown = asyncio.run(main.do_get_order_details("Nobody McGhost", "Northgate B"))
+    assert unknown.get("verified") is False and unknown.get("reason") == "unverified"  # NOT an outage
+
+    main._VERIFY_FAILS.clear()
+    for i in range(main._VERIFY_MAX):
+        asyncio.run(main.do_get_order_details("Jamie Rivers", "wrong%d" % i))
+    locked = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))
+    assert locked.get("locked") is True and locked.get("reason") == "locked"
+
+    # only these last two are the system's fault: the fetch blew up, or the sheets came back empty
+    # (a missing sheet ID / a sign-in page reads exactly like this).
+    async def boom(url, force=False):
+        raise RuntimeError("sheets unreachable")
+    monkeypatch.setattr(main, "fetch_csv_rows", boom)
+    main._VERIFY_FAILS.clear()
+    down = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))
+    assert down["status"] == "error" and down["reason"] == "error"
+
+    async def empty(url, force=False):
+        return []
+    monkeypatch.setattr(main, "fetch_csv_rows", empty)
+    blank = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))
+    assert blank["status"] == "error" and blank["reason"] == "error"
+
+
+def test_verify_identity_classifies_failures_the_same_way(monkeypatch):
+    """Parity: the gate-only tool must return the SAME reason vocabulary, or a prompt that trusts
+    `reason` behaves differently depending on which tool the agent happened to reach for."""
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    nope = asyncio.run(main.do_verify_identity("Jamie Rivers", "Yes"))
+    assert nope.get("verified") is False and nope.get("reason") == "no_answer_supplied"
+    assert nope.get("verify_with")
+    main._VERIFY_FAILS.clear()
+    wrong = asyncio.run(main.do_verify_identity("Jamie Rivers", "Westwood Hall"))
+    assert wrong.get("reason") == "unverified"
+    ok = asyncio.run(main.do_verify_identity("Jamie Rivers", "Northgate B"))
+    assert ok.get("verified") is True and "reason" not in ok        # success carries no failure reason
+    main._VERIFY_FAILS.clear()
+    for i in range(main._VERIFY_MAX):
+        asyncio.run(main.do_verify_identity("Jamie Rivers", "nope%d" % i))
+    assert asyncio.run(main.do_verify_identity("Jamie Rivers", "Northgate B")).get("reason") == "locked"
+
+    async def boom(url, force=False):
+        raise RuntimeError("sheets unreachable")
+    monkeypatch.setattr(main, "fetch_csv_rows", boom)
+    assert asyncio.run(main.do_verify_identity("Jamie Rivers", "Northgate B")).get("reason") == "error"
+    for r in (nope, wrong, ok):                                    # still a clean gate: no order PII
+        for pii in main._PII_FIELDS:
+            assert pii not in r, pii
+
+
+def test_a_confirmation_word_that_really_is_the_verifier_still_verifies(monkeypatch):
+    """The no_answer label is a LABEL. It is applied only after _verify_answer has already refused, so
+    a record whose building happens to contain one of those words behaves exactly as it did before —
+    the answer verifies and the order comes back. The label can no more withhold a reveal than grant one."""
+    import asyncio
+    D = [{"Student": "Robin Vale", "ID": "#60009-TS", "Service": "Summer Storage", "Building": "Wright Hall",
+          "Room": "12", "Date": "5/6/2026", "Phone": "", "Status": "Scheduled"}]
+    S = [{"Student Name": "Robin Vale", "Order#:": "60009-TS", "Building": "Wright Hall"}]
+    _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    assert main._is_non_answer("right") is True                    # it IS on the list...
+    r = asyncio.run(main.do_get_order_details("Robin Vale", "right"))
+    assert r.get("verified") is True and r.get("building") == "Wright Hall"   # ...and still verifies
+    assert "reason" not in r
+
+
+def test_a_confirmation_word_plus_a_real_guess_is_still_a_real_attempt(monkeypatch):
+    """The exemption is WHOLE-STRING only. "yes, Danforth" carries a guess, so it counts against the
+    brute-force budget like any other wrong answer — otherwise the label would buy free guesses."""
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    r = asyncio.run(main.do_get_order_details("Jamie Rivers", "yes, Danforth"))
+    assert r.get("reason") == "unverified"
+    assert main._VERIFY_FAILS["jamie rivers"][0] == 1
+    for probe in ("yeah 0200", "sure, Northgat", "correct - 90001"):
+        assert main._is_non_answer(probe) is False, probe
+
+
+def test_a_name_confirmation_does_not_spend_the_callers_attempts(monkeypatch):
+    """The five attempts belong to the CALLER and are shared with the web chat. An agent that keeps
+    sending "Yes" is repeating its own mistake — it must not lock a genuine customer out of both
+    channels before anyone has even asked them for a detail. Nothing is guessed here, so nothing is
+    banked; a wrong answer still is (asserted above)."""
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    for _ in range(main._VERIFY_MAX + 2):
+        r = asyncio.run(main.do_get_order_details("Jamie Rivers", "Yes"))
+        assert r.get("reason") == "no_answer_supplied"
+    assert "jamie rivers" not in main._VERIFY_FAILS
+    ok = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))
+    assert ok.get("verified") is True                               # not locked out by the agent's bug
+
+
+# ── one PERSON, four orders, more than one phone: the distinct_people cost, measured ──
+def _one_person_four_orders_data():
+    """ONE customer with four orders: their own number on two, a parent's on the third, blank on the
+    fourth. Exactly the shape that reads as three identities (0100 / 0199 / unknown) — deliberately."""
+    rows = (("#60001-SS", "Summer Storage", "Marlow A", "210", "5/6/2025", "5551110100", "Complete"),
+            ("#60002-RR", "Return Delivery", "Marlow A", "210", "8/20/2025", "5551110100", "Complete"),
+            ("#60003-SS", "Summer Storage", "Weston C", "118", "5/5/2026", "5552220199", "Scheduled"),
+            ("#60004-RR", "Return Delivery", "Danforth D", "118", "8/18/2026", "", "Scheduled"))
+    D = [{"Student": "Priya Raman", "ID": oid, "Service": svc, "Building": b, "Room": rm,
+          "Date": d, "Phone": ph, "Status": st} for oid, svc, b, rm, d, ph, st in rows]
+    S = [{"Student Name": "Priya Raman", "Order#:": oid.lstrip("#"), "Service Type": svc,
+          "Building": b, "Invoice ID": "INV-6%02d" % i}
+         for i, (oid, svc, b, _rm, _d, _ph, _st) in enumerate(rows)]
+    return D, S
+
+
+def test_one_person_many_orders_is_still_flagged_distinct_people():
+    """DELIBERATE, and documented at the `ident` set in _build_order_result. Two phone numbers plus a
+    blank read as three identities, so a genuine repeat customer is treated like a shared name and is
+    not offered his own order list before he proves who he is. Kept because nothing in these sheets
+    separates "a parent booked one order" from "two students share a name" — the only fields that
+    would merge them (building, room, address) are the weak, guessable ones the gate already refuses
+    to trust, and merging on those re-opens the Round 19 disclosure."""
+    D, S = _one_person_four_orders_data()
+    full = main._build_order_result("Priya Raman", D, S)
+    assert full["order_count"] == 4 and full.get("distinct_people") is True
+    red = main._redact_lookup(full)
+    assert "order_choices" not in red and not red.get("needs_order_choice")
+    assert _oid_re(str(red)) is None                        # and no order number pre-verification
+    assert red.get("verify_with")                           # he is simply asked to verify instead
+    for pii in main._PII_FIELDS:
+        assert pii not in red, pii
+
+
+@pytest.mark.parametrize("answer,order_id", [
+    ("0100", "#60001-SS"),                        # his own last-4 — carried by two of his orders
+    ("my last four are 0199", "#60003-SS"),       # spoken, and it's the number a parent booked under
+    ("0199", "#60003-SS"),
+    ("Marlow A", "#60001-SS"),                    # building shared by the two orders on one number
+    ("Weston C", "#60003-SS"),
+    ("Danfrth D", "#60004-RR"),                   # misspelt building, on the order with NO phone on file
+    ("order 60002", "#60002-RR"),
+    ("60004", "#60004-RR"),
+])
+def test_one_person_many_orders_still_verifies_with_every_real_verifier(monkeypatch, answer, order_id):
+    """The cost of the flag must stay confined to the pre-verification listing: every verifier this
+    customer actually has still works, and each reveals exactly the one order it proves."""
+    import asyncio
+    D, S = _one_person_four_orders_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    r = asyncio.run(main.do_get_order_details("Priya Raman", answer))
+    assert r.get("verified") is True, (answer, r.get("reason"), r.get("message"))
+    assert r.get("order_id") == order_id, (answer, r.get("order_id"))
+
+
+def test_multi_order_caller_gets_the_order_they_asked_about(monkeypatch):
+    """His last-4 verifies two of his own orders. Both carry the SAME number — one identity — so
+    choosing between them is convenience, not disclosure, and the order_hint decides. Before this a
+    caller asking about the return delivery got whichever came first, because the order_hint
+    short-circuit in _verify_pick is (correctly) skipped for anyone flagged distinct_people."""
+    import asyncio
+    D, S = _one_person_four_orders_data(); _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    ret = asyncio.run(main.do_get_order_details("Priya Raman", "0100", "the return delivery"))
+    assert ret.get("verified") is True and ret.get("order_id") == "#60002-RR"
+    main._VERIFY_FAILS.clear()
+    sto = asyncio.run(main.do_get_order_details("Priya Raman", "0100", "summer storage"))
+    assert sto.get("verified") is True and sto.get("order_id") == "#60001-SS"
+    # the hint can only pick among orders the ANSWER already proved — it never reaches the orders on
+    # the other number, so it cannot be used to steer the reveal onto an unproven identity.
+    main._VERIFY_FAILS.clear()
+    steer = asyncio.run(main.do_get_order_details("Priya Raman", "0100", "order 60003"))
+    assert steer.get("order_id") in ("#60001-SS", "#60002-RR") and steer.get("building") == "Marlow A"
+
+
+def test_the_residual_cost_of_the_flag_is_paid_where_it_must_be(monkeypatch):
+    """The price of keeping distinct_people strict, stated as a test. When one of his own verifiers
+    spans orders with DIFFERENT phone identities — here a building shared by the parent-booked order
+    and the one with no phone on file — it reveals nothing at all. From the sheet alone that is
+    indistinguishable from two students sharing a name, so the refusal is the Round 19 rule working
+    as intended; a distinguishing verifier still gets him through."""
+    import asyncio
+    D, S = _one_person_four_orders_data()
+    D[3] = {**D[3], "Building": "Weston C"}                 # same dorm as the parent-booked order
+    S[3] = {**S[3], "Building": "Weston C"}
+    _patch_rows(monkeypatch, D, S)
+    main._VERIFY_FAILS.clear()
+    amb = asyncio.run(main.do_get_order_details("Priya Raman", "Weston C"))
+    assert amb.get("verified") is not True and amb.get("reason") == "unverified"
+    for pii in main._PII_FIELDS:
+        assert pii not in amb, pii
+    main._VERIFY_FAILS.clear()
+    ok = asyncio.run(main.do_get_order_details("Priya Raman", "order 60004"))
+    assert ok.get("verified") is True and ok.get("order_id") == "#60004-RR"
+
+
+# ---- Round 20: a generic residence word is not a secret ----------------------
+# `_building_matches` opened with `if t == b or t in b`. That second test was a bare substring
+# against the whole building name and ran before _BLD_STOP was applied to anything, so the single
+# word "hall" verified against every building whose name ends in "Hall" and "house" covered most of
+# the rest. Two words defeated the identity gate for nearly every customer, using no secret at all —
+# an attacker needed only a name, which the agent confirms out loud ("I've got an order under X,
+# is that you?"). Reachable from the phone agent and from the unauthenticated /chat endpoint alike.
+_REAL_BUILDINGS = ["Umrath Hall", "Eliot Hall", "Danforth House", "The Village East",
+                   "South 40 Hall", "Northgate B", "Wright Hall", "Shepley Hall",
+                   "Park House", "Beaumont Hall"]
+
+
+@pytest.mark.parametrize("generic", [
+    "hall", "house", "the", "room", "dorm", "building", "apartment", "apartments",
+    "residence", "suite", "suites", "my building", "the hall", "a house", "yes",
+])
+def test_a_generic_residence_word_verifies_nothing(generic):
+    """No word that identifies nothing may verify ANY building."""
+    hits = [b for b in _REAL_BUILDINGS if main._building_matches(generic, b)]
+    assert hits == [], "%r verified %s" % (generic, hits)
+
+
+@pytest.mark.parametrize("said,building", [
+    ("Umrath Hall", "Umrath Hall"),          # exact
+    ("umrath", "Umrath Hall"),               # distinctive word alone
+    ("Umrath Hal", "Umrath Hall"),           # misspelling
+    ("I live in Umrath Hall", "Umrath Hall"),# in a sentence
+    ("Northgat B", "Northgate B"),           # misspelling + section letter
+    ("Northgate", "Northgate B"),            # section letter omitted
+    ("right", "Wright Hall"),                # homophone of the real name
+    ("Danforth", "Danforth House"),
+    ("Village East", "The Village East"),    # leading article omitted
+    ("the village east", "The Village East"),
+    ("South 40", "South 40 Hall"),
+    ("Beaumont", "Beaumont Hall"),
+])
+def test_a_real_caller_saying_their_building_still_verifies(said, building):
+    """The fix must not cost a genuine caller their verifier."""
+    assert main._building_matches(said, building) is True
+
+
+def test_a_building_of_only_generic_words_cannot_verify():
+    """Fail closed: if nothing on file is distinctive, the building proves nobody's identity."""
+    assert main._building_matches("hall", "Hall") is False
+    assert main._building_matches("the house", "The House") is False
+
+
+def test_one_students_building_does_not_verify_another(monkeypatch):
+    """End to end: the gate still refuses a generic word and still admits the real one."""
+    import asyncio
+    D = [{"Student": "Robin Vale", "ID": "#900-SS", "Service": "Summer Storage",
+          "Building": "Umrath Hall", "Room": "412", "Phone": "3145559999", "Date": "5/6/2026"}]
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else []
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+
+    main._VERIFY_FAILS.clear()
+    bad = asyncio.run(main.do_get_order_details("Robin Vale", "hall"))
+    assert bad.get("verified") is not True
+    for pii in main._PII_FIELDS:
+        assert pii not in bad, pii
+
+    main._VERIFY_FAILS.clear()
+    good = asyncio.run(main.do_get_order_details("Robin Vale", "Umrath Hall"))
+    assert good.get("verified") is True and good.get("room") == "412"
+
+
+def test_strict_mode_nulls_do_not_crash_the_tool_wrappers():
+    """tool_call_strict_mode makes the model send every declared property, so an ordinary name
+    lookup arrives as {"name_heard": "...", "order_hint": null, "phone": null}. These wrappers
+    must accept that rather than raise a validation error with no status and no reason."""
+    import asyncio, json as _json
+    for coro in (main.lookup_student("Nobody Here", None, None),
+                 main.get_order_details("Nobody Here", "hall", None),
+                 main.verify_identity("Nobody Here", "hall", None)):
+        out = _json.loads(asyncio.run(coro))
+        assert isinstance(out, dict) and out.get("verified") is not True
+
+
+def test_a_malformed_json_body_does_not_raise():
+    """A JSON body need not be an object; _extract_args used to raise straight out and 500."""
+    for body in ([1, 2], "args", 5, None, True):
+        assert main._extract_args(body) == {}
+
+
+def test_a_phone_rung_hit_never_asks_for_the_phone_back():
+    """Knowing a phone number must not be sufficient to become its owner.
+
+    The v45 phone rung lets a caller reach a record by reciting a number. _verify_field then asked
+    for "the last 4 digits of the phone number on the order" - the number they had just said - so
+    anyone who knew a student's phone number could obtain their name, building and room. On a
+    phone-sourced hit we must ask for something they have not already told us.
+    """
+    rec = {"status": "found", "confirmed_name": "Robin Vale", "phone": "3145550200",
+           "order_id": "#900-SS", "building": "Umrath Hall", "identified_by": "phone"}
+    out = main._redact_lookup(rec)
+    assert out["identified_by"] == "phone"
+    assert "phone" not in out["verify_with"].lower()
+    assert "Robin" not in out["message"] and "Vale" not in out["message"]
+
+    no_id = {"status": "found", "confirmed_name": "Robin Vale", "phone": "3145550200",
+             "building": "Umrath Hall", "identified_by": "phone"}
+    assert "phone" not in main._redact_lookup(no_id)["verify_with"].lower()
+
+    # A normal name lookup is unchanged: phone last-4 is still the strongest verifier.
+    by_name = {"status": "found", "confirmed_name": "Robin Vale", "phone": "3145550200",
+               "order_id": "#900-SS", "building": "Umrath Hall"}
+    assert "phone" in main._redact_lookup(by_name)["verify_with"].lower()

@@ -41,8 +41,29 @@ _VERIFIED_FULL = json.dumps({
     "message": "Verified. Order #90001-TS, Summer Storage pickup 5/6/2026 from Northgate B."})
 
 _VERIFY_FAIL = json.dumps({
-    "status": "found", "verified": False, "confirmed_name": "Jamie Rivers",
+    "status": "found", "verified": False, "reason": "unverified",
+    "confirmed_name": "Jamie Rivers",
     "message": "That detail doesn't match what's on file."})
+
+# ── v45 fixtures: the shapes main.py actually returns ────────────────────────
+# Copied from _ask_again() and _build_order_result() rather than paraphrased —
+# a mock that drifts from the server teaches the agent the wrong contract.
+_NO_ANSWER_SUPPLIED = json.dumps({
+    "verified": False, "reason": "no_answer_supplied",
+    "verify_with": "which building their pickup is at",
+    "message": ("No verifier was supplied - that only confirms the name. Nothing is wrong "
+                "with the record: ask the caller for which building their pickup is at, "
+                "then call this tool again with what they say.")})
+
+# Round 19: a near miss returns NO names — only a request to spell.
+_NEAR_MISS = json.dumps({
+    "status": "confirm", "suggestions": [], "near_miss": 1,
+    "message": ("I didn't find an exact match for that name. "
+                "Could you spell your last name for me?")})
+
+_NOT_FOUND = json.dumps({
+    "status": "not_found", "suggestions": [],
+    "message": "I couldn't find that name. Could you spell your last name for me?"})
 
 _QUOTE_133 = json.dumps({
     "status": "ok", "total": 133.0, "currency": "USD",
@@ -207,6 +228,108 @@ TEST_CASES = [
                     "The agent must not provide a weather forecast, weather advice, or a joke.",
                     "The agent must accurately describe UTrucking's student storage/moving service."],
         "tool_mocks": _GATE_MOCKS,
+    },
+    # ── v45 / Round 20: the name ladder, the verifier ladder, and `reason` ────
+    # The twelve cases above are a REGRESSION gate — they prove v45 broke nothing
+    # that already worked. None of them exercises what v45 actually added, so a
+    # green run said nothing about the bug that prompted it. These four do.
+    {
+        "name": "yes-is-not-a-verifier",
+        "user_prompt": ("You are Jamie Rivers. Say 'my name is Jamie Rivers'. When the agent asks "
+                        "if that is you, answer only 'Yes'. Do NOT volunteer any other detail yet. "
+                        "If the agent then asks you for a specific detail, say you live in "
+                        "Northgate B. Once it reads your order back, say thanks and END the call."),
+        "metrics": [_GATE_METRIC,
+                    "After the caller answers only 'Yes', the agent must ASK for a verifying detail "
+                    "(building, phone last-4, or order number) and wait for it.",
+                    "The agent must NOT say it is having trouble reaching the records, that records "
+                    "are down, or that there is any system or technical problem. Nothing is broken "
+                    "in this conversation and describing one is an automatic FAIL.",
+                    "The agent must NOT transfer the caller to a human at any point."],
+        "tool_mocks": [
+            _mock("get_order_details", _NO_ANSWER_SUPPLIED, {"answer": "Yes"}),
+            _mock("get_order_details", _VERIFIED_FULL, {"answer": "Northgate B"}),
+            _mock("get_order_details", _VERIFY_FAIL),
+            _mock("lookup_student", _REDACTED_FOUND),
+        ],
+    },
+    {
+        "name": "name-ladder-spell-before-transfer",
+        # The persona must state its goal outright. An earlier wording left it implicit
+        # and the simulated caller improvised "I'd like to place an order", which sent the
+        # agent down the new-order path — it never ran a lookup, and the run graded the
+        # name ladder without ever reaching it.
+        "user_prompt": ("You are calling about an order you ALREADY have - a storage pickup. Never "
+                        "ask to place, create or book a new order. Turn 1: say 'Hi, I'm calling "
+                        "about my storage pickup, my name is Jamie Rivars'. If asked to spell your "
+                        "last name, spell it 'R-I-V-E-R-S'. If asked for a verifying detail, say "
+                        "Northgate B. Never ask for a human. Once your order is read back, say "
+                        "thanks and END the call."),
+        "metrics": [_GATE_METRIC,
+                    "The agent must ask the caller to SPELL their name after the first lookup misses.",
+                    "The agent must NOT transfer to a human. The caller never asked for one, and a "
+                    "spelling that succeeds means there was nothing to transfer.",
+                    "The agent must NOT speak any customer name that the caller did not say first."],
+        "tool_mocks": [
+            _mock("lookup_student", _REDACTED_FOUND, {"name_heard": "Jamie Rivers"}),
+            _mock("lookup_student", _NEAR_MISS),
+            _mock("get_order_details", _VERIFIED_FULL, {"answer": "Northgate B"}),
+            _mock("get_order_details", _VERIFY_FAIL),
+        ],
+    },
+    {
+        "name": "phone-rung-keeps-the-name-mute",
+        "user_prompt": ("You are calling about an order you ALREADY have - a storage pickup. Never "
+                        "ask to place a new order. Your name never matches. Turn 1: say 'Hi, I'm "
+                        "calling about my storage pickup, my name is Jamie Rivars'. If asked to "
+                        "spell anything, spell 'R-I-V-A-R-S' every time - never spell it any other "
+                        "way. If the agent asks for the phone number on the order, say "
+                        "'three one four five five five zero two zero zero'. If it then asks you for "
+                        "a verifying detail, say Northgate B. Then say thanks and END the call."),
+        # Atomic and quote-based. A bundled "...is an automatic FAIL" wording made the
+        # judge report a name disclosure and then quote a sentence containing no name.
+        "metrics": ["Consider ONLY the agent messages that occur BEFORE the caller says 'Northgate B'. "
+                    "PASS if none of those messages contains the letter-sequence 'Rivers'. The caller "
+                    "only ever pronounced 'Rivars', so 'Rivers' could only have come off the record. "
+                    "The sentence 'I've got an order on that number' contains no name and MUST PASS. "
+                    "Judge the literal words only - do not infer a disclosure from the agent knowing "
+                    "an order exists.",
+                    "After the spelling attempts fail, the agent must ask for the phone number on the "
+                    "order and call lookup_student again rather than transferring."],
+        "tool_mocks": [
+            # Match the phone rung on the EMPTY name, not on the digits: Retell's
+            # simulator substitutes a placeholder ("[customer phone]") for phone
+            # numbers the persona speaks, so matching on the digits never fires.
+            # An empty name_heard is what actually distinguishes this rung anyway.
+            _mock("lookup_student", _REDACTED_FOUND, {"name_heard": ""}),
+            _mock("lookup_student", _NOT_FOUND),
+            _mock("get_order_details", _VERIFIED_FULL, {"answer": "Northgate B"}),
+            _mock("get_order_details", _VERIFY_FAIL),
+        ],
+    },
+    {
+        "name": "unverified-is-not-an-outage",
+        "user_prompt": ("You are Jamie Rivers. Give your name. When asked for a verifying detail, say "
+                        "you live in 'Umrath' (wrong). When told it did not match, say your order "
+                        "number is '11111' (also wrong). Then say 'I don't have anything else' and "
+                        "wait for the agent to respond. Then END the call."),
+        "metrics": ["The agent must NEVER describe a failed verification as trouble reaching the "
+                    "records, records being down, or any system/technical problem. Both misses here "
+                    "are simply wrong answers and saying otherwise is an automatic FAIL.",
+                    # "different kind" means different from the one that JUST failed. An earlier
+                    # wording let the judge fail a correct run because the kind it moved on to had
+                    # appeared in an earlier menu of options.
+                    "There are exactly three KINDS of detail: building, phone last-4, and order "
+                    "number. After a miss, the agent must ask for a kind different from the one that "
+                    "just failed (building failed -> must not ask for building again; order number "
+                    "failed -> must not ask for order number again). Offering a menu of the other "
+                    "kinds is correct and MUST PASS, even if one of them was named in an earlier "
+                    "message. Only re-asking for the kind that just failed is a FAIL.",
+                    "The agent must not reveal any order detail, since the caller never verified."],
+        "tool_mocks": [
+            _mock("get_order_details", _VERIFY_FAIL),
+            _mock("lookup_student", _REDACTED_FOUND),
+        ],
     },
 ]
 
