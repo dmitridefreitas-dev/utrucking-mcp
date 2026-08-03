@@ -10,21 +10,6 @@ the tools it calls are all defined in `main.py`. These files close that gap.
 | `v44_prompt.txt` | v44 | previous published version — pairs with Round 19; live until v45 ships |
 | `v45_prompt.txt` | v45 | superseded by v46 |
 | `v46_prompt.txt` | v46 | **published & live** — pairs with Round 20 |
-| `agent_config.json` | — | intended non-prompt config (Round 21); **not yet applied** |
-
-`agent_config.json` is the other half of the agent: the turn-taking knobs, the
-tool timeouts, and which response fields reach the prompt at all. The prompt has
-been version-controlled since Round 19, but this half lived only in Retell's
-dashboard — unreviewable, and untestable, which is why three of the defects
-listed at the bottom of this file sat there for a round. It is checkable now:
-
-    python tools/retell_suite.py config           # report drift, exit 1 if any
-    python tools/retell_suite.py config --apply   # write it to the agent draft
-
-`config` needs `RETELL_API_KEY`, `RETELL_AGENT_ID` and `RETELL_LLM_ID`. The
-comparison rules are unit-tested offline in `tests/test_agent_config.py`, so a
-manifest that would break the agent — a tool timeout that races the silence
-timer, a dropped `reason` variable — fails in CI without touching Retell.
 
 - agent: `agent_3a0baebfdb1491185a47238c3e`
 - LLM:   `llm_9f9849c5acc548fb83c81d4867d7` (`gpt-5.1`, voice `retell-Cimo`)
@@ -191,114 +176,17 @@ ready-made social-engineering script.
 
 Diff with `diff -u agent/v45_prompt.txt agent/v46_prompt.txt`.
 
-## Round 21 — the config half, and a gate that vanished when its key did
-
-Round 20 ended with five known-unfixed items. Four are fixed; the fifth needed a
-deploy step this repo cannot take on its own.
-
-### The staff gate's failure mode was to disappear
-
-`_authorized` returned `True` for the whole internet whenever `API_SECRET` was unset.
-That was a deliberate dormant gate for the first rollout, and the rollout finished many
-rounds ago; what it left behind is the one property a gate must never have. This secret
-has to land in Render's environment, in every tool `headers` block and in the webhook
-URL inside a single window, and rotation is exactly when it is most likely to be missing
-from one of them. Missing it in Render published every customer record with a `200` and
-no error anywhere — the failure was silent, which is what made it worse than an outage.
-
-The gate was made to fail **closed** — no `API_SECRET` means `503 unconfigured`, a
-distinct status from `401` so whoever is debugging the rotation looks at the environment
-instead of at the caller — and then **deliberately reverted to dormant before shipping**.
-The gated list includes `/lookup_student`, `/get_order_details`, `/verify_identity` and
-`/mcp`: every door this agent has. `API_SECRET` is not deployed in Render, so closing the
-gate would have ended every call the moment the service redeployed. A silent exposure is
-bad; trading it for a silent outage on the phone line is not a fix.
-
-The closed path is built and tested, held behind one line (`ALLOW_OPEN_API` in `main.py`)
-rather than an env var, so the gate's state cannot be lost track of across two flags of
-opposite polarity. Closing it is: key into Render → same key into every tool `headers`
-block → confirm a live call → flip the line. Secrets compare in constant time regardless;
-these endpoints are reachable by anyone, so `==` was a public oracle.
-
-### The webhook key and the PII key are separable
-
-The webhook URL carries its key in `?key=`, and Retell cannot attach a header to a
-webhook, so that channel is the only one there is — treat the value as disclosed. The
-fixable half was that the disclosed value was *also* the staff key. `WEBHOOK_SECRET`
-splits them, and once set it is the only value the webhook accepts, so they cannot
-quietly re-converge. Unset, it still falls back to `API_SECRET`: deployable before the
-env var exists, worth nothing until it lands. See SECURITY.md for the rotation order.
-
-### A 7-digit number could not match anything
-
-Rung 3 of the v46 ladder tells the agent a number "needs at least 7 digits".
-`_match_by_phone` compared the last **10** digits of both sides, so 7, 8 and 9 matched
-nothing, ever — the rung the whole ladder falls back on was documented as working and
-could not fire, and a caller who gave the local number they actually remember was told
-no order exists. It now matches on the number of digits supplied. A short number is
-looser and can collide across area codes; that is contained, because a multi-name hit
-reveals no names and a single hit still faces the identity gate with `phone` excluded.
-
-### The three dashboard-only defects are now a file
-
-`backchannel_frequency: 0.8`, the racing `timeout_ms`, and the missing `reason` /
-`verify_with` response variables are recorded in `agent_config.json` with the reasoning
-for each, checked by `tools/retell_suite.py config`, and unit-tested offline. Backchannels
-are **off** rather than merely rarer: at any frequency above zero the "mm-hmm" still
-lands between spelled letters, just less often, and the spelling ladder is the recovery
-path for a call that is already going wrong. `backchannel_frequency: 0` is a second
-latch, not the fix — Retell applies that field "only when `enable_backchannel` is true",
-and its default is 0.8, so pinning it is what stops a dashboard toggle restoring the
-defect rather than producing a quiet agent.
-
-### The manifest's response variables were written in a notation Retell doesn't read
-
-Every mapping in the first draft of `agent_config.json` was JSONPath — `"reason": "$.reason"`.
-Retell's custom-function docs are explicit that this field is not JSONPath: "Point each
-variable at a field in the response using dot notation, with array indexing where needed
-— for example `user.name` or `data.items[0].id`." `$.reason` asks for a field named `$`
-holding a field named `reason`. Nothing this service returns has one, so all fourteen
-mappings bound nothing — and nothing complains, because an unresolved path simply yields
-no variable and an unset dynamic variable renders as the literal text `{{reason}}`. The
-drift checker was comparing every tool against a value that could never be right, so
-`config` would have reported the same drift forever and `--apply` would have written
-fourteen dead mappings and printed `applied`. All of them are now plain dot paths.
-
-Scope, because the first write-up of this overstated it: a custom tool's **entire JSON
-response body is stringified into the LLM's context regardless of `response_variables`**.
-v46's `reason` branching reads the tool result directly and works with this field empty;
-`response_variables` only binds values for `{{template}}` reuse later in the call. So this
-was a dead config entry, not a broken agent — worth fixing, and not what the failure
-taxonomy stands on.
-
-Two guards now sit in `load_config`, so they run on the `--apply` path and not only in
-CI: a `$`-prefixed path and a tool timeout that is out of Retell's documented 1000–600000ms
-range or greater than or equal to `end_call_after_silence_ms` each raise before any request
-is built. Retell answers `200` to all three, which is the only reason they needed catching
-somewhere other than a call. The drift check deliberately does **not** normalise `$.reason`
-to `reason`: they are not two spellings of one path, and folding them together would grade
-the live broken agent as correct.
-
 ## Known, not yet fixed
 
-- **`agent_config.json` has not been applied.** It is the intended state, not the live
-  one — the manifest exists and is checked, but nothing has been written to Retell.
-  Run `python tools/retell_suite.py config` to see the drift, `--apply` to write it,
-  then the two publishing steps below. Until then the live agent still has
-  `backchannel_frequency: 0.8`, `timeout_ms: 120000`, and no `reason` variable.
-- **Three values in the manifest are asserted, not observed.** `responsiveness: 0.7`,
-  `interruption_sensitivity: 0.6` and `end_call_after_silence_ms: 120000` are recorded here
-  as the agent's existing settings and described as "left alone", but none of them is
-  Retell's default (1, 1, and 600000). If the live agent is actually on the defaults, the
-  first `--apply` changes all three rather than confirming them — and the tool-timeout
-  invariant is stated against a silence timer that may not be the live one. Read them off
-  `config`'s drift report before applying; the check is read-only.
-- **`WEBHOOK_SECRET` is not deployed**, so the webhook still accepts `API_SECRET` and
-  the key in the URL is still the key that gates PII. Code side is done; the remaining
-  work is Render env + re-registering the webhook URL + rotating `API_SECRET`.
-- The `.env.example` in this repo does not yet list `WEBHOOK_SECRET` or
-  `RETELL_AGENT_ID`.
-- **`API_SECRET` is not deployed in Render**, so the staff gate is dormant and the
-  PII/ops endpoints are open to the internet. This is the single highest-value
-  outstanding item: setting it, adding the same value to each Retell tool's
-  `headers` block, then flipping `ALLOW_OPEN_API = False` closes it in one pass.
+- **`webhook_url` carries `API_SECRET` in cleartext**, and that same secret gates
+  `/lookup_student`, `/get_order_details`, `/debug_sheets` and the billing endpoints.
+  Rotating it has to land in Render env, both tool `headers` blocks and the webhook in
+  one window — `_authorized` fails **open** when `API_SECRET` is unset, so a missed
+  value silently un-gates PII rather than erroring.
+- `backchannel_frequency: 0.8` fires "mm-hmm" into the pauses between spelled letters —
+  the one turn-taking knob that actually endangers the spelling ladder.
+- `reason` and `verify_with` are absent from `get_order_details.response_variables`,
+  and v45/v46's whole design branches on `reason`.
+- Tool `timeout_ms: 120000` races `end_call_after_silence_ms: 120000`.
+- The `phone` description says "at least 7 digits" but `_match_by_phone` compares all
+  10, so a 7-digit answer always misses.

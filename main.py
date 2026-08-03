@@ -6,13 +6,9 @@ import csv
 import io
 import difflib
 import re
-import hmac
 import base64
 import datetime
 import time
-import ipaddress
-import socket
-import urllib.parse
 import analytics
 from contextlib import asynccontextmanager
 from mcp.server.fastmcp import FastMCP
@@ -231,28 +227,14 @@ def _phone_digits(s, n=10):
 
 
 def _match_by_phone(phone, dispatch_rows):
-    """Distinct customer names whose on-file phone matches the digits the caller gave.
-
-    Matches on the number of digits SUPPLIED (7-10), not always 10. Both the tool schema and
-    rung 3 of the v46 name ladder tell the agent a number "needs at least 7 digits", and this
-    function used to compare the last 10 of each side — so a 7-, 8- or 9-digit answer could
-    never match anything, ever. The rung the whole ladder falls back on was documented as
-    working at 7 and in fact only worked at 10, and a caller who gave the local number they
-    actually remember was told no order exists. Suffix-matching the supplied length makes the
-    documented contract true.
-
-    A short number matches more loosely — no area code, so it can collide across them. That is
-    contained here and only here: this returns names to do_lookup_student, which reveals none
-    of them on a multi-name hit, and a single hit still has to clear the identity gate
-    afterwards with `phone` excluded from the verifier, so digits just spoken can never verify
-    themselves. The looseness costs a caller an extra question; it does not open the gate."""
+    """Distinct customer names whose on-file phone matches the caller's number (last 10 digits).
+    Powers caller-ID: greet a returning caller by name instead of asking them to spell it."""
     want = _phone_digits(phone, 10)
     if len(want) < 7:                       # need a real number, not a fragment
         return []
     names, seen = [], set()
     for r in dispatch_rows:
-        have = _phone_digits(r.get("Phone", ""), len(want))
-        if len(have) == len(want) and have == want:
+        if _phone_digits(r.get("Phone", ""), 10) and _phone_digits(r.get("Phone", ""), 10) == want:
             n = " ".join((r.get("Student") or "").split())
             if n and n.lower() not in seen:
                 seen.add(n.lower()); names.append(n)
@@ -875,206 +857,19 @@ def _staff_flag(request, args) -> bool:
 
 # ── Staff-key gate for PII / ops endpoints ──────────────────────────
 # When API_SECRET is set in the environment, endpoints that return customer PII or
-# internal ops data require the x-utrucking-key header.
-#
-# An UNSET secret means OPEN — a dormant gate, so callers can start sending the header
-# before enforcement is switched on. That is the wrong end state and it is not pretended
-# otherwise: a gate whose failure mode is to DISAPPEAR is the one property a gate must never
-# have. The secret has to land in Render's environment, in every Retell tool `headers` block
-# and in the webhook URL inside a single window, and a rotation is exactly when it goes
-# missing from one of them. Missing it in Render publishes ~2,500 customers' records to the
-# internet, silently, with a 200.
-#
-# It was briefly made to fail CLOSED, and that is reverted here for one specific reason.
-# Read _GATED below: it includes /lookup_student, /get_order_details, /verify_identity and
-# /mcp — every door the Retell voice agent has. API_SECRET is NOT deployed in Render today,
-# so "fails closed" would mean the phone agent loses every tool it owns on the next deploy.
-# That trades a silent exposure for a silent outage, which is not an improvement.
-#
-# Closing it is one line — ALLOW_OPEN_API = False — once the key is in Render AND in each
-# Retell tool's `headers` block. Deliberately NOT a second environment variable: a gate
-# governed by two env vars of opposite polarity is its own way to lose a rotation, and the
-# whole point of this comment is that the gate's state must be impossible to lose track of.
+# internal ops data require the x-utrucking-key header. Unset = open (safe rollout:
+# callers can start sending the header before enforcement is switched on).
 API_SECRET = os.getenv("API_SECRET", "")
-ALLOW_OPEN_API = True      # flip to False once API_SECRET is set in Render + the Retell tools
-
-# The webhook key travels in a URL (see _webhook_key_ok). Keeping it distinct from API_SECRET
-# is what stops a disclosed webhook URL from also un-gating PII; unset falls back to
-# API_SECRET so nothing breaks before the new env var lands.
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
-
-# Whichever way the gate lands, it has to SAY so at boot. The property both unset states share
-# is silence: one missing env var changes the behaviour of ten endpoints at once and leaves no
-# trace anywhere, so the operator meets it as a 503 storm with no cause attached — or, with the
-# opt-in on, as nothing at all. A rotation is exactly when this value goes missing from one
-# place, so the cheapest possible signal is worth more here than anywhere else in the file.
-# Neither line prints the key, and neither prints its length: a log is the wrong place to
-# publish how many characters an attacker has to guess.
-_GATED = ("/lookup_student, /get_order_details, /verify_identity, /debug_sheets, /billing_audit, "
-          "/dispatch_plan, /sample_ids, /insights_api, /voice_qa_api and /mcp")
-if not API_SECRET and ALLOW_OPEN_API:
-    print("WARNING: API_SECRET is unset, so the staff gate is DORMANT: " + _GATED + " will "
-          "serve customer records to any caller that asks. Set it in the environment AND in "
-          "each Retell tool's headers block, then set ALLOW_OPEN_API = False in main.py.",
-          flush=True)
-elif not API_SECRET:
-    print("WARNING: API_SECRET is unset and ALLOW_OPEN_API is False, so the staff gate is not "
-          "configured and " + _GATED + " will all answer 503 until it is set. This is the safe "
-          "failure, not a working deploy — but it also means the phone agent has no working "
-          "tools until the key is deployed.", flush=True)
-
-
-def _secret_eq(supplied: str, secret: str) -> bool:
-    """Constant-time compare. `==` on a secret leaks its length and a prefix through timing; the
-    endpoints below are reachable by anyone, so the comparison is a public oracle.
-
-    Compared as bytes, not str: compare_digest raises TypeError on str with any non-ASCII
-    character, and a key is whatever someone pasted into Render — a smart quote or an accented
-    letter would turn every request into a 500 instead of a clean refusal."""
-    return bool(secret) and hmac.compare_digest(str(supplied or "").encode("utf-8"),
-                                                str(secret).encode("utf-8"))
-
-
-def _gate_state(request) -> str:
-    """'ok' (proceed) | 'denied' (wrong/absent key) | 'unconfigured' (no secret deployed).
-
-    Three states, not two: 'unconfigured' is the deploy-time fault the fail-open gate used to
-    hide, and it must not answer 401 — a 401 reads as "the caller sent the wrong key" and
-    sends whoever is debugging the rotation looking at the caller instead of at the env."""
-    if API_SECRET:
-        return "ok" if _secret_eq(request.headers.get("x-utrucking-key", ""), API_SECRET) else "denied"
-    return "ok" if ALLOW_OPEN_API else "unconfigured"
-
-
-def _staff_gate_status() -> str:
-    """What the OPERATOR deployed — 'armed' | 'open' | 'unconfigured' — for /health.
-
-    Deliberately not _gate_state(): that answers "may this caller through?", and on an endpoint
-    with no key of its own that would just tell every stranger whether their guess landed. This
-    takes no request and reads only the environment, so it says nothing about who is asking.
-
-    It exists because the gate's state is otherwise invisible from outside the box. 'unconfigured'
-    is the one that matters: every gated endpoint is answering 503, and without this field the
-    only way to tell that apart from the sheets being down, the process being wedged or a bad
-    deploy is to go read Render's env. A string and only a string — never the key, and never its
-    length, because /health is unauthenticated and a secret's length is the first thing you would
-    want in order to start guessing it."""
-    if API_SECRET:
-        return "armed"
-    return "open" if ALLOW_OPEN_API else "unconfigured"
 
 
 def _authorized(request) -> bool:
-    return _gate_state(request) == "ok"
+    return (not API_SECRET) or request.headers.get("x-utrucking-key", "") == API_SECRET
 
 
-def _unauthorized(request=None):
-    """The refusal for a gated endpoint. Pass the request so a missing deployment secret is
-    reported as the server-side fault it is (503) rather than as a caller error (401)."""
-    if request is not None and _gate_state(request) == "unconfigured":
-        return JSONResponse({"status": "unconfigured",
-                             "message": "Staff gate is not configured on this server: API_SECRET is "
-                                        "unset. Refusing to serve customer data without it."},
-                            status_code=503)
+def _unauthorized():
     return JSONResponse({"status": "unauthorized",
                          "message": "This endpoint needs a valid staff key (x-utrucking-key header)."},
                         status_code=401)
-
-
-# ── Cost limiter for the unauthenticated, model-backed endpoints ─────────────────────
-# /quote, /photo_quote, /condition_check, /chat_api and /ask_api stay open on purpose — they are
-# what /estimate and /chat are made of, and a customer must never meet a key prompt. But open plus
-# "calls a paid model" means a single `while true; do curl` is a bill, and the free-tier Gemini
-# quota it burns is the same quota the PHONE agent draws on for _ai_map_unmatched and the vision
-# calls: an anonymous flood does not merely cost money, it degrades live calls. This bounds that.
-#
-# AUTHENTICATED CALLERS ARE EXEMPT, and that exemption is the whole reason this can exist at all.
-# The Retell agent's custom tools reach /quote from RETELL'S servers — a small fixed set of egress
-# IPs shared by every simultaneous call — carrying the staff key in each tool's `headers` block.
-# Per-IP, the entire phone fleet is ONE caller, so a limiter that counted it would start refusing
-# quotes to real callers exactly when the line is busiest, which is the one failure this service
-# cannot have. The test for "is this the phone fleet or a stranger" is the key it already sends.
-#
-# The exemption is keyed on _gate_state, not on _authorized, and the difference matters in exactly
-# one state. _authorized() is False both for a stranger AND for a correctly-configured Retell tool
-# talking to a deploy whose API_SECRET went missing — the rotation window the fail-closed gate was
-# built around. In that window nothing the agent sends can pass, so counting it would throttle the
-# fleet for a fault on our side. So: only 'denied' (a gate that IS armed and was NOT satisfied) is
-# counted. 'unconfigured' therefore also means unlimited for everyone, which is acceptable because
-# that deploy is already refusing every gated endpoint and shouting about it at boot — it is a
-# declared outage, not a state to optimise spend in. Cost control, not a security boundary.
-#
-# Deliberately NOT _IP_FAILS. That counter is a security lockout: it counts identity-verification
-# FAILURES, its window is an hour, tripping it is meant to be punishing, and it is keyed on the
-# socket peer precisely so a caller cannot choose their own bucket. This one counts SUCCESSFUL
-# work, forgives on a short window, and is keyed on a header the caller can set (below). Merging
-# them would either make ordinary quoting count toward a brute-force lockout — locking out a whole
-# shared campus NAT for asking prices — or let a header rewrite defeat the identity lockout. They
-# stay two dicts with two windows and two meanings.
-_MODEL_HITS = {}                          # rate key -> [hit_count, window_start_epoch]
-_MODEL_MAX, _MODEL_WINDOW = 240, 15 * 60  # 240 per 15 min per caller
-_MODEL_KEYS_MAX = 4096                    # sweep threshold; see _model_rate_limited
-
-
-def _rate_ip(request):
-    """The bucket key for the cost limiter: first X-Forwarded-For hop, else the socket peer.
-
-    This service sits behind Render's proxy, so request.client.host is frequently the PROXY for
-    every request alive — bucketing the entire internet into one key, where a limit generous
-    enough for one caller is nothing across all of them and the first busy hour 429s /estimate for
-    real customers. XFF is what makes the count per-caller instead of per-load-balancer.
-
-    XFF is also caller-supplied, so an attacker who rotates the header gets a fresh budget each
-    time. That is the honest cost of the choice and it is the right way round for THIS limiter:
-    the realistic abuse is a crawler or a runaway script hammering one URL, which this stops, and
-    the failure mode of the alternative is refusing service to paying customers. _ip_locked's
-    identity lockout must not adopt this — there, a caller-chosen bucket is a bypass, and it keeps
-    reading request.client.host."""
-    hdrs = getattr(request, "headers", None)
-    xff = ((hdrs.get("x-forwarded-for") if hdrs else "") or "").split(",")[0].strip()
-    return xff or (request.client.host if getattr(request, "client", None) else "") or "?"
-
-
-def _model_rate_limited(request) -> bool:
-    """Count this request against the caller's budget; True when they are over it.
-
-    The exemption is a PROVEN key, not _gate_state. Those differ in exactly the configuration
-    this service actually runs: with API_SECRET unset the gate is dormant and _gate_state
-    answers 'ok' for everybody, so keying the exemption on it would switch the limiter off for
-    the entire internet — the one state it exists to cover. _secret_eq is False when no secret
-    is deployed, so an unarmed deploy limits everyone, which is the safe direction.
-
-    API_SECRET is tested first so the headers are only read when a key could actually match —
-    _secret_eq would return False for an unarmed deploy anyway, but not before touching a
-    request attribute that need not exist on every caller shape reaching this function."""
-    if API_SECRET and _secret_eq(request.headers.get("x-utrucking-key", ""), API_SECRET):
-        return False                           # staff, and the Retell phone fleet once keyed
-    now = time.time()
-    if len(_MODEL_HITS) > _MODEL_KEYS_MAX:
-        # Unlike _IP_FAILS, which only ever gains a key when someone fails a verification, this one
-        # gains a key per distinct caller — and the key is spoofable, so a flood that rotates XFF
-        # would otherwise grow this dict until the process dies, turning a cost limiter into a
-        # memory-exhaustion vector. Sweeping expired entries costs one pass per 4k new callers.
-        for k, v in list(_MODEL_HITS.items()):
-            if now - v[1] > _MODEL_WINDOW:
-                _MODEL_HITS.pop(k, None)
-    key = _rate_ip(request)
-    ent = _MODEL_HITS.get(key)
-    if ent is None or now - ent[1] > _MODEL_WINDOW:
-        _MODEL_HITS[key] = [1, now]
-        return False
-    ent[0] += 1
-    return ent[0] > _MODEL_MAX
-
-
-def _too_many_requests():
-    """The 429 for a caller over the model budget. Carries `reply` as well as `message` because
-    /chat renders whatever comes back in `reply` — without it the page shows its generic 'something
-    went wrong', which reads as an outage and sends the customer to the phone line instead of
-    waiting a few minutes."""
-    msg = ("Too many requests from this connection in a short time. Please wait a few minutes and "
-           "try again — or call the team at (314) 266-8878 and we'll do it for you.")
-    return JSONResponse({"status": "rate_limited", "message": msg, "reply": msg}, status_code=429)
 
 
 @mcp.custom_route("/lookup_student", methods=["POST", "GET"])
@@ -1093,7 +888,7 @@ async def lookup_student_endpoint(request: Request):
             }
         })
     if not _authorized(request):
-        return _unauthorized(request)
+        return _unauthorized()
     try:
         body = await request.json()
     except Exception:
@@ -1121,7 +916,7 @@ async def get_order_details_endpoint(request: Request):
                                 "'no_answer_supplied' means ask the caller for verify_with and call again"}
         })
     if not _authorized(request):
-        return _unauthorized(request)
+        return _unauthorized()
     try:
         body = await request.json()
     except Exception:
@@ -1134,7 +929,7 @@ async def get_order_details_endpoint(request: Request):
 @mcp.custom_route("/debug_sheets", methods=["GET"])
 async def debug_sheets(request: Request):
     if not _authorized(request):
-        return _unauthorized(request)
+        return _unauthorized()
     dispatch_rows, service_rows = await asyncio.gather(
         fetch_csv_rows(DISPATCH_CSV_URL),
         fetch_csv_rows(SERVICE_CSV_URL),
@@ -1151,12 +946,8 @@ async def debug_sheets(request: Request):
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
-    # sheets_configured is a boolean and staff_gate is one of three fixed words, never the IDs or
-    # the key themselves — /health is unauthenticated. "status" stays "ok" whatever the gate says:
-    # it reports that the process is up, which is what the keep_alive ping and Render's health
-    # check consume, and an unconfigured gate is a deploy fault rather than a dead server.
-    return JSONResponse({"status": "ok", "sheets_configured": SHEETS_CONFIGURED,
-                         "staff_gate": _staff_gate_status()})
+    # sheets_configured is a boolean, never the IDs themselves — /health is unauthenticated.
+    return JSONResponse({"status": "ok", "sheets_configured": SHEETS_CONFIGURED})
 
 
 @mcp.custom_route("/", methods=["GET"])
@@ -1250,7 +1041,7 @@ async def verify_identity_endpoint(request: Request):
                         "confirmed_name": "exact name from records"}
         })
     if not _authorized(request):
-        return _unauthorized(request)
+        return _unauthorized()
     try:
         body = await request.json()
     except Exception:
@@ -1286,10 +1077,6 @@ async def quote_endpoint(request: Request):
                                  "text": "or free text e.g. 'five boxes and a mini fridge'"}},
             "returns": {"line_items": [], "total": 0, "unmatched": [], "summary": "string"},
         })
-    # After the GET schema on purpose: the self-documenting view costs nothing, the POST can call
-    # the AI mapper. The phone agent's get_quote tool sends the staff key and is never counted.
-    if _model_rate_limited(request):
-        return _too_many_requests()
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -1331,7 +1118,7 @@ async def availability_endpoint(request: Request):
 async def billing_audit_endpoint(request: Request):
     """C) Flag $0 / missing-invoice / missing-order-id leakage across the service sheet."""
     if not _authorized(request):
-        return _unauthorized(request)
+        return _unauthorized()
     service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
     return JSONResponse(_billing_audit(service_rows))
 
@@ -1373,7 +1160,7 @@ async def dispatch_plan_endpoint(request: Request):
         return JSONResponse({"endpoint": "/dispatch_plan", "method": "POST",
                              "expects": {"args": {"date": "5/7/2026"}}})
     if not _authorized(request):
-        return _unauthorized(request)
+        return _unauthorized()
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -1428,49 +1215,10 @@ def _gemini_models():
     return [pref] + [m for m in _GEMINI_FALLBACKS if m != pref]
 
 
-# ── Hard ceiling on paid model calls, process-wide ───────────────────────────────────
-# The per-caller limiter above is a spend limit keyed on a header the caller controls, so a
-# flood that rotates X-Forwarded-For gets a fresh budget every time. That is the right trade
-# for keeping /estimate open to customers, but it is NOT a bound on the bill. This is.
-#
-# Every Gemini call this service makes — item mapping, Spanish translation, photo vision,
-# /ask_api, the post-call QA judge — funnels through _gemini_generate, so one counter here
-# bounds total spend no matter who calls, which endpoint they came through, or how they
-# bucket. Two windows because the failure modes differ: a runaway script burns an hour's
-# worth in minutes, a slow crawler burns a day's worth without ever looking abnormal.
-#
-# Exhausting it DEGRADES, it never breaks. Every caller of _gemini_generate already treats a
-# raise as "no model right now": _ai_map_unmatched returns the quote with items unmapped,
-# _translate falls back to the original text, /ask_api serves the raw data brief, the judge
-# scores nothing. And the voice agent's identity path — lookup_student, get_order_details,
-# verify_identity — calls no model at all, so no amount of flooding can reach a live call.
-_MODEL_CALL_HOUR_MAX, _MODEL_CALL_DAY_MAX = 300, 2000
-_MODEL_CALL_HOUR = [0, 0.0]                    # [calls_this_window, window_start_epoch]
-_MODEL_CALL_DAY = [0, 0.0]
-
-
-def _model_budget_ok() -> bool:
-    """Reserve one paid model call. False once the process is over its hourly or daily ceiling.
-    Both windows are checked before either is charged, so a call is never billed against one
-    budget and refused by the other."""
-    now = time.time()
-    for bucket, window, cap in ((_MODEL_CALL_HOUR, 60 * 60, _MODEL_CALL_HOUR_MAX),
-                                (_MODEL_CALL_DAY, 24 * 60 * 60, _MODEL_CALL_DAY_MAX)):
-        if now - bucket[1] > window:
-            bucket[0], bucket[1] = 0, now
-        if bucket[0] >= cap:
-            return False
-    _MODEL_CALL_HOUR[0] += 1
-    _MODEL_CALL_DAY[0] += 1
-    return True
-
-
 async def _gemini_generate(key, parts, temp=None, json_out=False):
     """generateContent with retry + model fallback. Raises only if EVERY model fails.
     temp: set low (e.g. 0.1) for classification tasks that must be consistent run-to-run.
     json_out: force a pure-JSON response (no markdown fences / prose to strip)."""
-    if not _model_budget_ok():
-        raise RuntimeError("model call budget exhausted for this window")
     payload = {"contents": [{"parts": parts}]}
     cfg = {}
     if temp is not None: cfg["temperature"] = temp
@@ -1593,11 +1341,6 @@ async def _ai_map_unmatched(result, book):
 
 async def _vision_json(provider, key, img_b64, mime, prompt):
     """Run a vision prompt against the configured provider and return the parsed JSON object."""
-    # The gemini branch charges itself inside _gemini_generate; groq and anthropic POST directly
-    # and would otherwise be a way to spend past the ceiling by setting VISION_PROVIDER. Vision
-    # is the most expensive call this service makes, so it is the last one to leave uncounted.
-    if provider in ("groq", "anthropic") and not _model_budget_ok():
-        raise RuntimeError("model call budget exhausted for this window")
     async with httpx.AsyncClient(timeout=60.0) as c:
         if provider == "groq":
             r = await _post_retry(c, "https://api.groq.com/openai/v1/chat/completions",
@@ -1630,104 +1373,6 @@ async def _vision_condition(provider, key, img_b64, mime="image/jpeg"):
     return (await _vision_json(provider, key, img_b64, mime, _CONDITION_PROMPT)).get("items", [])
 
 
-# ── Caller-supplied URL fetches (image_url): SSRF containment ────────────────────────
-# /photo_quote and /condition_check are unauthenticated by design, and both take an `image_url`
-# that this process then fetches. That makes anyone on the internet able to aim our server's
-# socket wherever they like: at http://169.254.169.254/latest/meta-data/iam/security-credentials/
-# (the cloud metadata service, which answers to any local process with no credential at all), at
-# http://127.0.0.1:<port> to reach anything bound to loopback, or at an RFC1918 address to sweep
-# whatever else is inside the network boundary. The response body is not echoed back verbatim —
-# it goes to the vision model — but "not echoed" is not "not fetched": the vision model is asked
-# to describe the image, error text and status codes leak through the refusal path, and response
-# timing alone answers "is there something listening on this port".
-#
-# So a caller-supplied URL is resolved and judged BEFORE the socket is opened, and again on every
-# redirect hop. `follow_redirects=True` was the hole that made a pre-flight check theatre: httpx
-# validated nothing on hop 2, so http://attacker.example/x → 302 → http://169.254.169.254/… passed
-# a perfect front-door check and fetched the metadata service anyway. Redirects are now followed
-# by hand, at most _URL_MAX_HOPS of them, with the full check re-run on each target.
-#
-# HONEST RESIDUAL: this does not close DNS rebinding. We resolve the name, approve the addresses,
-# and then httpx resolves the name AGAIN when it connects — a hostile resolver can answer with a
-# public address the first time and 127.0.0.1 the second, and the check never sees it. Closing it
-# properly means connecting to the IP we validated (pinning the resolved address on the transport)
-# rather than to the name. That is a bigger change to how the client is built, and rebinding needs
-# an attacker running their own authoritative DNS, where this closes the case that needs only a
-# URL. Treat the gap as known and open, not as covered.
-_URL_MAX_BYTES = 10 * 1024 * 1024        # a caller must not be able to point us at a 4 GB file
-_URL_MAX_HOPS = 3                        # generous for CDN/shortener chains, finite against loops
-_URL_REDIRECTS = (301, 302, 303, 307, 308)
-
-
-def _url_is_fetchable(url):
-    """(True, None) if this process may open a socket to `url`, else (False, caller-safe reason).
-
-    EVERY address the name resolves to is checked, not just the first: a hostile name can return
-    [1.2.3.4, 127.0.0.1] and getaddrinfo order is not something we control, so approving on the
-    first record would make the block a coin flip. An IPv4-mapped IPv6 address is judged as the
-    v4 address it names — ::ffff:169.254.169.254 is the metadata service wearing a v6 costume, and
-    is_link_local is False on the v6 form."""
-    try:
-        p = urllib.parse.urlsplit(url)
-        host, port, scheme = p.hostname, p.port, (p.scheme or "").lower()
-    except Exception:
-        return False, "That link could not be read as a URL."
-    if scheme not in ("http", "https"):
-        # file:// would read the container's filesystem; gopher:// and friends are protocol-
-        # smuggling primitives. An image lives at http(s) or it is not an image we fetch.
-        return False, "image_url must be an http:// or https:// link."
-    if not host:
-        return False, "That link has no host to fetch from."
-    try:
-        infos = socket.getaddrinfo(host, port or (443 if scheme == "https" else 80),
-                                   proto=socket.IPPROTO_TCP)
-    except Exception:
-        return False, "Could not resolve that link's host."
-    if not infos:
-        return False, "Could not resolve that link's host."
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            return False, "That link resolves to an address we can't fetch."
-        ip = getattr(ip, "ipv4_mapped", None) or ip
-        if (ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
-            # Deliberately one message for all of them: naming which class it landed in turns the
-            # refusal into a free internal-network scanner for whoever is probing.
-            return False, "That link points inside a private network, so it will not be fetched."
-    return True, None
-
-
-async def _fetch_caller_url(url, ua):
-    """GET a caller-supplied URL with the SSRF check applied to the original AND to every redirect
-    target, and the body capped at _URL_MAX_BYTES. -> (bytes, None) | (None, error message).
-
-    Streams rather than reading .content, because a cap applied after the download has already
-    cost the memory it was meant to prevent."""
-    for _ in range(_URL_MAX_HOPS + 1):
-        ok, why = _url_is_fetchable(url)
-        if not ok:
-            return None, why
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as c:
-            async with c.stream("GET", url, headers={"User-Agent": ua}) as resp:
-                if resp.status_code in _URL_REDIRECTS:
-                    loc = (resp.headers.get("location") or "").strip()
-                    if not loc:
-                        return None, "That link redirected to nowhere."
-                    url = urllib.parse.urljoin(url, loc)     # relative Location is legal
-                    continue
-                if resp.status_code != 200:
-                    return None, "Could not fetch image_url (HTTP %d)." % resp.status_code
-                buf = bytearray()
-                async for chunk in resp.aiter_bytes():
-                    buf += chunk
-                    if len(buf) > _URL_MAX_BYTES:
-                        return None, "That image is larger than the %d MB limit." % (_URL_MAX_BYTES // (1024 * 1024))
-                return bytes(buf), None
-    return None, "That link redirects too many times."
-
-
 @mcp.custom_route("/photo_quote", methods=["POST", "GET"])
 async def photo_quote_endpoint(request: Request):
     """A) Photo -> vision item detection -> itemized quote. Uses a FREE vision provider via env key."""
@@ -1737,8 +1382,6 @@ async def photo_quote_endpoint(request: Request):
             "env": {"VISION_PROVIDER": "gemini | groq | anthropic  (default gemini)",
                     "GEMINI_API_KEY": "free at aistudio.google.com",
                     "GEMINI_MODEL": "default gemini-2.5-flash"}})
-    if _model_rate_limited(request):
-        return _too_many_requests()
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -1751,14 +1394,16 @@ async def photo_quote_endpoint(request: Request):
     raw = b""
     if not img_b64 and args.get("image_url"):
         try:
-            # Some hosts (e.g. Wikimedia) 403 a request that has no browser User-Agent.
-            raw, err = await _fetch_caller_url(
-                args["image_url"], "Mozilla/5.0 (compatible; UTruckingBot/1.0)")
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+                # Some hosts (e.g. Wikimedia) 403 a request that has no browser User-Agent.
+                resp = await c.get(args["image_url"],
+                                   headers={"User-Agent": "Mozilla/5.0 (compatible; UTruckingBot/1.0)"})
+            if resp.status_code != 200:
+                return JSONResponse({"status": "error", "message": "Could not fetch image_url (HTTP %d)." % resp.status_code})
+            raw = resp.content
+            img_b64 = base64.b64encode(raw).decode()
         except Exception:
             return JSONResponse({"status": "error", "message": "Could not fetch image_url."})
-        if err:
-            return JSONResponse({"status": "error", "message": err})
-        img_b64 = base64.b64encode(raw).decode()
     if not img_b64:
         return JSONResponse({"status": "error", "message": "Provide image_url or image_base64."})
     if not raw:
@@ -1796,18 +1441,17 @@ async def photo_quote_endpoint(request: Request):
 
 
 async def _load_image_arg(args):
-    """Resolve an image from {image_base64} or {image_url} -> (img_b64, mime, error_dict_or_None).
-    An image_url goes through _fetch_caller_url, so the SSRF check and the size cap apply here
-    exactly as they do on /photo_quote — this path is reachable unauthenticated too."""
+    """Resolve an image from {image_base64} or {image_url} -> (img_b64, mime, error_dict_or_None)."""
     img_b64 = args.get("image_base64"); raw = b""
     if not img_b64 and args.get("image_url"):
         try:
-            raw, err = await _fetch_caller_url(args["image_url"], "Mozilla/5.0 (UTrucking)")
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as c:
+                resp = await c.get(args["image_url"], headers={"User-Agent": "Mozilla/5.0 (UTrucking)"})
+            if resp.status_code != 200:
+                return None, None, {"status": "error", "message": "Could not fetch image_url (HTTP %d)." % resp.status_code}
+            raw = resp.content; img_b64 = base64.b64encode(raw).decode()
         except Exception:
             return None, None, {"status": "error", "message": "Could not fetch image_url."}
-        if err:
-            return None, None, {"status": "error", "message": err}
-        img_b64 = base64.b64encode(raw).decode()
     if not img_b64:
         return None, None, {"status": "error", "message": "Provide image_url or image_base64."}
     if not raw:
@@ -1824,8 +1468,6 @@ async def condition_check_endpoint(request: Request):
         return JSONResponse({"endpoint": "/condition_check", "method": "POST",
             "expects": {"args": {"image_url": "https://...", "image_base64": "...(alternative)"}},
             "returns": {"items": [{"item": "Mini Fridge", "condition": "good", "notes": "small dent"}]}})
-    if _model_rate_limited(request):
-        return _too_many_requests()
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -2003,9 +1645,7 @@ _ESTIMATE_HTML = """<!doctype html>
   Array.prototype.forEach.call(sel.querySelectorAll('.tbtn'),function(b){b.addEventListener('click',function(){renderTruck(b.getAttribute('data-k'));});});
   renderTruck(S.default||'sprinter');}
  function render(data,fromPhoto){
-  /* rate_limited joins error here deliberately: without it a 429 body has no line_items and falls
-     through to "Tell us what you are storing", which blames the customer for a limit we imposed. */
-  if(!data||data.status==='error'||data.status==='rate_limited'){show('<div class=err>Sorry - '+((data&&data.message)||'something went wrong')+'</div>');return;}
+  if(!data||data.status==='error'){show('<div class=err>Sorry - '+((data&&data.message)||'something went wrong')+'</div>');return;}
   if(data.status==='not_configured'){show('<div class=err>Photo estimates are not switched on yet. Try the text box above.</div>');return;}
   const li=data.line_items||[]; const un=data.unmatched||[];
   const ex='We price things like boxes, mini fridges, duffels, TVs, desks, couches, mattresses, dressers and bikes.';
@@ -2203,9 +1843,6 @@ def _lock_window(name):
     return min(_VERIFY_WINDOW * (2 ** _strikes(name)), _VERIFY_WINDOW_CAP)
 
 # Second layer: per-IP. Stops one machine from rotating through MANY names.
-# Counts identity-verification FAILURES only, and is keyed on the socket peer so the caller cannot
-# pick their own bucket. Not to be confused with _MODEL_HITS, the cost limiter above /lookup_student
-# — that one counts ordinary successful requests and forgives quickly; this one is a lockout.
 _IP_FAILS = {}                     # ip -> [fail_count, first_fail_epoch]
 _IP_MAX, _IP_WINDOW = 15, 60 * 60
 
@@ -2587,10 +2224,6 @@ async def chat_api(request: Request):
     """Brain for the /chat SMS preview: quote + availability + identity-gated order lookup.
     Bilingual: Spanish input is translated in and the reply translated back, so a Spanish speaker
     gets the same features in their language. The English brain stays the single source of truth."""
-    # Checked before the sheets are touched: a flood that gets refused should cost a dict lookup,
-    # not two CSV fetches and a translation round trip.
-    if _model_rate_limited(request):
-        return _too_many_requests()
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -2807,13 +2440,13 @@ async def sample_ids(request: Request):
     verifies nothing).
 
     `verifiers=1` adds one usable verifier per record so a staff tester can drive an end-to-end
-    lookup without opening the spreadsheet. It is deliberately NOT covered by _authorized() alone:
-    the gate is dormant whenever API_SECRET is unset, which is how it ships today, and that is
-    exactly the configuration the answer key must never be served in. It requires the key to be SET
-    **and** correctly supplied, so it fails closed in every open configuration, deliberate or not.
+    lookup without opening the spreadsheet. It is deliberately NOT covered by _authorized() alone,
+    because API_SECRET being unset makes _authorized() true for the whole internet — which is exactly
+    the configuration this data must never be served in. It requires the key to be SET **and**
+    correctly supplied, so it fails closed in the open configuration.
     Params: n (1-15, default 8), shuffle=1 for a fresh random draw, verifiers=1 (staff key required)."""
     if not _authorized(request):
-        return _unauthorized(request)
+        return _unauthorized()
     import random
     try:
         n = max(1, min(15, int(request.query_params.get("n", "8"))))
@@ -2822,7 +2455,7 @@ async def sample_ids(request: Request):
     # Verifiers ride a STRICTER gate than the rest of the endpoint: the key must actually be armed.
     want_verifiers = request.query_params.get("verifiers") == "1"
     show_verifiers = bool(want_verifiers and API_SECRET
-                          and _secret_eq(request.headers.get("x-utrucking-key", ""), API_SECRET))
+                          and request.headers.get("x-utrucking-key", "") == API_SECRET)
     rows = await fetch_csv_rows(DISPATCH_CSV_URL)
     seen, pool = set(), []
     for r in rows:
@@ -2874,23 +2507,6 @@ def _rows_in_range(rows, key, lo, hi):
 
 @mcp.custom_route("/insights_api", methods=["GET"])
 async def insights_api(request: Request):
-    """Aggregate season metrics for the /insights dashboard and the /staff console. Staff-gated.
-
-    This was the one ops endpoint with no key on it, and the reason it slipped is that it carries
-    no customer PII — but SECURITY.md's rule is "PII **or ops data**", and ops data is exactly what
-    this is: season revenue to the dollar, revenue broken out per building, every catalogue item's
-    unit price with its units sold and the +$1 sensitivity beside it, the completion funnel and the
-    data-quality counts. /billing_audit and /dispatch_plan compute narrower slices of the same
-    sheets and both ask for the key, so leaving this open meant the cheapest way to read the
-    business was to skip the gated endpoints and GET the summary of all of them. A rule that eight
-    of nine ops endpoints keep is not a rule, it is a list — and this was the line missing from it.
-
-    The `business_insights` MCP tool builds the same brief from _load_rows + compute_metrics
-    directly and is deliberately untouched: it never routes through this function, it is
-    aggregate-only by contract, the voice agent needs it mid-call, and the only door it is
-    reachable through (/mcp) already demands this same key in _McpAuthMiddleware."""
-    if not _authorized(request):
-        return _unauthorized(request)
     d, s = await _load_rows()
     lo = _parse_any_date(request.query_params.get("from"))
     hi = _parse_any_date(request.query_params.get("to"))
@@ -2954,8 +2570,6 @@ _ASK_PROMPT = (
 
 @mcp.custom_route("/ask_api", methods=["POST"])
 async def ask_api(request: Request):
-    if _model_rate_limited(request):
-        return _too_many_requests()
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -3039,8 +2653,6 @@ main{max-width:900px;margin:0 auto;padding:16px}
 .controls button:hover{background:#0f3b80}
 .controls button.ghost{background:#eef1f5;color:var(--navy)}
 .controls button.ghost:hover{background:#e4e8ee}
-.controls input[type=password]{border:1px solid #d3d8df;border-radius:8px;padding:7px 9px;font:inherit;font-size:15px;color:var(--ink)}
-#keybox{display:none}
 @media (max-width:480px){.row .lab{width:96px;font-size:12px}.row .val{width:64px;font-size:12px}.stat .n{font-size:18px}}
 </style></head><body>
 <header><img src="/brand/logo.jpg" alt="University Trucking" style="height:19px;width:auto;display:block;margin-bottom:6px"><b>Business Insights</b><span class=s>Live from the DISPATCH + SERVICE sheets</span></header>
@@ -3051,11 +2663,6 @@ main{max-width:900px;margin:0 auto;padding:16px}
  <button class=ghost onclick=resetRange()>All season</button>
  <button class=ghost onclick=exportCSV()>Export CSV</button>
  <span class=mut id=rangemsg></span>
-</div>
-<div class=controls id=keybox>
- <label>Staff key <input type=password id=key placeholder="x-utrucking-key"></label>
- <button onclick=saveKey()>Unlock</button>
- <span class=mut>Ask the admin for the ops key.</span>
 </div>
 <main id=root><p class=mut>Loading live data...</p></main>
 <script>
@@ -3097,21 +2704,12 @@ function render(m){
  h+=card('Data-quality scorecard','<div class=row><div class=lab style="flex:1">Unknown building</div><div class=val>'+dq.unknown_building+' ('+dq.unknown_building_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing phone</div><div class=val>'+dq.missing_phone+' ('+dq.missing_phone_pct+'%)</div></div><div class=row><div class=lab style="flex:1">Missing invoice</div><div class=val>'+dq.missing_invoice+'</div></div><div class=row><div class=lab style="flex:1">$0 / missing total</div><div class=val>'+dq.zero_or_missing_total+'</div></div>');
  document.getElementById('root').innerHTML=h;}
 var LAST=null;
-function hdrs(){var h={'Content-Type':'application/json'};var k=localStorage.getItem('utk');if(k)h['x-utrucking-key']=k;return h;}
-function saveKey(){localStorage.setItem('utk',document.getElementById('key').value.trim());document.getElementById('keybox').style.display='none';load();}
 function load(){
  var f=document.getElementById('from').value,t=document.getElementById('to').value,qs=[];
  if(f)qs.push('from='+encodeURIComponent(f));if(t)qs.push('to='+encodeURIComponent(t));
  document.getElementById('root').innerHTML='<p class=mut>Loading live data...</p>';
- /* 401 and 503 must read differently. 401 means THIS browser has no key and unlocking fixes it.
-    503 means the server has no API_SECRET at all, so no key exists to type — saying "staff key
-    required" there sends the operator hunting for a key nobody has instead of at the env var. */
- fetch('/insights_api'+(qs.length?'?'+qs.join('&'):''),{headers:hdrs()}).then(function(r){
-   if(r.status===401){document.getElementById('keybox').style.display='flex';
-    document.getElementById('root').innerHTML='<p class=mut>Staff key required - unlock above to see the numbers.</p>';return null;}
-   if(r.status===503){document.getElementById('root').innerHTML='<p class=mut>The staff gate is not configured on the server (API_SECRET is unset), so insights are refused for everyone. A key will not help - ask the admin to set it.</p>';return null;}
-   return r.json();})
-  .then(function(m){if(!m)return;LAST=m;render(m);})
+ fetch('/insights_api'+(qs.length?'?'+qs.join('&'):'')).then(function(r){return r.json();})
+  .then(function(m){LAST=m;render(m);})
   .catch(function(){document.getElementById('root').innerHTML='<p class=mut>Could not load insights.</p>';});}
 function applyRange(){load();}
 function resetRange(){document.getElementById('from').value='';document.getElementById('to').value='';load();}
@@ -3237,39 +2835,13 @@ async def _qa_ingest(call: dict, judge: bool = True) -> dict:
     return rec
 
 
-def _webhook_key_ok(request) -> bool:
-    """Whether this POST carries the webhook key.
-
-    Retell cannot attach a custom header to a webhook, so the key has exactly one channel: the
-    `?key=` in the URL registered on the agent. A URL is stored in Retell's config, rendered in
-    its dashboard and echoed by every proxy log in between — so this value should be assumed
-    disclosed and rotated on a schedule. What must NOT be true is that the disclosed value is
-    also the one gating /lookup_student, /get_order_details and the billing endpoints, which is
-    what a single API_SECRET made it.
-
-    WEBHOOK_SECRET is that separation. When it is set, it is the ONLY value this endpoint
-    accepts — API_SECRET stops working here, so the two keys cannot silently re-converge, and
-    rotating the URL-borne one is a one-field change with no PII blast radius. Unset, it falls
-    back to API_SECRET so the split can be deployed before the new env var exists."""
-    secret = WEBHOOK_SECRET or API_SECRET
-    if not secret:
-        return False
-    return (_secret_eq(request.query_params.get("key", ""), secret)
-            or _secret_eq(request.headers.get("x-utrucking-key", ""), secret))
-
-
 @mcp.custom_route("/retell_webhook", methods=["POST"])
 async def retell_webhook(request: Request):
-    """Retell post-call webhook → auto-QA. Locked with ?key=<WEBHOOK_SECRET> (see
-    _webhook_key_ok). Fails closed with the rest of the gate: with no secret deployed this
-    answers 503 rather than accepting call payloads from anyone, because an open webhook is a
-    write endpoint — it is what fills the QA scoreboard the staff read, so leaving it open lets
-    a stranger fabricate the record of calls that never happened."""
-    if not _webhook_key_ok(request):
-        if WEBHOOK_SECRET or API_SECRET:
-            return _unauthorized()              # a key was required and the POST didn't carry it
-        if not ALLOW_OPEN_API:
-            return _unauthorized(request)       # nothing deployed at all → 503, not a caller error
+    """Retell post-call webhook → auto-QA. Locked with ?key=<API_SECRET> once the
+    staff gate is active (unset = open, the same dormant-gate rollout as the rest)."""
+    if API_SECRET and request.query_params.get("key", "") != API_SECRET \
+            and request.headers.get("x-utrucking-key", "") != API_SECRET:
+        return _unauthorized()
     try:
         body = await request.json()
     except Exception:
@@ -3291,7 +2863,7 @@ async def voice_qa_api(request: Request):
     webhook-only scoreboard when the key isn't configured. ?judge=1 scores up to
     5 recent unjudged calls on demand."""
     if not _authorized(request):
-        return _unauthorized(request)
+        return _unauthorized()
     try:
         days = max(1, min(60, int(request.query_params.get("days", "7"))))
     except Exception:
@@ -3512,7 +3084,7 @@ h1{margin:9px 0 0;font-size:28px;font-weight:700;letter-spacing:-.02em;color:var
     <span class=tx><h2>Ask your data</h2><p>Plain-English questions on revenue, demand &amp; pricing.</p></span><span class=go>&rsaquo;</span></button>
    <button class=card onclick="op('/insights','Business insights')">
     <span class=ic><svg viewBox="0 0 24 24"><path d="M4 20V9M10 20V4M16 20v-8M21 20H3"/></svg></span>
-    <span class=tx><h2>Business insights</h2><p>Staff: live revenue, funnel, demand forecast and data quality.</p></span><span class=go>&rsaquo;</span></button>
+    <span class=tx><h2>Business insights</h2><p>Live revenue, funnel, demand forecast and data quality.</p></span><span class=go>&rsaquo;</span></button>
    <button class=card onclick="op('/ops','Ops command center')">
     <span class=ic><svg viewBox="0 0 24 24"><rect x="2.5" y="8" width="12" height="9"/><path d="M14.5 10h4L21 13v4h-2M2.5 17h12M7 20.5a1.8 1.8 0 1 0 .01 0M17 20.5a1.8 1.8 0 1 0 .01 0"/></svg></span>
     <span class=tx><h2>Ops command center</h2><p>Staff: daily crew plan, building routes &amp; printable run sheets.</p></span><span class=go>&rsaquo;</span></button>
@@ -3694,18 +3266,10 @@ async function load(){
  try{
   var pr=fetch('/dispatch_plan',{method:'POST',headers:hdrs(),body:JSON.stringify({args:{date:day}})});
   var br=fetch('/billing_audit',{method:'POST',headers:hdrs(),body:JSON.stringify({args:{}})});
-  var ir=fetch('/insights_api',{headers:hdrs()});
-  var p=await pr,b=await br,i=await ir;
-  /* All three are key-gated now, so the refusal check has to cover all three: checking only
-     /dispatch_plan used to leave a 401 from /insights_api to fall through to .json(), where the
-     refusal body renders as a console reporting $0 revenue and zero data-quality problems - a
-     locked door drawn as a healthy business. 503 is kept distinct from 401 for the same reason
-     the API separates them: it is the server missing API_SECRET, and no key typed here fixes it. */
-  if(p.status===503||b.status===503||i.status===503){
-   m.innerHTML='<span class=err>The staff gate is not configured on the server (API_SECRET is unset). A key will not help - ask the admin to set it.</span>';return;}
-  if(p.status===401||b.status===401||i.status===401){
-   document.getElementById('keybox').style.display='flex';m.textContent='Staff key required.';return;}
-  var plan=await p.json();var bill=await b.json();var ins=await i.json();
+  var ir=fetch('/insights_api');
+  var p=await pr;
+  if(p.status===401){document.getElementById('keybox').style.display='flex';m.textContent='Staff key required.';return;}
+  var plan=await p.json();var bill=await (await br).json();var ins=await (await ir).json();
   m.textContent='';render(plan,bill,ins,day);
  }catch(e){m.innerHTML='<span class=err>Could not load - try again.</span>';}}
 function render(plan,bill,ins,day){
@@ -3762,7 +3326,6 @@ async def voiceqa_page(request: Request):
 
 @mcp.custom_route("/insights", methods=["GET"])
 async def insights_page(request: Request):
-    """Staff-only insights dashboard (pulls the key-gated /insights_api)."""
     return HTMLResponse(_INSIGHTS_HTML)
 
 
@@ -3796,43 +3359,31 @@ app.add_middleware(
 
 
 class _McpAuthMiddleware:
-    """The MCP protocol endpoint requires the same staff key as the PII/ops HTTP endpoints
-    (x-utrucking-key header, or Authorization: Bearer <key> for MCP clients that only speak
-    Authorization), and fails closed with them.
-
-    It has to. `lookup_student` and `get_order_details` are reachable through /mcp as well as
-    over HTTP, so a gate that closed on one and stayed open on the other would leave the
-    records fully reachable by the other door — the rotation window this change exists to
-    close would have been closed on paper only."""
+    """When API_SECRET is set, the MCP protocol endpoint requires the same staff
+    key as the PII/ops HTTP endpoints (x-utrucking-key header, or
+    Authorization: Bearer <key> for MCP clients that only speak Authorization).
+    Unset = open — the same dormant-gate rollout as the rest of the API. The MCP
+    tools themselves are the caller-safe set (redacted lookup + verified details
+    + quote/availability/aggregate insights), so even the open state exposes
+    nothing beyond the public HTTP surface."""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
         path = (scope.get("path") or "").rstrip("/")
-        if scope.get("type") != "http" or not (path == "/mcp" or path.startswith("/mcp/")):
-            await self.app(scope, receive, send)
-            return
-
-        async def _refuse(status: int, body: bytes):
-            await send({"type": "http.response.start", "status": status,
-                        "headers": [(b"content-type", b"application/json")]})
-            await send({"type": "http.response.body", "body": body})
-
-        if not API_SECRET:
-            if not ALLOW_OPEN_API:
-                await _refuse(503, b'{"status":"unconfigured","message":"Staff gate is not configured '
-                                   b'on this server: API_SECRET is unset."}')
-                return
-        else:
+        if scope.get("type") == "http" and API_SECRET and (path == "/mcp" or path.startswith("/mcp/")):
             hdrs = {k.decode("latin-1").lower(): v.decode("latin-1")
                     for k, v in scope.get("headers") or []}
             supplied = hdrs.get("x-utrucking-key", "")
             auth = hdrs.get("authorization", "")
             if not supplied and auth.lower().startswith("bearer "):
                 supplied = auth[7:].strip()
-            if not _secret_eq(supplied, API_SECRET):
-                await _refuse(401, b'{"status":"unauthorized","message":"The MCP endpoint needs the staff key."}')
+            if supplied != API_SECRET:
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body",
+                            "body": b'{"status":"unauthorized","message":"The MCP endpoint needs the staff key."}'})
                 return
         await self.app(scope, receive, send)
 

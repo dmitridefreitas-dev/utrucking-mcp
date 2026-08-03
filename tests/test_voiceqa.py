@@ -9,13 +9,8 @@ import main
 
 @pytest.fixture(autouse=True)
 def _clean_qa(monkeypatch):
-    """Every test below is about the QA loop, not the gate, so the gate is put in the one
-    open configuration that still exists after Round 21: EXPLICITLY open. An unset API_SECRET
-    on its own now fails closed (503), which the gate tests at the bottom assert directly."""
     main._QA_CALLS.clear()
     monkeypatch.setattr(main, "API_SECRET", "")
-    monkeypatch.setattr(main, "WEBHOOK_SECRET", "")
-    monkeypatch.setattr(main, "ALLOW_OPEN_API", True)
     yield
     main._QA_CALLS.clear()
 
@@ -110,37 +105,6 @@ def test_webhook_key_gate(monkeypatch):
     assert r[1][0] == {"ok": True} and "c3" in main._QA_CALLS
 
 
-def test_webhook_secret_is_separable_from_the_pii_key(monkeypatch):
-    """The webhook key rides in a URL registered at Retell, so treat it as disclosed. Once
-    WEBHOOK_SECRET is set it must be the ONLY value the webhook accepts — if API_SECRET kept
-    working here, the two would silently re-converge and a leaked webhook URL would still be a
-    working staff key for /lookup_student."""
-    _stub_judge_model(monkeypatch)
-    monkeypatch.setattr(main, "API_SECRET", "pii-key")
-    monkeypatch.setattr(main, "WEBHOOK_SECRET", "hook-key")
-
-    r = asyncio.run(main.retell_webhook(
-        Req({"event": "call_ended", "call": _call("w1")}, query={"key": "pii-key"})))
-    assert r[1][0]["status"] == "unauthorized" and "w1" not in main._QA_CALLS
-
-    r = asyncio.run(main.retell_webhook(
-        Req({"event": "call_ended", "call": _call("w2")}, query={"key": "hook-key"})))
-    assert r[1][0] == {"ok": True} and "w2" in main._QA_CALLS
-
-    # and the webhook key is not a staff key: it opens nothing on the PII side
-    assert not main._authorized(Req(headers={"x-utrucking-key": "hook-key"}))
-
-
-def test_webhook_fails_closed_with_no_secret_deployed(monkeypatch):
-    """An open webhook is a WRITE endpoint — it fills the scoreboard staff read as the record of
-    what happened on the phones. Unconfigured must refuse, not accept anonymous call payloads."""
-    _stub_judge_model(monkeypatch)
-    monkeypatch.setattr(main, "ALLOW_OPEN_API", False)
-    r = asyncio.run(main.retell_webhook(Req({"event": "call_ended", "call": _call("c4")})))
-    assert r[2]["status_code"] == 503 and r[1][0]["status"] == "unconfigured"
-    assert "c4" not in main._QA_CALLS
-
-
 def test_qa_store_bounded(monkeypatch):
     monkeypatch.setattr(main, "_QA_MAX", 5)
     for i in range(9):
@@ -200,9 +164,8 @@ def test_business_insights_is_aggregate_only(monkeypatch):
 
 
 # ---------- /mcp staff-key middleware ----------
-def _run_mw(monkeypatch, secret, path, headers, allow_open=True):
+def _run_mw(monkeypatch, secret, path, headers):
     monkeypatch.setattr(main, "API_SECRET", secret)
-    monkeypatch.setattr(main, "ALLOW_OPEN_API", allow_open)
     hit = {"n": 0}
     async def downstream(scope, receive, send):
         hit["n"] += 1
@@ -216,31 +179,9 @@ def _run_mw(monkeypatch, secret, path, headers, allow_open=True):
     return hit["n"], sent
 
 
-def test_mcp_middleware_can_be_closed_on_an_unkeyed_deploy(monkeypatch):
-    """With ALLOW_OPEN_API off, no key deployed is a deploy fault rather than a public mode: /mcp
-    answers 503 instead of serving lookup_student and get_order_details to whoever asks. The
-    service ships with the gate dormant (see main.ALLOW_OPEN_API); this pins the closed path so
-    it still works on the day the key lands in Render."""
-    hit, sent = _run_mw(monkeypatch, "", "/mcp", {}, allow_open=False)
-    assert hit == 0 and sent[0]["status"] == 503
-    assert b"unconfigured" in sent[1]["body"]
-
-    hit, sent = _run_mw(monkeypatch, "", "/mcp", {}, allow_open=True)
+def test_mcp_middleware_open_when_gate_dormant(monkeypatch):
+    hit, sent = _run_mw(monkeypatch, "", "/mcp", {})
     assert hit == 1 and not sent
-
-
-def test_mcp_gate_cannot_be_walked_around_over_http(monkeypatch):
-    """/mcp exposes the same lookup_student / get_order_details as the gated HTTP routes. If it
-    stayed open while they failed closed, the rotation window this all exists to close would be
-    shut on one door and standing open on the other."""
-    class _R:
-        headers = {}
-        query_params = {}
-    monkeypatch.setattr(main, "API_SECRET", "")
-    monkeypatch.setattr(main, "ALLOW_OPEN_API", False)
-    assert not main._authorized(_R())                       # HTTP side refuses ...
-    hit, sent = _run_mw(monkeypatch, "", "/mcp", {}, allow_open=False)
-    assert hit == 0 and sent[0]["status"] == 503            # ... and so does the MCP side
 
 
 def test_mcp_middleware_blocks_without_key(monkeypatch):

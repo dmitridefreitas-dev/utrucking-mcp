@@ -41,60 +41,10 @@ working. A per-IP limiter catches one machine rotating through many names. Any
 successful verification clears the slate, so a genuine caller who fumbles is
 never punished.
 
-**Staff gate.** Endpoints returning PII or ops data require `x-utrucking-key`,
-matched against `API_SECRET` in constant time. Currently `/lookup_student`,
-`/get_order_details`, `/verify_identity`, `/debug_sheets`, `/billing_audit`,
-`/dispatch_plan`, `/sample_ids`, `/insights_api`, `/voice_qa_api` and `/mcp`.
-`/insights_api` returns no customer PII, but it is the ops half of the rule —
-season and per-building revenue, per-item pricing levers, funnel and
-data-quality counts — and it backs the `/insights` and `/staff` pages, so both
-now send the key. The `business_insights` MCP tool computes the same aggregate
-brief without going through that endpoint and is unchanged; `/mcp` gates it.
-
-The gate is **dormant**: with no `API_SECRET` deployed those endpoints are open.
-That is the wrong end state and it is not defended here — a gate whose failure
-mode is to disappear is not a gate, and the likeliest way to lose this secret is
-to miss it in one place during a rotation.
-
-It is dormant for one reason. The list above includes `/lookup_student`,
-`/get_order_details`, `/verify_identity` and `/mcp` — every door the Retell voice
-agent has. `API_SECRET` is not deployed in Render today, so failing closed would
-take the phone agent's tools out on the next deploy: a silent exposure traded for
-a silent outage. The machinery for closing it is all present and tested (`503
-unconfigured`, distinct from `401`, so a rotation is debugged against the
-environment rather than the caller); it is held behind one line, `ALLOW_OPEN_API`
-in `main.py`, rather than a second environment variable, because a gate governed
-by two env vars of opposite polarity is one more way to lose a rotation.
-
-**To close it:** set `API_SECRET` in Render, add the matching `x-utrucking-key`
-header to each Retell tool's `headers` block, confirm a call still completes, then
-set `ALLOW_OPEN_API = False`. Do those in that order and there is no window where
-the phone line is down.
-
-`/sample_ids` verifiers additionally require the key to be *armed*, so they fail
-closed in every open configuration, deliberate or not.
-
-**The open endpoints.** `/quote`, `/photo_quote`, `/condition_check`,
-`/chat_api` and `/ask_api` stay unauthenticated — they are what `/estimate` and
-`/chat` are made of — but they reach paid models, and two of them fetch a
-caller-supplied `image_url` from inside our network boundary. Both edges are
-bounded:
-
-- *SSRF.* A supplied URL must be `http(s)`, and every address its host resolves
-  to is rejected if it is loopback, private, link-local, reserved, multicast or
-  unspecified — which covers the cloud metadata service at `169.254.169.254`.
-  Redirects are followed by hand (max 3 hops) with the check re-run on each,
-  because `follow_redirects=True` made the front-door check meaningless. The
-  download is capped at 10 MB. **Known gap:** DNS rebinding is not closed — the
-  name is resolved again at connect time, and closing it needs the connection
-  pinned to the address we validated.
-- *Cost.* A per-IP counter (240 requests / 15 min) refuses `429` past the
-  budget. Requests carrying a valid staff key are **exempt**: the phone agent's
-  Retell tools all arrive from a handful of shared egress IPs, so metering them
-  would throttle the whole live fleet as one caller. It is a spend limit, not a
-  security boundary — it is keyed on `X-Forwarded-For`, which the caller
-  controls — and it is deliberately a separate counter from the identity-gate
-  lockout above, which counts only failures and keys on the socket peer.
+**Staff gate.** With `API_SECRET` set, endpoints returning PII or ops data
+require `x-utrucking-key`. Unset means open to the internet. `/sample_ids`
+verifiers additionally require the key to be *armed*, so they fail closed in
+the open configuration.
 
 **Post-call QA.** Every call is scored by an LLM judge, including whether the
 identity gate held. `/voiceqa`.
@@ -135,17 +85,7 @@ Closing it requires, in order:
 4. Scrub or take down the `utrucking-ai` / `utruckingai` mirrors, which also
    carry an un-scrubbed Retell LLM ID.
 
-**The webhook key is disclosed and rotating it is a deploy step.** The Retell
-post-call webhook is registered as a URL, and Retell cannot attach a custom
-header to one — so the key has exactly one channel, `?key=`, and a URL stored in
-Retell's config, rendered in its dashboard and echoed by every proxy log between
-here and there should be assumed known.
-
-What is fixed is the blast radius: `retell_webhook` now reads `WEBHOOK_SECRET`,
-and once that is set it is the *only* value the webhook accepts — `API_SECRET`
-stops working there, so the two cannot silently re-converge. What remains is the
-deploy: set `WEBHOOK_SECRET` in Render, re-register the webhook URL with the new
-value, then rotate `API_SECRET` (which should be considered disclosed, since it
-has been travelling in that URL). Until `WEBHOOK_SECRET` is set the webhook
-still falls back to `API_SECRET` — the code change is deployable ahead of the
-env var, but it buys nothing until the env var lands.
+Also outstanding: the Retell post-call webhook carries `API_SECRET` as a
+`?key=` query parameter. `retell_webhook` already accepts the
+`x-utrucking-key` header — move it there and rotate the key, which should be
+considered disclosed.
