@@ -100,6 +100,14 @@ Going live is two independent steps, and neither happens by accident:
 Because the pin is explicit, publishing alone changes nothing for callers —
 step 2 is the actual go-live.
 
+To read the live state before and after either step — which version the number
+actually serves, which LLM drafts exist, whether a run billed any calls — use
+`tools/retell_ops.py` (`numbers` · `agents` · `llms` · `calls` · `live`). It is
+read-only, and it is the only sanctioned client for those four list routes:
+Retell deprecated the unversioned ones, and the warning emails were traced to
+throwaway scripts that answered these questions by hand.
+`tests/test_retell_endpoints.py` fails the build if a legacy path reappears.
+
 Run the regression suite against a draft before either step:
 
     python tools/retell_suite.py all --version 45
