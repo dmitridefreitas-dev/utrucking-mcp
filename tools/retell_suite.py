@@ -426,10 +426,52 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 AGENT_ID = os.getenv("RETELL_AGENT_ID", "")
 
 
+# Retell's documented bounds for a custom tool's timeout_ms: "The minimum value allowed is 1000 ms
+# (1 s), and maximum value allowed is 600,000 ms (10 min). By default, this is set to 120,000 ms."
+TIMEOUT_MIN_MS, TIMEOUT_MAX_MS = 1000, 600000
+
+
+def validate_config(cfg):
+    """Refuse a manifest that cannot work, before anything compares or applies it.
+
+    Both failure modes below are silent at the API: Retell accepts the payload, returns 200, and the
+    call simply goes worse. A unit test can only pin the manifest as it was committed; this pins
+    every future edit to it, including one made ten minutes before someone runs `config --apply`
+    against the live phone agent.
+    """
+    errs = []
+    tools = {k: v for k, v in (cfg.get("tools") or {}).items() if not k.startswith("_")}
+    for name, spec in tools.items():
+        for var, path in (spec.get("response_variables") or {}).items():
+            # "Point each variable at a field in the response using dot notation, with array
+            # indexing where needed — for example `user.name` or `data.items[0].id`." JSONPath is
+            # not accepted: `$.reason` names a field `$`, resolves against nothing, and binds no
+            # variable — with no error, which is what let it sit in this file unnoticed.
+            if not isinstance(path, str) or not path or path.startswith("$"):
+                errs.append("tools.%s.response_variables.%s = %r is not dot notation "
+                            "(write `%s`, not `$.%s`)" % (name, var, path, var, var))
+        t = spec.get("timeout_ms")
+        if t is not None and not (TIMEOUT_MIN_MS <= t <= TIMEOUT_MAX_MS):
+            errs.append("tools.%s.timeout_ms %r is outside Retell's allowed %d-%d ms"
+                        % (name, t, TIMEOUT_MIN_MS, TIMEOUT_MAX_MS))
+
+    # The invariant, not the number: a tool that can still be running when the silence timer fires
+    # makes the winner a race, and the losing outcome is a call that ends on a waiting caller.
+    silence = (cfg.get("agent") or {}).get("end_call_after_silence_ms")
+    if silence is not None:
+        for name, spec in tools.items():
+            if spec.get("timeout_ms") is not None and spec["timeout_ms"] >= silence:
+                errs.append("tools.%s.timeout_ms %d races end_call_after_silence_ms %d"
+                            % (name, spec["timeout_ms"], silence))
+    if errs:
+        raise ValueError("agent/agent_config.json cannot be applied:\n  " + "\n  ".join(errs))
+    return cfg
+
+
 def load_config(path=CONFIG_PATH):
     with open(path, encoding="utf-8") as f:
         cfg = json.load(f)
-    return {k: v for k, v in cfg.items() if not k.startswith("_")}
+    return validate_config({k: v for k, v in cfg.items() if not k.startswith("_")})
 
 
 def config_drift(cfg, agent, llm):
@@ -441,6 +483,11 @@ def config_drift(cfg, agent, llm):
       * response_variables must be a SUPERSET. The manifest lists what the prompt branches on and
         nothing more; a key someone added in the dashboard for a reason this file doesn't know
         about is not drift, and reporting it would train whoever runs this to ignore the output.
+
+    A third rule by omission: response_variable paths are compared as raw strings and are NEVER
+    normalised. A live `$.reason` and a wanted `reason` are different values and must report as
+    drift — the `$.` form binds nothing, so an equivalence that quietly folded the two together
+    would report a broken agent as correct, which is precisely the bug this file was fixed for.
     """
     out = []
     for field, want in (cfg.get("agent") or {}).items():

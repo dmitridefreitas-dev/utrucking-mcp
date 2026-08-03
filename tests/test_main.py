@@ -2,6 +2,7 @@
 import json
 import re
 import time
+import types
 import pytest
 import engines
 import main
@@ -16,10 +17,16 @@ def _clear_ai_cache():
     main._AI_MAP_CACHE.clear()
     main._VERIFY_FAILS.clear()
     main._VERIFY_STRIKES.clear()
+    main._MODEL_HITS.clear()
+    main._MODEL_CALL_HOUR[:] = [0, 0.0]
+    main._MODEL_CALL_DAY[:] = [0, 0.0]
     yield
     main._AI_MAP_CACHE.clear()
     main._VERIFY_FAILS.clear()
     main._VERIFY_STRIKES.clear()
+    main._MODEL_HITS.clear()
+    main._MODEL_CALL_HOUR[:] = [0, 0.0]
+    main._MODEL_CALL_DAY[:] = [0, 0.0]
 
 
 # ---------- upsell attach ----------
@@ -949,9 +956,9 @@ def test_successful_verification_clears_strikes():
 def test_sample_ids_verifiers_require_an_ARMED_key(monkeypatch):
     """The staff test panel may show a verifier, but only when the gate is genuinely armed.
 
-    _authorized() alone is NOT sufficient. The endpoint can legitimately be running open — a
-    laptop with UTRUCKING_ALLOW_OPEN_API=1 — and that is precisely the configuration the answer
-    key must never be served in. So the verifiers view fails CLOSED in every open configuration,
+    _authorized() alone is NOT sufficient. The endpoint is running open in every deploy that has
+    no API_SECRET — which is how it ships today — and that is precisely the configuration the
+    answer key must never be served in. So the verifiers view fails CLOSED in every open one,
     deliberate or not, even when a caller asks for it.
     """
     import asyncio, json
@@ -1361,9 +1368,10 @@ def test_the_staff_gate_fails_closed_when_its_secret_is_missing(monkeypatch):
     assert main._unauthorized(_R())[2]["status_code"] == 401
 
 
-def test_running_open_requires_an_affirmative_act(monkeypatch):
-    """Open is still reachable for local work — but only by setting UTRUCKING_ALLOW_OPEN_API, never
-    by forgetting something. That asymmetry is the entire fix: an omission now errors."""
+def test_closing_the_gate_is_a_single_flag(monkeypatch):
+    """ALLOW_OPEN_API is the one switch between the dormant gate this ships with and the
+    fail-closed behaviour. Pinned as a test so the closed path cannot rot while it is switched
+    off: the day API_SECRET reaches Render, flipping this line has to still work."""
     class _R:
         headers, query_params = {}, {}
     monkeypatch.setattr(main, "API_SECRET", "")
@@ -1467,3 +1475,458 @@ def test_a_short_number_collision_still_reveals_nothing(monkeypatch):
     redacted = main._redact_lookup(hit)
     assert "phone" not in redacted["verify_with"].lower()      # never the digits just recited
     assert "Umrath" not in str(redacted) and "412" not in str(redacted)
+
+
+# ── Round 22: the last ungated ops endpoint, and the two open doors that spend money ──
+# Three findings. /insights_api served the whole business to anyone who guessed the path while its
+# eight neighbours asked for a key; /photo_quote fetched any URL a stranger named, from inside the
+# network boundary, following redirects; and five open endpoints reached a paid model with nothing
+# counting how often. The constraint running through all three fixes is that the PHONE agent must
+# not notice: it carries the staff key, so it is exempt from the limiter by construction.
+
+class _GateReq:
+    """Minimal request for the gated JSON endpoints: headers + query params, nothing else."""
+    def __init__(self, headers=None, query=None):
+        self.headers, self.query_params = headers or {}, query or {}
+
+
+def _insights_rows(monkeypatch):
+    D = [{"Student": "Jamie Rivers", "ID": "#90001-TS", "Service": "Summer Storage",
+          "Building": "Northgate B", "Room": "12", "Date": "5/6/2026",
+          "Phone": "5550100200", "Status": "Complete"}]
+    S = [{"Student": "Jamie Rivers", "Date": "5/6/2026", "Building": "Northgate B",
+          "Summer Storage Item List": "UTrucking Box (Amount: 22.00 USD, Quantity: 4) Total: $88.00"}]
+    async def fake_load():
+        return D, S
+    monkeypatch.setattr(main, "_load_rows", fake_load)
+
+
+def test_insights_api_rides_the_same_staff_gate_as_the_rest_of_ops(monkeypatch):
+    """It returns no customer PII, which is why it shipped open — but SECURITY.md's rule is "PII OR
+    ops data", and season revenue, per-building revenue and every item's pricing lever is the ops
+    half. /billing_audit and /dispatch_plan compute narrower slices of the same sheets behind the
+    key, so an open summary of all of them made the gated endpoints pointless to attack."""
+    import asyncio
+    _insights_rows(monkeypatch)
+    monkeypatch.setattr(main, "API_SECRET", "s3cret")
+    monkeypatch.setattr(main, "ALLOW_OPEN_API", False)
+
+    res = asyncio.run(main.insights_api(_GateReq()))
+    assert res[2]["status_code"] == 401 and res[1][0]["status"] == "unauthorized"
+    assert "revenue" not in str(res[1][0]).lower()                  # the refusal leaks no numbers
+    assert asyncio.run(main.insights_api(
+        _GateReq({"x-utrucking-key": "wrong"})))[2]["status_code"] == 401
+
+    ok = asyncio.run(main.insights_api(_GateReq({"x-utrucking-key": "s3cret"})))
+    assert ok[2].get("status_code") is None                          # 200
+    assert ok[1][0]["overview"]["revenue"] == 88
+
+    # and the deploy-fault state is still reported as ours, not as the caller's
+    monkeypatch.setattr(main, "API_SECRET", "")
+    res = asyncio.run(main.insights_api(_GateReq()))
+    assert res[2]["status_code"] == 503 and res[1][0]["status"] == "unconfigured"
+
+    assert "/insights_api" in main._GATED                             # the boot warning stays true
+
+
+def test_business_insights_tool_is_untouched_by_the_new_gate(monkeypatch):
+    """The MCP tool the voice agent uses mid-call computes the same brief from _load_rows directly
+    and never routes through insights_api, so gating the endpoint must not reach it. Its own door
+    (/mcp) already demands the same key — see the middleware tests."""
+    import asyncio
+    _insights_rows(monkeypatch)
+    monkeypatch.setattr(main, "API_SECRET", "s3cret")
+    out = asyncio.run(main.business_insights())                       # no request, no key, still works
+    assert "Revenue total: $88" in out
+    assert "Jamie" not in out and "5550100200" not in out             # aggregate-only, as documented
+
+
+def test_the_insights_pages_send_the_key_and_tell_401_from_503():
+    """Gating the endpoint breaks both pages that read it unless they carry the header. And the two
+    refusals must not read alike: 401 means unlock, 503 means the server has no API_SECRET at all,
+    where telling the operator "staff key required" sends them hunting for a key nobody holds."""
+    ins, staff = main._INSIGHTS_HTML, main._STAFF_HTML
+    assert "fetch('/insights_api'+(qs.length?'?'+qs.join('&'):''),{headers:hdrs()})" in ins
+    assert "x-utrucking-key" in ins and "id=keybox" in ins
+    assert "r.status===401" in ins and "r.status===503" in ins
+    assert "API_SECRET" in ins                                        # the 503 copy names the cause
+
+    assert "fetch('/insights_api',{headers:hdrs()})" in staff
+    # the console reads three gated endpoints; a refusal from ANY of them must be caught, or the
+    # 401 body renders as a business with $0 revenue and no data-quality problems
+    assert "i.status===401" in staff and "i.status===503" in staff
+    assert "p.status===401" in staff and "b.status===401" in staff
+
+
+# ---------- SSRF: a caller-supplied image_url points our own socket somewhere ----------
+def _fake_dns(monkeypatch, mapping):
+    """Resolve only the names in `mapping`; everything else is NXDOMAIN. Patches main's reference
+    to socket so the real resolver is never consulted and the tests stay offline."""
+    def getaddrinfo(host, port, **k):
+        if host not in mapping:
+            raise OSError("Name or service not known")
+        return [(2, 1, 6, "", (a, port)) for a in mapping[host]]
+    monkeypatch.setattr(main, "socket", types.SimpleNamespace(getaddrinfo=getaddrinfo,
+                                                              IPPROTO_TCP=6))
+
+
+PUBLIC = {"cdn.example.com": ["93.184.216.34"], "img.example.org": ["93.184.216.34"]}
+
+
+@pytest.mark.parametrize("url,hosts", [
+    ("http://127.0.0.1:8080/admin", {"127.0.0.1": ["127.0.0.1"]}),
+    ("http://localhost/", {"localhost": ["127.0.0.1"]}),
+    # the one that pays for itself: the cloud metadata service answers any local process with
+    # instance credentials and asks for nothing
+    ("http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+     {"169.254.169.254": ["169.254.169.254"]}),
+    ("http://10.0.0.5/x.jpg", {"10.0.0.5": ["10.0.0.5"]}),
+    ("http://192.168.1.1/x.jpg", {"192.168.1.1": ["192.168.1.1"]}),
+    ("http://internal.example.com/x.jpg", {"internal.example.com": ["10.1.2.3"]}),
+    ("http://[::1]/x.jpg", {"::1": ["::1"]}),
+    # a v4-mapped v6 literal is the metadata service in a costume: is_link_local is False on the
+    # v6 form, so it has to be judged as the v4 address it actually names
+    ("http://[::ffff:169.254.169.254]/", {"::ffff:169.254.169.254": ["::ffff:169.254.169.254"]}),
+])
+def test_ssrf_validator_refuses_every_address_inside_the_boundary(monkeypatch, url, hosts):
+    _fake_dns(monkeypatch, hosts)
+    ok, why = main._url_is_fetchable(url)
+    assert ok is False, url
+    assert "private network" in why
+    # one message for every class — naming which one it hit would turn the refusal into a scanner
+    for tell in ("loopback", "link-local", "169.254", "10.1.2.3", "metadata"):
+        assert tell not in why
+
+
+def test_ssrf_validator_checks_every_resolved_address_not_just_the_first(monkeypatch):
+    """A name the attacker controls can answer with a public address AND 127.0.0.1, in whatever
+    order it likes. Approving on infos[0] would make the block a coin flip."""
+    _fake_dns(monkeypatch, {"evil.example.com": ["93.184.216.34", "127.0.0.1"],
+                            "evil2.example.com": ["127.0.0.1", "93.184.216.34"]})
+    assert main._url_is_fetchable("http://evil.example.com/x.jpg")[0] is False
+    assert main._url_is_fetchable("http://evil2.example.com/x.jpg")[0] is False
+
+
+def test_ssrf_validator_allows_an_ordinary_public_image(monkeypatch):
+    """The check has to stay invisible to the feature it protects: a normal hosted photo passes."""
+    _fake_dns(monkeypatch, PUBLIC)
+    assert main._url_is_fetchable("https://cdn.example.com/photos/dorm.jpg") == (True, None)
+    assert main._url_is_fetchable("http://cdn.example.com:8080/dorm.jpg") == (True, None)
+
+
+def test_ssrf_validator_refuses_non_http_schemes_and_junk(monkeypatch):
+    _fake_dns(monkeypatch, PUBLIC)
+    for url in ("file:///etc/passwd", "ftp://cdn.example.com/x.jpg", "gopher://cdn.example.com/",
+                "data:image/png;base64,AAAA", "cdn.example.com/x.jpg", ""):
+        ok, why = main._url_is_fetchable(url)
+        assert ok is False, url
+        assert "http" in why or "host" in why
+    assert main._url_is_fetchable("http://nope.example.com/x.jpg")[0] is False   # NXDOMAIN
+
+
+# ---------- SSRF: the redirect hop, which a front-door-only check never sees ----------
+class _StreamResp:
+    def __init__(self, status, headers=None, body=b""):
+        self.status_code, self.headers, self._body = status, headers or {}, body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def aiter_bytes(self):
+        for i in range(0, len(self._body), 4):
+            yield self._body[i:i + 4]
+
+
+class _StreamClient:
+    seq, seen = [], []
+
+    def __init__(self, *a, **k):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    def stream(self, method, url, **k):
+        _StreamClient.seen.append(url)
+        return _StreamClient.seq.pop(0)
+
+
+def _fake_http(monkeypatch, responses):
+    _StreamClient.seq, _StreamClient.seen = list(responses), []
+    monkeypatch.setattr(main, "httpx", types.SimpleNamespace(AsyncClient=_StreamClient))
+
+
+def test_ssrf_redirect_hop_is_revalidated_not_trusted(monkeypatch):
+    """follow_redirects=True made a pre-flight check theatre: the caller names a public host, the
+    public host answers 302 to 169.254.169.254, and httpx fetches it without asking anyone. The
+    hop must be validated before the second socket is opened — and never opened when it fails."""
+    import asyncio
+    _fake_dns(monkeypatch, dict(PUBLIC, **{"169.254.169.254": ["169.254.169.254"]}))
+    _fake_http(monkeypatch, [_StreamResp(302, {"location": "http://169.254.169.254/latest/meta-data/"})])
+    raw, err = asyncio.run(main._fetch_caller_url("https://cdn.example.com/a.jpg", "UA"))
+    assert raw is None and "private network" in err
+    assert _StreamClient.seen == ["https://cdn.example.com/a.jpg"]     # hop 2 was never requested
+
+    # a relative Location resolving somewhere private is the same hole with a different spelling
+    _fake_dns(monkeypatch, {"cdn.example.com": ["93.184.216.34"], "10.0.0.9": ["10.0.0.9"]})
+    _fake_http(monkeypatch, [_StreamResp(301, {"location": "http://10.0.0.9/x"})])
+    assert asyncio.run(main._fetch_caller_url("https://cdn.example.com/a.jpg", "UA"))[0] is None
+
+
+def test_ssrf_public_redirect_chain_still_delivers_the_image(monkeypatch):
+    """CDNs and shorteners redirect constantly, so the fix cannot be "stop following redirects"."""
+    import asyncio
+    _fake_dns(monkeypatch, PUBLIC)
+    _fake_http(monkeypatch, [_StreamResp(302, {"location": "https://img.example.org/real.jpg"}),
+                             _StreamResp(200, {}, b"\xff\xd8\xff\xe0JPEGBYTES")])
+    raw, err = asyncio.run(main._fetch_caller_url("https://cdn.example.com/a.jpg", "UA"))
+    assert err is None and raw == b"\xff\xd8\xff\xe0JPEGBYTES"
+    assert _StreamClient.seen == ["https://cdn.example.com/a.jpg", "https://img.example.org/real.jpg"]
+
+
+def test_ssrf_redirect_loop_terminates(monkeypatch):
+    import asyncio
+    _fake_dns(monkeypatch, PUBLIC)
+    _fake_http(monkeypatch, [_StreamResp(302, {"location": "https://cdn.example.com/a.jpg"})
+                             for _ in range(main._URL_MAX_HOPS + 1)])
+    raw, err = asyncio.run(main._fetch_caller_url("https://cdn.example.com/a.jpg", "UA"))
+    assert raw is None and "redirects too many times" in err
+
+
+def test_ssrf_download_is_capped(monkeypatch):
+    """Without a cap, "fetch this URL" is also "hold this file in our memory": a caller points us
+    at a multi-gigabyte file and the process dies. Capped while streaming, not after."""
+    import asyncio
+    _fake_dns(monkeypatch, PUBLIC)
+    monkeypatch.setattr(main, "_URL_MAX_BYTES", 8)
+    _fake_http(monkeypatch, [_StreamResp(200, {}, b"x" * 64)])
+    raw, err = asyncio.run(main._fetch_caller_url("https://cdn.example.com/a.jpg", "UA"))
+    assert raw is None and "larger than" in err
+    _fake_http(monkeypatch, [_StreamResp(200, {}, b"x" * 8)])          # exactly the cap is fine
+    assert asyncio.run(main._fetch_caller_url("https://cdn.example.com/a.jpg", "UA"))[0] == b"x" * 8
+
+
+def test_both_image_url_paths_go_through_the_checked_fetch(monkeypatch):
+    """/photo_quote and /condition_check (via _load_image_arg) are two doors to the same fetch;
+    hardening one and leaving the other is the same hole with a different URL."""
+    import asyncio
+    _fake_dns(monkeypatch, {"169.254.169.254": ["169.254.169.254"]})
+    _fake_http(monkeypatch, [])                                        # no socket may be opened
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(main, "API_SECRET", "")
+
+    class _Post:
+        method = "POST"
+        headers, query_params = {}, {}
+        client = type("C", (), {"host": "203.0.113.5"})()
+        def __init__(self, args): self._b = {"args": args}
+        async def json(self): return self._b
+
+    body = asyncio.run(main.photo_quote_endpoint(
+        _Post({"image_url": "http://169.254.169.254/latest/meta-data/"})))[1][0]
+    assert body["status"] == "error" and "private network" in body["message"]
+
+    _, _, err = asyncio.run(main._load_image_arg({"image_url": "http://169.254.169.254/x"}))
+    assert err["status"] == "error" and "private network" in err["message"]
+    assert _StreamClient.seen == []                                    # neither path connected
+
+
+# ---------- per-IP cost limiter on the open, model-backed endpoints ----------
+def _rate_req(host="203.0.113.9", headers=None, method="POST", args=None):
+    class _R:
+        pass
+    r = _R()
+    r.method, r.headers, r.query_params = method, headers or {}, {}
+    r.client = type("C", (), {"host": host})()
+    r._b = {"args": args or {}}
+    async def _json(_r=r): return _r._b
+    r.json = _json
+    return r
+
+
+def test_cost_limiter_throttles_a_flood_but_never_a_request_with_the_staff_key(monkeypatch):
+    """The open endpoints reach a paid model, and the free-tier quota they burn is the same one the
+    PHONE agent draws on — so an anonymous flood is not just a bill, it degrades live calls.
+
+    The exemption is the load-bearing half. Retell's custom tools call /quote from Retell's own
+    egress IPs, shared by every simultaneous call, carrying the staff key. Per-IP the whole fleet
+    is one caller, so a limiter that counted it would refuse quotes to real callers exactly when
+    the line is busiest. The key is what tells the fleet apart from a stranger."""
+    monkeypatch.setattr(main, "API_SECRET", "s3cret")
+    monkeypatch.setattr(main, "ALLOW_OPEN_API", False)
+    main._MODEL_HITS.clear()
+
+    anon = _rate_req()
+    for i in range(main._MODEL_MAX):
+        assert not main._model_rate_limited(anon), "throttled a real customer at request %d" % i
+    assert main._model_rate_limited(anon)
+
+    # same IP, now poisoned for anonymous callers — the phone fleet still gets through, forever
+    staff = _rate_req(headers={"x-utrucking-key": "s3cret"})
+    for _ in range(main._MODEL_MAX * 3):
+        assert not main._model_rate_limited(staff)
+
+    # a wrong key is a stranger, not a staff member
+    assert main._model_rate_limited(_rate_req(headers={"x-utrucking-key": "s3cre"}))
+
+    # a different caller is unaffected by the flood
+    assert not main._model_rate_limited(_rate_req(host="198.51.100.4"))
+
+
+def test_cost_limiter_and_the_identity_lockout_stay_separate(monkeypatch):
+    """_IP_FAILS is a security lockout — hour-long, punishing, counted only on verification
+    failures, keyed on the socket peer so nobody picks their own bucket. Merging the two would
+    either let ordinary quoting lock a shared campus NAT out of order lookup, or let an X-Forwarded
+    -For rewrite defeat the brute-force lockout."""
+    monkeypatch.setattr(main, "API_SECRET", "s3cret")
+    main._MODEL_HITS.clear(); main._IP_FAILS.clear()
+    for _ in range(main._MODEL_MAX + 2):
+        main._model_rate_limited(_rate_req())
+    assert main._IP_FAILS == {}                       # quoting never counts toward a lockout
+    assert not main._ip_locked("203.0.113.9")
+
+    main._IP_FAILS["203.0.113.9"] = [main._IP_MAX, time.time()]
+    assert main._ip_locked("203.0.113.9")
+    main._MODEL_HITS.clear()
+    assert not main._model_rate_limited(_rate_req())  # and a lockout never refuses a quote
+    main._IP_FAILS.clear()
+
+
+def test_cost_limiter_window_forgives_and_still_meters_a_keyless_deploy(monkeypatch):
+    monkeypatch.setattr(main, "API_SECRET", "s3cret")
+    main._MODEL_HITS.clear()
+    for _ in range(main._MODEL_MAX + 1):
+        main._model_rate_limited(_rate_req())
+    assert main._model_rate_limited(_rate_req())
+    main._MODEL_HITS["203.0.113.9"][1] = time.time() - main._MODEL_WINDOW - 1
+    assert not main._model_rate_limited(_rate_req())          # a quiet window forgives
+
+    # No API_SECRET deployed is not an edge case here — it is how this service actually runs, so
+    # it is the configuration the spend limit MUST cover. An earlier version exempted it, keying
+    # the exemption on _gate_state; with the gate dormant that answers "ok" for every caller
+    # alive, which switched the limiter off for the whole internet in exactly the state whose
+    # bill it was written to bound. The exemption is now a key that verifies, and nothing
+    # verifies against an unset secret.
+    monkeypatch.setattr(main, "API_SECRET", "")
+    monkeypatch.setattr(main, "ALLOW_OPEN_API", True)
+    main._MODEL_HITS.clear()
+    for _ in range(main._MODEL_MAX):
+        assert not main._model_rate_limited(_rate_req())
+    assert main._model_rate_limited(_rate_req())
+    # and an unset secret must never be satisfiable by sending an empty key
+    assert main._model_rate_limited(_rate_req(headers={"x-utrucking-key": ""}))
+
+
+def test_open_endpoints_return_a_clear_429_and_the_staff_key_still_gets_a_quote(monkeypatch):
+    """The refusal has to be readable by both front ends: /estimate shows `message`, /chat renders
+    whatever is in `reply`, and a bare 429 with neither reads to a customer as an outage."""
+    import asyncio
+    monkeypatch.setattr(main, "API_SECRET", "s3cret")
+    S = [_svc([("UTrucking Box", 22, 1), ("Mini Fridge", 23, 1)]) for _ in range(6)]
+    async def fake_fetch(url, force=False):
+        return S if url == main.SERVICE_CSV_URL else []
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+
+    over = [main._MODEL_MAX + 5, time.time()]
+    for endpoint, req in ((main.quote_endpoint, _rate_req(args={"text": "5 boxes"})),
+                          (main.chat_api, _rate_req(args={"message": "hi", "state": {}})),
+                          (main.ask_api, _rate_req(args={"question": "revenue?"})),
+                          (main.condition_check_endpoint, _rate_req(args={})),
+                          (main.photo_quote_endpoint, _rate_req(args={}))):
+        main._MODEL_HITS["203.0.113.9"] = list(over)
+        res = asyncio.run(endpoint(req))
+        assert res[2]["status_code"] == 429, endpoint.__name__
+        body = res[1][0]
+        assert body["status"] == "rate_limited" and body["message"] and body["reply"]
+
+    # the same over-budget IP, with the key the Retell tools send, still gets priced
+    main._MODEL_HITS["203.0.113.9"] = list(over)
+    ok = asyncio.run(main.quote_endpoint(
+        _rate_req(headers={"x-utrucking-key": "s3cret"}, args={"text": "5 boxes"})))
+    assert ok[2].get("status_code") is None and ok[1][0]["total"] == 110.0
+
+    # and the GET self-documentation is never metered — it costs nothing and describes the API
+    main._MODEL_HITS["203.0.113.9"] = list(over)
+    doc = asyncio.run(main.quote_endpoint(_rate_req(method="GET")))
+    assert doc[2].get("status_code") is None and doc[1][0]["endpoint"] == "/quote"
+
+
+def test_rate_key_survives_the_proxy_but_the_identity_lockout_does_not_use_it():
+    """Behind Render's proxy request.client.host is the LOAD BALANCER for every request alive, so a
+    limiter keyed on it buckets the whole internet together and the first busy hour 429s /estimate
+    for real customers. X-Forwarded-For is what makes the count per-caller. It is also caller-
+    supplied, which is why _ip_locked's security lockout must never adopt it."""
+    assert main._rate_ip(_rate_req(host="10.0.0.7",
+                                   headers={"x-forwarded-for": "203.0.113.9, 10.0.0.7"})) == "203.0.113.9"
+    assert main._rate_ip(_rate_req(host="203.0.113.9")) == "203.0.113.9"      # no proxy, no header
+    assert main._rate_ip(_rate_req(host="", headers={})) == "?"               # never a blank key
+    # The identity lockout still reads the socket peer: a spoofed header must not hand an attacker
+    # a fresh brute-force budget the way it hands them a fresh quoting budget.
+    spoofed = _rate_req(host="6.6.6.6", headers={"x-forwarded-for": "1.2.3.4"})
+    assert main._rate_ip(spoofed) == "1.2.3.4" != spoofed.client.host
+
+
+# ── the process-wide ceiling on paid model calls ─────────────────────────────────────
+# The per-caller limiter is keyed on X-Forwarded-For, which the caller sets, so rotating the
+# header buys a fresh quota every time. That is deliberate — refusing a paying customer is
+# worse than metering loosely — but it means the per-caller limiter is NOT what bounds the
+# bill. This is, and it is the only thing in the service that is.
+
+def test_model_budget_caps_the_hour_then_forgives():
+    main._MODEL_CALL_HOUR[:] = [0, 0.0]
+    main._MODEL_CALL_DAY[:] = [0, 0.0]
+    for i in range(main._MODEL_CALL_HOUR_MAX):
+        assert main._model_budget_ok(), "refused a call inside the hourly budget at %d" % i
+    assert not main._model_budget_ok()
+    main._MODEL_CALL_HOUR[1] = time.time() - 60 * 60 - 1       # the hour rolls over
+    assert main._model_budget_ok()
+
+
+def test_model_budget_daily_cap_outlasts_the_hourly_one():
+    """A slow crawler never trips the hourly window — it just bills all day. The daily cap is
+    the one that stops that, so it has to hold once the hourly counter has been reset away."""
+    main._MODEL_CALL_HOUR[:] = [0, 0.0]
+    main._MODEL_CALL_DAY[:] = [main._MODEL_CALL_DAY_MAX, time.time()]
+    assert not main._model_budget_ok()
+    # and the refusal must not have charged the hourly budget on its way out
+    assert main._MODEL_CALL_HOUR[0] == 0
+
+
+def test_an_exhausted_budget_degrades_the_quote_instead_of_breaking_it(monkeypatch):
+    """The ceiling must never turn into an outage. _ai_map_unmatched already treats any model
+    failure as "no mapping available", so an exhausted budget costs an unpriced line and
+    nothing else — the quote, the total and the priced items all still come back."""
+    import asyncio
+    calls = {"n": 0}
+    async def fake_gen(key, parts, temp=None, json_out=False):
+        calls["n"] += 1
+        return '{"kayak": "mattress"}'
+    monkeypatch.setattr(main, "_post_retry", fake_gen)         # never reached; budget refuses first
+    monkeypatch.setenv("GEMINI_API_KEY", "stub")
+    main._MODEL_CALL_HOUR[:] = [main._MODEL_CALL_HOUR_MAX, time.time()]
+    q = asyncio.run(main._ai_map_unmatched(engines.quote("2 boxes, 1 kayak", BOOK), BOOK))
+    assert calls["n"] == 0                                     # no paid call was made
+    assert any(l["item"] == "Utrucking Box" and l["qty"] == 2 for l in q["line_items"])
+    assert "kayak" in (q.get("unmatched") or [])               # surfaced, not silently dropped
+    assert q["total"] == 44.0
+
+
+def test_the_voice_identity_path_never_spends_a_model_call(monkeypatch):
+    """The reason the ceiling is safe to impose at all: a hostile flood can exhaust the budget
+    and still not touch a live call, because the identity gate calls no model. If this ever
+    stops being true, the ceiling becomes a way to take the phone line down."""
+    import asyncio
+    D, S = _id_data(); _patch_rows(monkeypatch, D, S)
+    main._MODEL_CALL_HOUR[:] = [main._MODEL_CALL_HOUR_MAX, time.time()]   # budget fully spent
+    main._MODEL_CALL_DAY[:] = [main._MODEL_CALL_DAY_MAX, time.time()]
+    main._VERIFY_FAILS.clear()
+    look = asyncio.run(main.do_lookup_student("Jamie Rivers"))
+    assert look.get("status") == "found"
+    ok = asyncio.run(main.do_get_order_details("Jamie Rivers", "Northgate B"))
+    assert ok.get("verified") is True and ok.get("building") == "Northgate B"

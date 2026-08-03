@@ -206,13 +206,19 @@ URL inside a single window, and rotation is exactly when it is most likely to be
 from one of them. Missing it in Render published every customer record with a `200` and
 no error anywhere — the failure was silent, which is what made it worse than an outage.
 
-The gate now fails **closed**: no `API_SECRET` means `503 unconfigured`, a distinct
-status from `401` so whoever is debugging the rotation looks at the environment instead
-of at the caller. `/mcp` rides the same rule — it serves the same `lookup_student` and
-`get_order_details`, so a gate that closed on the HTTP door and stayed open on that one
-would have been shut on paper only. Open is still reachable for local work
-(`UTRUCKING_ALLOW_OPEN_API=1`), but only as an affirmative act. Secrets now compare in
-constant time; these endpoints are reachable by anyone, so `==` was a public oracle.
+The gate was made to fail **closed** — no `API_SECRET` means `503 unconfigured`, a
+distinct status from `401` so whoever is debugging the rotation looks at the environment
+instead of at the caller — and then **deliberately reverted to dormant before shipping**.
+The gated list includes `/lookup_student`, `/get_order_details`, `/verify_identity` and
+`/mcp`: every door this agent has. `API_SECRET` is not deployed in Render, so closing the
+gate would have ended every call the moment the service redeployed. A silent exposure is
+bad; trading it for a silent outage on the phone line is not a fix.
+
+The closed path is built and tested, held behind one line (`ALLOW_OPEN_API` in `main.py`)
+rather than an env var, so the gate's state cannot be lost track of across two flags of
+opposite polarity. Closing it is: key into Render → same key into every tool `headers`
+block → confirm a live call → flip the line. Secrets compare in constant time regardless;
+these endpoints are reachable by anyone, so `==` was a public oracle.
 
 ### The webhook key and the PII key are separable
 
@@ -240,7 +246,38 @@ reveals no names and a single hit still faces the identity gate with `phone` exc
 for each, checked by `tools/retell_suite.py config`, and unit-tested offline. Backchannels
 are **off** rather than merely rarer: at any frequency above zero the "mm-hmm" still
 lands between spelled letters, just less often, and the spelling ladder is the recovery
-path for a call that is already going wrong.
+path for a call that is already going wrong. `backchannel_frequency: 0` is a second
+latch, not the fix — Retell applies that field "only when `enable_backchannel` is true",
+and its default is 0.8, so pinning it is what stops a dashboard toggle restoring the
+defect rather than producing a quiet agent.
+
+### The manifest's response variables were written in a notation Retell doesn't read
+
+Every mapping in the first draft of `agent_config.json` was JSONPath — `"reason": "$.reason"`.
+Retell's custom-function docs are explicit that this field is not JSONPath: "Point each
+variable at a field in the response using dot notation, with array indexing where needed
+— for example `user.name` or `data.items[0].id`." `$.reason` asks for a field named `$`
+holding a field named `reason`. Nothing this service returns has one, so all fourteen
+mappings bound nothing — and nothing complains, because an unresolved path simply yields
+no variable and an unset dynamic variable renders as the literal text `{{reason}}`. The
+drift checker was comparing every tool against a value that could never be right, so
+`config` would have reported the same drift forever and `--apply` would have written
+fourteen dead mappings and printed `applied`. All of them are now plain dot paths.
+
+Scope, because the first write-up of this overstated it: a custom tool's **entire JSON
+response body is stringified into the LLM's context regardless of `response_variables`**.
+v46's `reason` branching reads the tool result directly and works with this field empty;
+`response_variables` only binds values for `{{template}}` reuse later in the call. So this
+was a dead config entry, not a broken agent — worth fixing, and not what the failure
+taxonomy stands on.
+
+Two guards now sit in `load_config`, so they run on the `--apply` path and not only in
+CI: a `$`-prefixed path and a tool timeout that is out of Retell's documented 1000–600000ms
+range or greater than or equal to `end_call_after_silence_ms` each raise before any request
+is built. Retell answers `200` to all three, which is the only reason they needed catching
+somewhere other than a call. The drift check deliberately does **not** normalise `$.reason`
+to `reason`: they are not two spellings of one path, and folding them together would grade
+the live broken agent as correct.
 
 ## Known, not yet fixed
 
@@ -249,8 +286,19 @@ path for a call that is already going wrong.
   Run `python tools/retell_suite.py config` to see the drift, `--apply` to write it,
   then the two publishing steps below. Until then the live agent still has
   `backchannel_frequency: 0.8`, `timeout_ms: 120000`, and no `reason` variable.
+- **Three values in the manifest are asserted, not observed.** `responsiveness: 0.7`,
+  `interruption_sensitivity: 0.6` and `end_call_after_silence_ms: 120000` are recorded here
+  as the agent's existing settings and described as "left alone", but none of them is
+  Retell's default (1, 1, and 600000). If the live agent is actually on the defaults, the
+  first `--apply` changes all three rather than confirming them — and the tool-timeout
+  invariant is stated against a silence timer that may not be the live one. Read them off
+  `config`'s drift report before applying; the check is read-only.
 - **`WEBHOOK_SECRET` is not deployed**, so the webhook still accepts `API_SECRET` and
   the key in the URL is still the key that gates PII. Code side is done; the remaining
   work is Render env + re-registering the webhook URL + rotating `API_SECRET`.
-- The `.env.example` in this repo does not yet list `UTRUCKING_ALLOW_OPEN_API`,
-  `WEBHOOK_SECRET` or `RETELL_AGENT_ID`.
+- The `.env.example` in this repo does not yet list `WEBHOOK_SECRET` or
+  `RETELL_AGENT_ID`.
+- **`API_SECRET` is not deployed in Render**, so the staff gate is dormant and the
+  PII/ops endpoints are open to the internet. This is the single highest-value
+  outstanding item: setting it, adding the same value to each Retell tool's
+  `headers` block, then flipping `ALLOW_OPEN_API = False` closes it in one pass.

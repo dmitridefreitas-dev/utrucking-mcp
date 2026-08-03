@@ -87,16 +87,43 @@ def test_no_tool_timeout_can_race_the_silence_timer(cfg):
 
 def test_the_prompt_can_see_every_field_it_branches_on(cfg):
     """v45/v46 branch on `reason`: 'unverified' → ask for a different detail, 'locked' → stop and
-    transfer, 'error' → the only value meaning the records are really down. It was absent from
-    response_variables, so the prompt's whole failure taxonomy collapsed back to "unverified" —
-    which is the Round 19 failure, an agent reading a correct refusal aloud as an outage."""
+    transfer, 'error' → the only value meaning the records are really down. `reason` and
+    `verify_with` were absent from get_order_details entirely, so nothing could bind them.
+
+    The tool's whole JSON body reaches the LLM regardless of this field, so the prompt's branching
+    does not stand on these bindings — they exist for {{template}} reuse later in the call. Pinned
+    anyway: a mapping that names a field the server never returns is a slow lie in a config file."""
     details = cfg["tools"]["get_order_details"]["response_variables"]
     for field in ("reason", "verify_with", "verified", "locked", "status"):
-        assert details.get(field) == "$." + field, "get_order_details drops %s" % field
+        assert details.get(field) == field, "get_order_details drops %s" % field
 
     lookup = cfg["tools"]["lookup_student"]["response_variables"]
     for field in ("status", "confirmed_name", "verify_with", "identified_by"):
-        assert lookup.get(field) == "$." + field, "lookup_student drops %s" % field
+        assert lookup.get(field) == field, "lookup_student drops %s" % field
+
+
+def test_response_paths_are_dot_notation_because_jsonpath_binds_nothing(cfg):
+    """Retell: "Point each variable at a field in the response using dot notation, with array
+    indexing where needed — for example `user.name` or `data.items[0].id`." JSONPath is not
+    accepted. `$.reason` names a field `$` holding a field `reason`; no response has one, so the
+    mapping binds nothing — and nothing raises, because an unresolved path just yields no variable
+    and an unset dynamic variable renders as the literal text `{{reason}}`. Every mapping in this
+    file was written that way, so all fourteen were dead and `--apply` would have said `applied`."""
+    for name, spec in cfg["tools"].items():
+        if name.startswith("_"):
+            continue
+        for var, path in (spec.get("response_variables") or {}).items():
+            assert not path.startswith("$"), "%s.%s is JSONPath, which binds nothing" % (name, var)
+            assert path and path == path.strip(), "%s.%s is not a usable path" % (name, var)
+
+
+def test_tool_timeouts_sit_inside_the_range_retell_documents(cfg):
+    """"The minimum value allowed is 1000 ms (1 s), and maximum value allowed is 600,000 ms." Out
+    of range is an API rejection at --apply time, i.e. a config that half-applies: the agent PATCH
+    lands and the LLM PATCH does not."""
+    for name, spec in cfg["tools"].items():
+        if not name.startswith("_") and "timeout_ms" in spec:
+            assert 1000 <= spec["timeout_ms"] <= 600000, "%s.timeout_ms out of range" % name
 
 
 # ── the drift checker ───────────────────────────────────────────────────────
@@ -140,7 +167,20 @@ def test_a_missing_response_variable_is_caught_by_name(suite, cfg):
             t["response_variables"].pop("reason")
     agent, llm = _live(tools=tools)
     drift = suite.config_drift(cfg, agent, llm)
-    assert ("tool:get_order_details", "response_variables.reason", "<absent>", "$.reason") in drift
+    assert ("tool:get_order_details", "response_variables.reason", "<absent>", "reason") in drift
+
+
+def test_the_live_jsonpath_form_reports_as_drift_and_is_never_normalised(suite, cfg):
+    """The live agent still holds the `$.` form this round replaced. `$.reason` and `reason` are
+    not two spellings of one path — the first binds nothing — so a checker that folded them
+    together would grade the broken agent as correct and there would be nothing left to apply."""
+    tools = _full_tools(cfg)
+    for t in tools:
+        if t["name"] == "get_order_details":
+            t["response_variables"]["reason"] = "$.reason"
+    agent, llm = _live(tools=tools)
+    assert ("tool:get_order_details", "response_variables.reason", "$.reason", "reason") \
+        in suite.config_drift(cfg, agent, llm)
 
 
 def test_extra_response_variables_are_not_drift(suite, cfg):
@@ -149,7 +189,7 @@ def test_extra_response_variables_are_not_drift(suite, cfg):
     tools = _full_tools(cfg)
     for t in tools:
         if t["name"] == "get_order_details":
-            t["response_variables"]["something_else"] = "$.something_else"
+            t["response_variables"]["something_else"] = "something_else"
     agent, llm = _live(tools=tools)
     assert suite.config_drift(cfg, agent, llm) == []
 
@@ -168,7 +208,7 @@ def test_merge_keeps_tools_and_variables_the_manifest_says_nothing_about(suite, 
                                {"name": "end_call"}]
     for t in live:
         if t["name"] == "get_order_details":
-            t["response_variables"] = {"status": "$.status", "custom": "$.custom"}
+            t["response_variables"] = {"status": "$.status", "custom": "custom"}
             t["timeout_ms"] = 120000
     merged = {t["name"]: t for t in suite._merged_tools(cfg, {"general_tools": live})}
 
@@ -176,8 +216,41 @@ def test_merge_keeps_tools_and_variables_the_manifest_says_nothing_about(suite, 
     assert merged["transfer_to_office"]["timeout_ms"] == 120000   # untouched: not in the manifest
     got = merged["get_order_details"]
     assert got["timeout_ms"] == 30000                        # manifest wins on what it pins
-    assert got["response_variables"]["reason"] == "$.reason"      # missing key added
-    assert got["response_variables"]["custom"] == "$.custom"      # unknown key preserved
+    assert got["response_variables"]["reason"] == "reason"        # missing key added
+    assert got["response_variables"]["status"] == "status"        # dead `$.` form overwritten
+    assert got["response_variables"]["custom"] == "custom"        # unknown key preserved
+
+
+def test_a_reintroduced_jsonpath_path_is_refused_before_it_can_be_applied(suite, cfg):
+    """The tests above pin this manifest as committed. This pins the next edit to it: `--apply`
+    PATCHes the live phone agent, and Retell answers 200 to a mapping that binds nothing, so the
+    only place a `$.` can still be caught is before the request is built."""
+    bad = json.loads(json.dumps(cfg))
+    bad["tools"]["get_order_details"]["response_variables"]["reason"] = "$.reason"
+    with pytest.raises(ValueError, match="not dot notation"):
+        suite.validate_config(bad)
+
+
+def test_a_timeout_that_races_the_silence_timer_is_refused_at_load(suite, cfg):
+    """Same reasoning as the notation guard, for the other silent one. Retell accepts a tool
+    timeout equal to end_call_after_silence_ms; the caller is the one who finds out."""
+    bad = json.loads(json.dumps(cfg))
+    bad["tools"]["get_quote"]["timeout_ms"] = bad["agent"]["end_call_after_silence_ms"]
+    with pytest.raises(ValueError, match="races end_call_after_silence_ms"):
+        suite.validate_config(bad)
+
+
+def test_a_timeout_outside_retells_range_is_refused_at_load(suite, cfg):
+    """Above 600000 the LLM PATCH is rejected — after the agent PATCH has already landed, which
+    leaves the agent in a state that is neither the old config nor the manifest."""
+    bad = json.loads(json.dumps(cfg))
+    bad["tools"]["get_quote"]["timeout_ms"] = 900
+    with pytest.raises(ValueError, match="outside Retell's allowed"):
+        suite.validate_config(bad)
+
+
+def test_the_committed_manifest_passes_its_own_validator(suite, cfg):
+    assert suite.validate_config(cfg) is cfg
 
 
 def test_merge_leaves_the_live_object_untouched(suite, cfg):

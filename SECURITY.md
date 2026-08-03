@@ -42,15 +42,59 @@ successful verification clears the slate, so a genuine caller who fumbles is
 never punished.
 
 **Staff gate.** Endpoints returning PII or ops data require `x-utrucking-key`,
-matched against `API_SECRET` in constant time. The gate **fails closed**: with
-no `API_SECRET` deployed they answer `503 unconfigured` rather than serving
-records, because the likeliest way to lose this secret is to miss it in one
-place during a rotation, and a gate whose failure mode is to disappear is not a
-gate. Running open is still possible for local work — `UTRUCKING_ALLOW_OPEN_API=1`
-— but only as an affirmative act, never as the consequence of an omission. The
-`/mcp` endpoint rides the same rule, since it serves the same lookup tools.
+matched against `API_SECRET` in constant time. Currently `/lookup_student`,
+`/get_order_details`, `/verify_identity`, `/debug_sheets`, `/billing_audit`,
+`/dispatch_plan`, `/sample_ids`, `/insights_api`, `/voice_qa_api` and `/mcp`.
+`/insights_api` returns no customer PII, but it is the ops half of the rule —
+season and per-building revenue, per-item pricing levers, funnel and
+data-quality counts — and it backs the `/insights` and `/staff` pages, so both
+now send the key. The `business_insights` MCP tool computes the same aggregate
+brief without going through that endpoint and is unchanged; `/mcp` gates it.
+
+The gate is **dormant**: with no `API_SECRET` deployed those endpoints are open.
+That is the wrong end state and it is not defended here — a gate whose failure
+mode is to disappear is not a gate, and the likeliest way to lose this secret is
+to miss it in one place during a rotation.
+
+It is dormant for one reason. The list above includes `/lookup_student`,
+`/get_order_details`, `/verify_identity` and `/mcp` — every door the Retell voice
+agent has. `API_SECRET` is not deployed in Render today, so failing closed would
+take the phone agent's tools out on the next deploy: a silent exposure traded for
+a silent outage. The machinery for closing it is all present and tested (`503
+unconfigured`, distinct from `401`, so a rotation is debugged against the
+environment rather than the caller); it is held behind one line, `ALLOW_OPEN_API`
+in `main.py`, rather than a second environment variable, because a gate governed
+by two env vars of opposite polarity is one more way to lose a rotation.
+
+**To close it:** set `API_SECRET` in Render, add the matching `x-utrucking-key`
+header to each Retell tool's `headers` block, confirm a call still completes, then
+set `ALLOW_OPEN_API = False`. Do those in that order and there is no window where
+the phone line is down.
+
 `/sample_ids` verifiers additionally require the key to be *armed*, so they fail
 closed in every open configuration, deliberate or not.
+
+**The open endpoints.** `/quote`, `/photo_quote`, `/condition_check`,
+`/chat_api` and `/ask_api` stay unauthenticated — they are what `/estimate` and
+`/chat` are made of — but they reach paid models, and two of them fetch a
+caller-supplied `image_url` from inside our network boundary. Both edges are
+bounded:
+
+- *SSRF.* A supplied URL must be `http(s)`, and every address its host resolves
+  to is rejected if it is loopback, private, link-local, reserved, multicast or
+  unspecified — which covers the cloud metadata service at `169.254.169.254`.
+  Redirects are followed by hand (max 3 hops) with the check re-run on each,
+  because `follow_redirects=True` made the front-door check meaningless. The
+  download is capped at 10 MB. **Known gap:** DNS rebinding is not closed — the
+  name is resolved again at connect time, and closing it needs the connection
+  pinned to the address we validated.
+- *Cost.* A per-IP counter (240 requests / 15 min) refuses `429` past the
+  budget. Requests carrying a valid staff key are **exempt**: the phone agent's
+  Retell tools all arrive from a handful of shared egress IPs, so metering them
+  would throttle the whole live fleet as one caller. It is a spend limit, not a
+  security boundary — it is keyed on `X-Forwarded-For`, which the caller
+  controls — and it is deliberately a separate counter from the identity-gate
+  lockout above, which counts only failures and keys on the socket peer.
 
 **Post-call QA.** Every call is scored by an LLM judge, including whether the
 identity gate held. `/voiceqa`.

@@ -216,10 +216,11 @@ def _run_mw(monkeypatch, secret, path, headers, allow_open=True):
     return hit["n"], sent
 
 
-def test_mcp_middleware_open_only_on_an_explicit_opt_in(monkeypatch):
-    """No key deployed is a deploy fault, not a public mode: /mcp answers 503 rather than serving
-    lookup_student and get_order_details to whoever asks. Opening it stays possible, but only by
-    setting UTRUCKING_ALLOW_OPEN_API on purpose."""
+def test_mcp_middleware_can_be_closed_on_an_unkeyed_deploy(monkeypatch):
+    """With ALLOW_OPEN_API off, no key deployed is a deploy fault rather than a public mode: /mcp
+    answers 503 instead of serving lookup_student and get_order_details to whoever asks. The
+    service ships with the gate dormant (see main.ALLOW_OPEN_API); this pins the closed path so
+    it still works on the day the key lands in Render."""
     hit, sent = _run_mw(monkeypatch, "", "/mcp", {}, allow_open=False)
     assert hit == 0 and sent[0]["status"] == 503
     assert b"unconfigured" in sent[1]["body"]
