@@ -1,0 +1,68 @@
+{
+  "_note": [
+    "The non-prompt half of the Retell agent, version-controlled. agent/vNN_prompt.txt covers what",
+    "the agent SAYS; this file covers everything else Retell holds that changes how a call goes —",
+    "turn-taking, tool timeouts, and which response fields reach the prompt. Both halves were",
+    "previously unreviewable, and three of Round 20's known-unfixed defects lived in this half.",
+    "",
+    "`python tools/retell_suite.py config` reports drift between this file and the live agent;",
+    "`--apply` writes it. Publishing a version and re-pointing the phone number stay manual —",
+    "see agent/README.md, Publishing. Keys starting with _ are documentation and are never sent.",
+    "",
+    "IDs are read from RETELL_AGENT_ID / RETELL_LLM_ID, never stored here: this repo is public and",
+    "they identify the live phone agent."
+  ],
+
+  "agent": {
+    "_why": {
+      "enable_backchannel": "Round 20 defect. backchannel_frequency was 0.8, which fires 'mm-hmm' into the pauses between spelled letters — and the v46 name ladder's whole recovery path is asking a caller to spell their last name, then their first and last. It is the one turn-taking knob that actively breaks the ladder, so backchannels are off rather than merely rarer: at any frequency above zero the failure is only less frequent, not gone, and the v45 pace rule ('no filler, no repeating the caller back') already asks the agent not to do this in words.",
+      "voice_speed": "+15%, shipped with v45. Cuts perceived slowness without touching turn-taking.",
+      "responsiveness": "Deliberately NOT raised. The ladder asks callers to spell out loud, and tightening turn-taking is exactly what makes the agent talk over them.",
+      "interruption_sensitivity": "Same reasoning as responsiveness.",
+      "end_call_after_silence_ms": "Unchanged at 120s. The tool timeout moved instead — see tools._why.timeout_ms."
+    },
+    "voice_speed": 1.15,
+    "responsiveness": 0.7,
+    "interruption_sensitivity": 0.6,
+    "enable_backchannel": false,
+    "backchannel_frequency": 0,
+    "end_call_after_silence_ms": 120000
+  },
+
+  "tools": {
+    "_why": {
+      "timeout_ms": "Round 20 defect: every tool sat at 120000ms, the same value as end_call_after_silence_ms, so a hung tool call and the silence timer expired together and which one won was a race — the losing outcome being a call that simply ends on a caller waiting for an answer. 30s is comfortably clear of that, and above a cold-start round trip to Render; past it the tool errors, the agent says it is having trouble reaching records and transfers, which is a worse answer than a fast one and a much better one than a dead line.",
+      "response_variables": "Round 20 defect: `reason` and `verify_with` were absent from get_order_details, and the whole v45/v46 design branches on `reason` — 'unverified' means ask for a different detail, 'locked' means stop and transfer, and 'error' is the ONLY value that means the records are actually down. Without it the prompt falls back to treating every refusal as unverified, which is the failure that started Round 19: an agent reading a correct refusal aloud as an outage. Listed keys are the MINIMUM; extra keys already configured are left alone."
+    },
+    "lookup_student": {
+      "timeout_ms": 30000,
+      "response_variables": {
+        "status": "$.status",
+        "confirmed_name": "$.confirmed_name",
+        "verify_with": "$.verify_with",
+        "available_fields": "$.available_fields",
+        "identified_by": "$.identified_by",
+        "near_miss": "$.near_miss",
+        "message": "$.message"
+      }
+    },
+    "get_order_details": {
+      "timeout_ms": 30000,
+      "response_variables": {
+        "status": "$.status",
+        "verified": "$.verified",
+        "reason": "$.reason",
+        "locked": "$.locked",
+        "confirmed_name": "$.confirmed_name",
+        "verify_with": "$.verify_with",
+        "message": "$.message"
+      }
+    },
+    "get_quote": {
+      "timeout_ms": 30000
+    },
+    "check_availability": {
+      "timeout_ms": 30000
+    }
+  }
+}

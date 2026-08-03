@@ -5,10 +5,16 @@ verify paths, account-change routing, quotes, strange requests) as first-class
 Retell test-case definitions, then runs them as a batch simulation against a
 chosen LLM version — the pre-publish gate for every new draft.
 
+Also holds the agent-config drift check: agent/agent_config.json is the intended non-prompt
+configuration (turn-taking, tool timeouts, response variables) and `config` says where the live
+agent differs from it.
+
 Usage (RETELL_API_KEY in the environment):
     python tools/retell_suite.py sync                 # create/update definitions
     python tools/retell_suite.py run --version 43     # batch-test a draft version
     python tools/retell_suite.py all --version 43     # sync + run + poll + report
+    python tools/retell_suite.py config               # report config drift (exit 1 if any)
+    python tools/retell_suite.py config --apply       # write the manifest to the agent draft
 
 All personas/mocks use FICTIONAL customers only — no real PII lives in this file.
 """
@@ -409,12 +415,122 @@ def poll_report(jid, timeout_s=600):
     return fails == 0
 
 
+# ── agent config: version-controlled, and checkable ──────────────────────────
+# The prompt has been version-controlled since Round 19, but the rest of the agent — turn-taking,
+# tool timeouts, which response fields reach the prompt — lived only in Retell's dashboard, where a
+# change is unreviewable and a defect is invisible until a call goes wrong. Three of Round 20's
+# known-unfixed items were in that half. agent/agent_config.json is the intended state; this reads
+# the live agent and says where it differs.
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "agent", "agent_config.json")
+AGENT_ID = os.getenv("RETELL_AGENT_ID", "")
+
+
+def load_config(path=CONFIG_PATH):
+    with open(path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    return {k: v for k, v in cfg.items() if not k.startswith("_")}
+
+
+def config_drift(cfg, agent, llm):
+    """[(scope, field, live, want)] for every setting that differs. Pure — no network — so the
+    comparison rules are testable without an API key.
+
+    Two comparison rules, deliberately different:
+      * scalars must be EQUAL. A timeout of 120000 where the manifest says 30000 is drift.
+      * response_variables must be a SUPERSET. The manifest lists what the prompt branches on and
+        nothing more; a key someone added in the dashboard for a reason this file doesn't know
+        about is not drift, and reporting it would train whoever runs this to ignore the output.
+    """
+    out = []
+    for field, want in (cfg.get("agent") or {}).items():
+        if field.startswith("_"):
+            continue
+        live = (agent or {}).get(field, "<absent>")
+        if live != want:
+            out.append(("agent", field, live, want))
+
+    live_tools = {t.get("name"): t for t in ((llm or {}).get("general_tools") or []) if t.get("name")}
+    for name, spec in (cfg.get("tools") or {}).items():
+        if name.startswith("_"):
+            continue
+        tool = live_tools.get(name)
+        if tool is None:
+            out.append(("tool:" + name, "*", "<not on the agent>", "configured"))
+            continue
+        for field, want in spec.items():
+            if field.startswith("_"):
+                continue
+            if field == "response_variables":
+                live_vars = tool.get("response_variables") or {}
+                for k, v in want.items():
+                    if live_vars.get(k) != v:
+                        out.append(("tool:" + name, "response_variables." + k,
+                                    live_vars.get(k, "<absent>"), v))
+            elif tool.get(field, "<absent>") != want:
+                out.append(("tool:" + name, field, tool.get(field, "<absent>"), want))
+    return out
+
+
+def _merged_tools(cfg, llm):
+    """The live general_tools array with the manifest folded in. Retell replaces the whole array on
+    update, so every tool has to be sent back — including the ones this file says nothing about."""
+    tools = [dict(t) for t in ((llm or {}).get("general_tools") or [])]
+    spec_by_name = {k: v for k, v in (cfg.get("tools") or {}).items() if not k.startswith("_")}
+    for t in tools:
+        spec = spec_by_name.get(t.get("name"))
+        if not spec:
+            continue
+        for field, want in spec.items():
+            if field.startswith("_"):
+                continue
+            if field == "response_variables":
+                merged = dict(t.get("response_variables") or {})
+                merged.update(want)                 # add what's missing; never drop what's there
+                t["response_variables"] = merged
+            else:
+                t[field] = want
+    return tools
+
+
+def config_check(apply=False):
+    if not AGENT_ID:
+        sys.exit("RETELL_AGENT_ID is not set (see .env.example)")
+    cfg = load_config()
+    agent = _api("/get-agent/" + AGENT_ID)
+    llm = _api("/get-retell-llm/" + LLM_ID)
+    drift = config_drift(cfg, agent, llm)
+    if not drift:
+        print("config matches agent/agent_config.json (agent v%s, llm v%s)"
+              % (agent.get("version"), llm.get("version")))
+        return 0
+    print("DRIFT from agent/agent_config.json (agent v%s, llm v%s):"
+          % (agent.get("version"), llm.get("version")))
+    for scope, field, live, want in drift:
+        print("  %-28s %-34s live=%-12s want=%s" % (scope, field, json.dumps(live), json.dumps(want)))
+    if not apply:
+        print("\n%d setting(s) differ. Re-run with --apply to write them." % len(drift))
+        return 1
+
+    agent_patch = {k: v for k, v in (cfg.get("agent") or {}).items() if not k.startswith("_")}
+    print("\nPATCH /update-agent/%s  %s" % (AGENT_ID, json.dumps(agent_patch)))
+    _api("/update-agent/" + AGENT_ID, agent_patch, method="PATCH")
+    _api("/update-retell-llm/" + LLM_ID, {"general_tools": _merged_tools(cfg, llm)}, method="PATCH")
+    print("applied. NOTE: this writes the agent's draft — going live is still two deliberate steps,")
+    print("publish-agent-version then re-pointing the number's agent_version. See agent/README.md.")
+    return 0
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("action", choices=["sync", "run", "all"])
+    ap.add_argument("action", choices=["sync", "run", "all", "config"])
     ap.add_argument("--version", type=int, default=None, help="LLM version to test")
+    ap.add_argument("--apply", action="store_true",
+                    help="config: write the manifest to the agent instead of only reporting drift")
     a = ap.parse_args()
-    if a.action == "sync":
+    if a.action == "config":
+        sys.exit(config_check(apply=a.apply))
+    elif a.action == "sync":
         sync_definitions()
     elif a.action == "run":
         jid = run_batch(a.version)

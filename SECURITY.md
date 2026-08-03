@@ -41,10 +41,16 @@ working. A per-IP limiter catches one machine rotating through many names. Any
 successful verification clears the slate, so a genuine caller who fumbles is
 never punished.
 
-**Staff gate.** With `API_SECRET` set, endpoints returning PII or ops data
-require `x-utrucking-key`. Unset means open to the internet. `/sample_ids`
-verifiers additionally require the key to be *armed*, so they fail closed in
-the open configuration.
+**Staff gate.** Endpoints returning PII or ops data require `x-utrucking-key`,
+matched against `API_SECRET` in constant time. The gate **fails closed**: with
+no `API_SECRET` deployed they answer `503 unconfigured` rather than serving
+records, because the likeliest way to lose this secret is to miss it in one
+place during a rotation, and a gate whose failure mode is to disappear is not a
+gate. Running open is still possible for local work — `UTRUCKING_ALLOW_OPEN_API=1`
+— but only as an affirmative act, never as the consequence of an omission. The
+`/mcp` endpoint rides the same rule, since it serves the same lookup tools.
+`/sample_ids` verifiers additionally require the key to be *armed*, so they fail
+closed in every open configuration, deliberate or not.
 
 **Post-call QA.** Every call is scored by an LLM judge, including whether the
 identity gate held. `/voiceqa`.
@@ -85,7 +91,17 @@ Closing it requires, in order:
 4. Scrub or take down the `utrucking-ai` / `utruckingai` mirrors, which also
    carry an un-scrubbed Retell LLM ID.
 
-Also outstanding: the Retell post-call webhook carries `API_SECRET` as a
-`?key=` query parameter. `retell_webhook` already accepts the
-`x-utrucking-key` header — move it there and rotate the key, which should be
-considered disclosed.
+**The webhook key is disclosed and rotating it is a deploy step.** The Retell
+post-call webhook is registered as a URL, and Retell cannot attach a custom
+header to one — so the key has exactly one channel, `?key=`, and a URL stored in
+Retell's config, rendered in its dashboard and echoed by every proxy log between
+here and there should be assumed known.
+
+What is fixed is the blast radius: `retell_webhook` now reads `WEBHOOK_SECRET`,
+and once that is set it is the *only* value the webhook accepts — `API_SECRET`
+stops working there, so the two cannot silently re-converge. What remains is the
+deploy: set `WEBHOOK_SECRET` in Render, re-register the webhook URL with the new
+value, then rotate `API_SECRET` (which should be considered disclosed, since it
+has been travelling in that URL). Until `WEBHOOK_SECRET` is set the webhook
+still falls back to `API_SECRET` — the code change is deployable ahead of the
+env var, but it buys nothing until the env var lands.

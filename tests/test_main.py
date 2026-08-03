@@ -873,7 +873,8 @@ def test_sample_ids_never_returns_a_verifier(monkeypatch):
     async def fake_fetch(url, force=False):
         return D if url == main.DISPATCH_CSV_URL else []
     monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
-    monkeypatch.setattr(main, "API_SECRET", "")            # open == today's default; still no verifier
+    monkeypatch.setattr(main, "API_SECRET", "")             # deliberately open; still no verifier
+    monkeypatch.setattr(main, "ALLOW_OPEN_API", True)
 
     class _GetReq:
         query_params = {}
@@ -948,9 +949,10 @@ def test_successful_verification_clears_strikes():
 def test_sample_ids_verifiers_require_an_ARMED_key(monkeypatch):
     """The staff test panel may show a verifier, but only when the gate is genuinely armed.
 
-    _authorized() alone is NOT sufficient: with API_SECRET unset it returns True for the entire
-    internet, which is precisely the configuration this data must never be served in. So the
-    verifiers view must fail CLOSED whenever the key is unset, even if a caller asks for it.
+    _authorized() alone is NOT sufficient. The endpoint can legitimately be running open — a
+    laptop with UTRUCKING_ALLOW_OPEN_API=1 — and that is precisely the configuration the answer
+    key must never be served in. So the verifiers view fails CLOSED in every open configuration,
+    deliberate or not, even when a caller asks for it.
     """
     import asyncio, json
     D = [{"Student": "Jamie Rivers", "ID": "#90001-TS", "Service": "Summer Storage",
@@ -963,15 +965,19 @@ def test_sample_ids_verifiers_require_an_ARMED_key(monkeypatch):
         def __init__(self, q, h):
             self.query_params, self.headers = q, h
 
-    def call(q, h, secret):
+    def call(q, h, secret, allow_open=True):
         monkeypatch.setattr(main, "API_SECRET", secret)
+        monkeypatch.setattr(main, "ALLOW_OPEN_API", allow_open)
         return asyncio.run(main.sample_ids(_Q(q, h)))[1][0]
 
-    # gate UNSET (today's production) — asking for verifiers must not produce them
+    # deliberately open — asking for verifiers must still not produce them
     r = call({"verifiers": "1"}, {}, "")
     assert "verify" not in r["sample"][0] and r.get("verifiers") == "locked"
     r = call({"verifiers": "1"}, {"x-utrucking-key": "guessed"}, "")
     assert "verify" not in r["sample"][0]
+
+    # no key deployed and no opt-in → the endpoint refuses outright, as a server fault
+    assert call({"verifiers": "1"}, {}, "", allow_open=False).get("status") == "unconfigured"
 
     # gate ARMED, wrong/absent key → the whole endpoint 401s
     assert call({"verifiers": "1"}, {}, "s3cret").get("status") == "unauthorized"
@@ -1319,3 +1325,145 @@ def test_a_phone_rung_hit_never_asks_for_the_phone_back():
     by_name = {"status": "found", "confirmed_name": "Robin Vale", "phone": "3145550200",
                "order_id": "#900-SS", "building": "Umrath Hall"}
     assert "phone" in main._redact_lookup(by_name)["verify_with"].lower()
+
+
+# ── Round 21: the gate's failure mode, and the rung that could not fire ──────────────
+# Two of the "known, not yet fixed" items from Round 20. Both are about a stated contract that
+# the code did not actually keep: a gate documented as protecting PII that disappeared when its
+# secret did, and a phone rung documented as working at 7 digits that only ever worked at 10.
+
+def test_the_staff_gate_fails_closed_when_its_secret_is_missing(monkeypatch):
+    """An unset API_SECRET used to mean OPEN, so the one deploy mistake most likely to happen —
+    missing the value in Render during a rotation — published every customer record with a 200
+    and no error anywhere. Absence of a secret must refuse, and must refuse as a SERVER fault so
+    whoever is debugging the rotation looks at the environment rather than at the caller."""
+    class _R:
+        def __init__(self, h=None):
+            self.headers, self.query_params = h or {}, {}
+
+    monkeypatch.setattr(main, "API_SECRET", "")
+    monkeypatch.setattr(main, "ALLOW_OPEN_API", False)
+    assert main._gate_state(_R()) == "unconfigured"
+    assert not main._authorized(_R())
+    # ... and not openable by guessing, either: with no secret there is no key that works
+    assert not main._authorized(_R({"x-utrucking-key": ""}))
+    assert not main._authorized(_R({"x-utrucking-key": "anything"}))
+
+    res = main._unauthorized(_R())
+    assert res[2]["status_code"] == 503 and res[1][0]["status"] == "unconfigured"
+    assert main._unauthorized()[2]["status_code"] == 401      # a real caller error still 401s
+
+    # armed behaves exactly as before
+    monkeypatch.setattr(main, "API_SECRET", "s3cret")
+    assert main._authorized(_R({"x-utrucking-key": "s3cret"}))
+    assert not main._authorized(_R({"x-utrucking-key": "s3cre"}))
+    assert main._gate_state(_R()) == "denied"
+    assert main._unauthorized(_R())[2]["status_code"] == 401
+
+
+def test_running_open_requires_an_affirmative_act(monkeypatch):
+    """Open is still reachable for local work — but only by setting UTRUCKING_ALLOW_OPEN_API, never
+    by forgetting something. That asymmetry is the entire fix: an omission now errors."""
+    class _R:
+        headers, query_params = {}, {}
+    monkeypatch.setattr(main, "API_SECRET", "")
+    monkeypatch.setattr(main, "ALLOW_OPEN_API", True)
+    assert main._authorized(_R()) and main._gate_state(_R()) == "ok"
+
+
+def test_health_reports_the_gate_state_without_reporting_the_key(monkeypatch):
+    """Closing the gate fixed the breach and left the diagnosis: with no secret deployed every
+    gated endpoint answers 503, and from outside the box that looks identical to the sheets being
+    down or a wedged process. /health is the one place an operator can see WHICH it is, so it
+    carries the deployed state — and, being unauthenticated, carries it as a fixed word rather
+    than as anything derived from the key."""
+    import asyncio
+
+    class _R:
+        headers, query_params = {}, {}
+
+    def health():
+        return asyncio.run(main.health(_R()))[1][0]
+
+    monkeypatch.setattr(main, "API_SECRET", "")
+    monkeypatch.setattr(main, "ALLOW_OPEN_API", False)
+    assert main._staff_gate_status() == "unconfigured"
+    assert health()["staff_gate"] == "unconfigured"
+
+    monkeypatch.setattr(main, "ALLOW_OPEN_API", True)          # open, but on purpose
+    assert health()["staff_gate"] == "open"
+
+    monkeypatch.setattr(main, "API_SECRET", "s3cret-value")
+    for allow_open in (True, False):                            # a real key wins either way
+        monkeypatch.setattr(main, "ALLOW_OPEN_API", allow_open)
+        assert health()["staff_gate"] == "armed"
+
+    # the deployed state, never the deployment secret: not the value, not a prefix, not the length
+    body = health()
+    assert "s3cret-value" not in str(body) and "s3cret" not in str(body)
+    assert len(str(body["staff_gate"])) == len("armed") != len("s3cret-value")
+    assert body["status"] == "ok"                                # liveness stays liveness
+    assert body["sheets_configured"] is main.SHEETS_CONFIGURED   # unchanged by any of this
+
+    # and it answers about the ENVIRONMENT, not about whoever is asking — a stranger's guessed
+    # key must not change the reading, or /health becomes a free oracle for testing guesses.
+    class _Guess:
+        headers, query_params = {"x-utrucking-key": "guessed"}, {}
+    assert asyncio.run(main.health(_Guess()))[1][0]["staff_gate"] == "armed"
+
+
+def test_secret_compare_is_constant_time_and_rejects_empties():
+    """These comparisons are reachable by anyone, so `==` on a secret is a public timing oracle.
+    An empty configured secret must never validate — that is the unconfigured state, not a match."""
+    assert main._secret_eq("abc", "abc")
+    assert not main._secret_eq("ab", "abc")
+    assert not main._secret_eq("", "")
+    assert not main._secret_eq("anything", "")
+    assert not main._secret_eq(None, "abc")
+
+
+def test_a_seven_digit_number_reaches_the_order_it_names():
+    """Rung 3 of the v46 ladder tells the agent a number "needs at least 7 digits", and
+    _match_by_phone compared the last 10 of both sides — so 7, 8 and 9 digits matched nothing at
+    all. The rung the ladder falls back on was documented as working and could not fire."""
+    rows = [{"Student": "Robin Vale", "Phone": "(314) 555-0200"},
+            {"Student": "Robin Vale", "Phone": "3145550200"},          # same person, second order
+            {"Student": "Alex Kerr", "Phone": "314-555-9999"}]
+    assert main._match_by_phone("5550200", rows) == ["Robin Vale"]     # local 7
+    assert main._match_by_phone("555-0200", rows) == ["Robin Vale"]
+    assert main._match_by_phone("3145550200", rows) == ["Robin Vale"]  # full 10 still works
+    assert main._match_by_phone("13145550200", rows) == ["Robin Vale"]  # leading 1 trimmed
+    assert main._match_by_phone("555020", rows) == []                  # 6 digits is a fragment
+    assert main._match_by_phone("", rows) == []
+    assert main._match_by_phone("5551234", rows) == []                 # no such line
+
+    # a short number is looser, so it can collide across area codes — which must return BOTH
+    # names to do_lookup_student, whose multi-hit branch reveals none of them.
+    across = [{"Student": "Robin Vale", "Phone": "3145550200"},
+              {"Student": "Sam Otieno", "Phone": "6365550200"}]
+    assert main._match_by_phone("5550200", across) == ["Robin Vale", "Sam Otieno"]
+    assert main._match_by_phone("3145550200", across) == ["Robin Vale"]
+
+
+def test_a_short_number_collision_still_reveals_nothing(monkeypatch):
+    """The looseness above costs a caller an extra question and nothing else: a multi-name hit
+    returns no names, and a single hit is still only a redacted record behind the identity gate."""
+    import asyncio
+    D = [{"Student": "Robin Vale", "ID": "#900-SS", "Service": "Summer Storage",
+          "Building": "Umrath Hall", "Room": "412", "Phone": "3145550200"},
+         {"Student": "Sam Otieno", "ID": "#901-SS", "Service": "Summer Storage",
+          "Building": "Park House", "Room": "5", "Phone": "6365550200"}]
+    async def fake_fetch(url, force=False):
+        return D if url == main.DISPATCH_CSV_URL else []
+    monkeypatch.setattr(main, "fetch_csv_rows", fake_fetch)
+
+    out = asyncio.run(main.do_lookup_student("", phone="5550200"))
+    assert out["status"] == "confirm" and out["suggestions"] == [] and out["near_miss"] == 2
+    body = str(out)
+    assert "Robin" not in body and "Vale" not in body and "Otieno" not in body
+
+    hit = asyncio.run(main.do_lookup_student("", phone="3145550200"))
+    assert hit["status"] == "found" and hit["identified_by"] == "phone"
+    redacted = main._redact_lookup(hit)
+    assert "phone" not in redacted["verify_with"].lower()      # never the digits just recited
+    assert "Umrath" not in str(redacted) and "412" not in str(redacted)

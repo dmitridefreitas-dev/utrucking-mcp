@@ -6,6 +6,7 @@ import csv
 import io
 import difflib
 import re
+import hmac
 import base64
 import datetime
 import time
@@ -227,14 +228,28 @@ def _phone_digits(s, n=10):
 
 
 def _match_by_phone(phone, dispatch_rows):
-    """Distinct customer names whose on-file phone matches the caller's number (last 10 digits).
-    Powers caller-ID: greet a returning caller by name instead of asking them to spell it."""
+    """Distinct customer names whose on-file phone matches the digits the caller gave.
+
+    Matches on the number of digits SUPPLIED (7-10), not always 10. Both the tool schema and
+    rung 3 of the v46 name ladder tell the agent a number "needs at least 7 digits", and this
+    function used to compare the last 10 of each side — so a 7-, 8- or 9-digit answer could
+    never match anything, ever. The rung the whole ladder falls back on was documented as
+    working at 7 and in fact only worked at 10, and a caller who gave the local number they
+    actually remember was told no order exists. Suffix-matching the supplied length makes the
+    documented contract true.
+
+    A short number matches more loosely — no area code, so it can collide across them. That is
+    contained here and only here: this returns names to do_lookup_student, which reveals none
+    of them on a multi-name hit, and a single hit still has to clear the identity gate
+    afterwards with `phone` excluded from the verifier, so digits just spoken can never verify
+    themselves. The looseness costs a caller an extra question; it does not open the gate."""
     want = _phone_digits(phone, 10)
     if len(want) < 7:                       # need a real number, not a fragment
         return []
     names, seen = [], set()
     for r in dispatch_rows:
-        if _phone_digits(r.get("Phone", ""), 10) and _phone_digits(r.get("Phone", ""), 10) == want:
+        have = _phone_digits(r.get("Phone", ""), len(want))
+        if len(have) == len(want) and have == want:
             n = " ".join((r.get("Student") or "").split())
             if n and n.lower() not in seen:
                 seen.add(n.lower()); names.append(n)
@@ -857,16 +872,101 @@ def _staff_flag(request, args) -> bool:
 
 # ── Staff-key gate for PII / ops endpoints ──────────────────────────
 # When API_SECRET is set in the environment, endpoints that return customer PII or
-# internal ops data require the x-utrucking-key header. Unset = open (safe rollout:
-# callers can start sending the header before enforcement is switched on).
+# internal ops data require the x-utrucking-key header.
+#
+# An UNSET secret used to mean OPEN. That was a deliberate dormant gate for the first
+# rollout — callers could start sending the header before enforcement was switched on —
+# but the rollout finished many rounds ago, and what the dormant state leaves behind is the
+# one property a gate must never have: its failure mode is to disappear. This secret has to
+# land in Render's environment, in every Retell tool `headers` block and in the webhook URL
+# inside a single window, and rotation is exactly when the value is most likely to be
+# missing from one of them. Missing it in Render used to publish ~2,500 customers' records
+# to the internet, silently, with a 200.
+#
+# So the gate now fails CLOSED. No API_SECRET means every gated endpoint answers 503
+# "staff gate not configured" — an error a health check and a log line can both see, which
+# is the whole difference between a bad deploy and a breach. Running open is still possible
+# for local work, but only as an affirmative act (UTRUCKING_ALLOW_OPEN_API=1), never as the
+# consequence of an omission.
 API_SECRET = os.getenv("API_SECRET", "")
+ALLOW_OPEN_API = os.getenv("UTRUCKING_ALLOW_OPEN_API", "").strip().lower() in ("1", "true", "yes")
+
+# The webhook key travels in a URL (see _webhook_key_ok). Keeping it distinct from API_SECRET
+# is what stops a disclosed webhook URL from also un-gating PII; unset falls back to
+# API_SECRET so nothing breaks before the new env var lands.
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
+# Whichever way the gate lands, it has to SAY so at boot. The property both unset states share
+# is silence: one missing env var changes the behaviour of nine endpoints at once and leaves no
+# trace anywhere, so the operator meets it as a 503 storm with no cause attached — or, with the
+# opt-in on, as nothing at all. A rotation is exactly when this value goes missing from one
+# place, so the cheapest possible signal is worth more here than anywhere else in the file.
+# Neither line prints the key, and neither prints its length: a log is the wrong place to
+# publish how many characters an attacker has to guess.
+_GATED = ("/lookup_student, /get_order_details, /verify_identity, /debug_sheets, /billing_audit, "
+          "/dispatch_plan, /sample_ids, /voice_qa_api and /mcp")
+if not API_SECRET and ALLOW_OPEN_API:
+    print("WARNING: API_SECRET is unset and UTRUCKING_ALLOW_OPEN_API is on, so the staff gate is "
+          "OPEN: " + _GATED + " will serve customer records to any caller that asks. This is a "
+          "local-development setting; never set it on a deployment.", flush=True)
+elif not API_SECRET:
+    print("WARNING: API_SECRET is unset, so the staff gate is not configured and " + _GATED +
+          " will all answer 503 until it is set. This is the safe failure, not a working "
+          "deploy: set it in the environment (see .env.example).", flush=True)
+
+
+def _secret_eq(supplied: str, secret: str) -> bool:
+    """Constant-time compare. `==` on a secret leaks its length and a prefix through timing; the
+    endpoints below are reachable by anyone, so the comparison is a public oracle.
+
+    Compared as bytes, not str: compare_digest raises TypeError on str with any non-ASCII
+    character, and a key is whatever someone pasted into Render — a smart quote or an accented
+    letter would turn every request into a 500 instead of a clean refusal."""
+    return bool(secret) and hmac.compare_digest(str(supplied or "").encode("utf-8"),
+                                                str(secret).encode("utf-8"))
+
+
+def _gate_state(request) -> str:
+    """'ok' (proceed) | 'denied' (wrong/absent key) | 'unconfigured' (no secret deployed).
+
+    Three states, not two: 'unconfigured' is the deploy-time fault the fail-open gate used to
+    hide, and it must not answer 401 — a 401 reads as "the caller sent the wrong key" and
+    sends whoever is debugging the rotation looking at the caller instead of at the env."""
+    if API_SECRET:
+        return "ok" if _secret_eq(request.headers.get("x-utrucking-key", ""), API_SECRET) else "denied"
+    return "ok" if ALLOW_OPEN_API else "unconfigured"
+
+
+def _staff_gate_status() -> str:
+    """What the OPERATOR deployed — 'armed' | 'open' | 'unconfigured' — for /health.
+
+    Deliberately not _gate_state(): that answers "may this caller through?", and on an endpoint
+    with no key of its own that would just tell every stranger whether their guess landed. This
+    takes no request and reads only the environment, so it says nothing about who is asking.
+
+    It exists because the gate's state is otherwise invisible from outside the box. 'unconfigured'
+    is the one that matters: every gated endpoint is answering 503, and without this field the
+    only way to tell that apart from the sheets being down, the process being wedged or a bad
+    deploy is to go read Render's env. A string and only a string — never the key, and never its
+    length, because /health is unauthenticated and a secret's length is the first thing you would
+    want in order to start guessing it."""
+    if API_SECRET:
+        return "armed"
+    return "open" if ALLOW_OPEN_API else "unconfigured"
 
 
 def _authorized(request) -> bool:
-    return (not API_SECRET) or request.headers.get("x-utrucking-key", "") == API_SECRET
+    return _gate_state(request) == "ok"
 
 
-def _unauthorized():
+def _unauthorized(request=None):
+    """The refusal for a gated endpoint. Pass the request so a missing deployment secret is
+    reported as the server-side fault it is (503) rather than as a caller error (401)."""
+    if request is not None and _gate_state(request) == "unconfigured":
+        return JSONResponse({"status": "unconfigured",
+                             "message": "Staff gate is not configured on this server: API_SECRET is "
+                                        "unset. Refusing to serve customer data without it."},
+                            status_code=503)
     return JSONResponse({"status": "unauthorized",
                          "message": "This endpoint needs a valid staff key (x-utrucking-key header)."},
                         status_code=401)
@@ -888,7 +988,7 @@ async def lookup_student_endpoint(request: Request):
             }
         })
     if not _authorized(request):
-        return _unauthorized()
+        return _unauthorized(request)
     try:
         body = await request.json()
     except Exception:
@@ -916,7 +1016,7 @@ async def get_order_details_endpoint(request: Request):
                                 "'no_answer_supplied' means ask the caller for verify_with and call again"}
         })
     if not _authorized(request):
-        return _unauthorized()
+        return _unauthorized(request)
     try:
         body = await request.json()
     except Exception:
@@ -929,7 +1029,7 @@ async def get_order_details_endpoint(request: Request):
 @mcp.custom_route("/debug_sheets", methods=["GET"])
 async def debug_sheets(request: Request):
     if not _authorized(request):
-        return _unauthorized()
+        return _unauthorized(request)
     dispatch_rows, service_rows = await asyncio.gather(
         fetch_csv_rows(DISPATCH_CSV_URL),
         fetch_csv_rows(SERVICE_CSV_URL),
@@ -946,8 +1046,12 @@ async def debug_sheets(request: Request):
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request):
-    # sheets_configured is a boolean, never the IDs themselves — /health is unauthenticated.
-    return JSONResponse({"status": "ok", "sheets_configured": SHEETS_CONFIGURED})
+    # sheets_configured is a boolean and staff_gate is one of three fixed words, never the IDs or
+    # the key themselves — /health is unauthenticated. "status" stays "ok" whatever the gate says:
+    # it reports that the process is up, which is what the keep_alive ping and Render's health
+    # check consume, and an unconfigured gate is a deploy fault rather than a dead server.
+    return JSONResponse({"status": "ok", "sheets_configured": SHEETS_CONFIGURED,
+                         "staff_gate": _staff_gate_status()})
 
 
 @mcp.custom_route("/", methods=["GET"])
@@ -1041,7 +1145,7 @@ async def verify_identity_endpoint(request: Request):
                         "confirmed_name": "exact name from records"}
         })
     if not _authorized(request):
-        return _unauthorized()
+        return _unauthorized(request)
     try:
         body = await request.json()
     except Exception:
@@ -1118,7 +1222,7 @@ async def availability_endpoint(request: Request):
 async def billing_audit_endpoint(request: Request):
     """C) Flag $0 / missing-invoice / missing-order-id leakage across the service sheet."""
     if not _authorized(request):
-        return _unauthorized()
+        return _unauthorized(request)
     service_rows = await fetch_csv_rows(SERVICE_CSV_URL)
     return JSONResponse(_billing_audit(service_rows))
 
@@ -1160,7 +1264,7 @@ async def dispatch_plan_endpoint(request: Request):
         return JSONResponse({"endpoint": "/dispatch_plan", "method": "POST",
                              "expects": {"args": {"date": "5/7/2026"}}})
     if not _authorized(request):
-        return _unauthorized()
+        return _unauthorized(request)
     try: body = await request.json()
     except Exception: body = {}
     args = _extract_args(body)
@@ -2440,13 +2544,13 @@ async def sample_ids(request: Request):
     verifies nothing).
 
     `verifiers=1` adds one usable verifier per record so a staff tester can drive an end-to-end
-    lookup without opening the spreadsheet. It is deliberately NOT covered by _authorized() alone,
-    because API_SECRET being unset makes _authorized() true for the whole internet — which is exactly
-    the configuration this data must never be served in. It requires the key to be SET **and**
-    correctly supplied, so it fails closed in the open configuration.
+    lookup without opening the spreadsheet. It is deliberately NOT covered by _authorized() alone:
+    the gate can be running open on purpose (UTRUCKING_ALLOW_OPEN_API on a laptop), and that is
+    exactly the configuration the answer key must never be served in. It requires the key to be SET
+    **and** correctly supplied, so it fails closed in every open configuration, deliberate or not.
     Params: n (1-15, default 8), shuffle=1 for a fresh random draw, verifiers=1 (staff key required)."""
     if not _authorized(request):
-        return _unauthorized()
+        return _unauthorized(request)
     import random
     try:
         n = max(1, min(15, int(request.query_params.get("n", "8"))))
@@ -2455,7 +2559,7 @@ async def sample_ids(request: Request):
     # Verifiers ride a STRICTER gate than the rest of the endpoint: the key must actually be armed.
     want_verifiers = request.query_params.get("verifiers") == "1"
     show_verifiers = bool(want_verifiers and API_SECRET
-                          and request.headers.get("x-utrucking-key", "") == API_SECRET)
+                          and _secret_eq(request.headers.get("x-utrucking-key", ""), API_SECRET))
     rows = await fetch_csv_rows(DISPATCH_CSV_URL)
     seen, pool = set(), []
     for r in rows:
@@ -2835,13 +2939,39 @@ async def _qa_ingest(call: dict, judge: bool = True) -> dict:
     return rec
 
 
+def _webhook_key_ok(request) -> bool:
+    """Whether this POST carries the webhook key.
+
+    Retell cannot attach a custom header to a webhook, so the key has exactly one channel: the
+    `?key=` in the URL registered on the agent. A URL is stored in Retell's config, rendered in
+    its dashboard and echoed by every proxy log in between — so this value should be assumed
+    disclosed and rotated on a schedule. What must NOT be true is that the disclosed value is
+    also the one gating /lookup_student, /get_order_details and the billing endpoints, which is
+    what a single API_SECRET made it.
+
+    WEBHOOK_SECRET is that separation. When it is set, it is the ONLY value this endpoint
+    accepts — API_SECRET stops working here, so the two keys cannot silently re-converge, and
+    rotating the URL-borne one is a one-field change with no PII blast radius. Unset, it falls
+    back to API_SECRET so the split can be deployed before the new env var exists."""
+    secret = WEBHOOK_SECRET or API_SECRET
+    if not secret:
+        return False
+    return (_secret_eq(request.query_params.get("key", ""), secret)
+            or _secret_eq(request.headers.get("x-utrucking-key", ""), secret))
+
+
 @mcp.custom_route("/retell_webhook", methods=["POST"])
 async def retell_webhook(request: Request):
-    """Retell post-call webhook → auto-QA. Locked with ?key=<API_SECRET> once the
-    staff gate is active (unset = open, the same dormant-gate rollout as the rest)."""
-    if API_SECRET and request.query_params.get("key", "") != API_SECRET \
-            and request.headers.get("x-utrucking-key", "") != API_SECRET:
-        return _unauthorized()
+    """Retell post-call webhook → auto-QA. Locked with ?key=<WEBHOOK_SECRET> (see
+    _webhook_key_ok). Fails closed with the rest of the gate: with no secret deployed this
+    answers 503 rather than accepting call payloads from anyone, because an open webhook is a
+    write endpoint — it is what fills the QA scoreboard the staff read, so leaving it open lets
+    a stranger fabricate the record of calls that never happened."""
+    if not _webhook_key_ok(request):
+        if WEBHOOK_SECRET or API_SECRET:
+            return _unauthorized()              # a key was required and the POST didn't carry it
+        if not ALLOW_OPEN_API:
+            return _unauthorized(request)       # nothing deployed at all → 503, not a caller error
     try:
         body = await request.json()
     except Exception:
@@ -2863,7 +2993,7 @@ async def voice_qa_api(request: Request):
     webhook-only scoreboard when the key isn't configured. ?judge=1 scores up to
     5 recent unjudged calls on demand."""
     if not _authorized(request):
-        return _unauthorized()
+        return _unauthorized(request)
     try:
         days = max(1, min(60, int(request.query_params.get("days", "7"))))
     except Exception:
@@ -3359,31 +3489,43 @@ app.add_middleware(
 
 
 class _McpAuthMiddleware:
-    """When API_SECRET is set, the MCP protocol endpoint requires the same staff
-    key as the PII/ops HTTP endpoints (x-utrucking-key header, or
-    Authorization: Bearer <key> for MCP clients that only speak Authorization).
-    Unset = open — the same dormant-gate rollout as the rest of the API. The MCP
-    tools themselves are the caller-safe set (redacted lookup + verified details
-    + quote/availability/aggregate insights), so even the open state exposes
-    nothing beyond the public HTTP surface."""
+    """The MCP protocol endpoint requires the same staff key as the PII/ops HTTP endpoints
+    (x-utrucking-key header, or Authorization: Bearer <key> for MCP clients that only speak
+    Authorization), and fails closed with them.
+
+    It has to. `lookup_student` and `get_order_details` are reachable through /mcp as well as
+    over HTTP, so a gate that closed on one and stayed open on the other would leave the
+    records fully reachable by the other door — the rotation window this change exists to
+    close would have been closed on paper only."""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
         path = (scope.get("path") or "").rstrip("/")
-        if scope.get("type") == "http" and API_SECRET and (path == "/mcp" or path.startswith("/mcp/")):
+        if scope.get("type") != "http" or not (path == "/mcp" or path.startswith("/mcp/")):
+            await self.app(scope, receive, send)
+            return
+
+        async def _refuse(status: int, body: bytes):
+            await send({"type": "http.response.start", "status": status,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": body})
+
+        if not API_SECRET:
+            if not ALLOW_OPEN_API:
+                await _refuse(503, b'{"status":"unconfigured","message":"Staff gate is not configured '
+                                   b'on this server: API_SECRET is unset."}')
+                return
+        else:
             hdrs = {k.decode("latin-1").lower(): v.decode("latin-1")
                     for k, v in scope.get("headers") or []}
             supplied = hdrs.get("x-utrucking-key", "")
             auth = hdrs.get("authorization", "")
             if not supplied and auth.lower().startswith("bearer "):
                 supplied = auth[7:].strip()
-            if supplied != API_SECRET:
-                await send({"type": "http.response.start", "status": 401,
-                            "headers": [(b"content-type", b"application/json")]})
-                await send({"type": "http.response.body",
-                            "body": b'{"status":"unauthorized","message":"The MCP endpoint needs the staff key."}'})
+            if not _secret_eq(supplied, API_SECRET):
+                await _refuse(401, b'{"status":"unauthorized","message":"The MCP endpoint needs the staff key."}')
                 return
         await self.app(scope, receive, send)
 
